@@ -1,7 +1,7 @@
 ---
 name: token-shield
 description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /rewind, /compact, /clear and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
-version: 1.5.0
+version: 1.6.0
 license: MIT
 ---
 

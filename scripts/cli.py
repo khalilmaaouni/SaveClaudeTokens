@@ -7,11 +7,12 @@ cli.py: one entry point for Token Shield. Four subcommands, on purpose.
   python3 cli.py dashboard           render the HTML dashboard and print its path
   python3 cli.py experiment start|end <label>
   python3 cli.py prices              per-model USD-equivalent of the saving
+  python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
 
-The scripts underneath (measure_tokens, token_shield, pricing, experiment) stay
-the source of truth; this only routes to them and never re-implements a metric.
-Kept to four subcommands deliberately: a command per feature is how a small tool
-turns into a sprawling one.
+The scripts underneath (measure_tokens, token_shield, pricing, experiment,
+optimize) stay the source of truth; this only routes to them and never
+re-implements a metric. Kept small deliberately: a command per feature is how a
+small tool turns into a sprawling one.
 """
 
 import json
@@ -117,6 +118,11 @@ def main(argv):
         return dashboard()
     if cmd == "prices":
         return prices()
+    if cmd == "optimize":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "optimize.py")] + argv[1:]).returncode
     if cmd == "experiment":
         if len(argv) < 3 or argv[1] not in ("start", "end"):
             print("usage: cli.py experiment start|end <label>")

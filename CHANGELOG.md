@@ -3,6 +3,17 @@
 All notable changes to this project are recorded here. The format follows
 Keep a Changelog. Entries are newest first.
 
+## 1.6.0
+
+- Safe, reversible CLAUDE.md optimizer (scripts/optimize.py and the
+  /token-shield:optimize command). It proposes a diet that moves long dated
+  history and rationale to a notes file and keeps every hard rule, shows the
+  before and after token estimate, the section-cost map, and the diff, and
+  applies only on an explicit yes, backing the original up first. It never
+  edits CLAUDE.md silently and never on install.
+- New /token-shield:stats command: the quick honest summary (verified, native,
+  opportunity) plus the top issue.
+
 ## 1.5.0
 
 - Experiment Mode: a guarded before/after measurement that writes a
