@@ -132,11 +132,49 @@ because transcript names identify sessions and a synced vault is a different
 privacy boundary from a local disk. Obsidian is a viewer here, never a
 dependency.
 
+**`token_shield.py`** renders a Token Shield dashboard as a self-contained HTML
+file. The visual language is Brave's shields panel, a shield and a few big
+numbers, but every figure is measured: how much prompt caching saved you (reads
+bill at 0.1x, so cached tokens are a real 0.9x saving), what reprocessing that
+blocked, where the saving comes from, and the ranked pain points costing you
+tokens (model switching, the startup floor, mid-session rebuilds), each with the
+fix. NO DATA where a number cannot be measured.
+
+```bash
+python3 scripts/token_shield.py --out ~/token-shield.html --days 30
+```
+
+Aggregates only, no session identifiers, no paths. Open the HTML locally, or
+publish it as a private artifact. This is your dashboard of your own numbers; the
+repo ships the generator, never anyone's data.
+
 Both test files run without a framework:
 
 ```bash
 python3 scripts/test_measure_tokens.py && python3 scripts/test_tools.py
 ```
+
+## The method, in full
+
+This tool reports savings, so it has to be honest about how it knows them. The
+full method, the telemetry, and how it stays correct over time are documented,
+not asserted:
+
+- [docs/METHODOLOGY.md](docs/METHODOLOGY.md): measure not estimate, the cost
+  model, what "savings" means and how they are checked for real, and the five
+  ways a meter drifts into dishonesty with the mechanism that closes each.
+- [docs/TELEMETRY.md](docs/TELEMETRY.md): every field measured, the versioned
+  metric schema, how it runs over time, and what never leaves the machine.
+- [docs/MAINTENANCE.md](docs/MAINTENANCE.md): the monthly cadence, what a machine
+  cleans versus what a human decides, and how to verify a cleanup actually saved.
+- [docs/CLAIMS.md](docs/CLAIMS.md): every factual and numeric claim this project
+  makes, each with the check that backs it. Doc claims quote a first-party page,
+  measured numbers carry a snapshot and a second independent derivation, code
+  claims name a calibrated test.
+
+The headline numbers are re-derived by a second, independent code path and
+checked for zero drift before they are published, and every measured figure
+carries the same caveat: it was taken on one machine, so run the tools on yours.
 
 ## Pairs well with
 

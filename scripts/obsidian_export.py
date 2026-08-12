@@ -36,24 +36,25 @@ def load_measure():
     return mod
 
 
-def lever(sm):
-    """Name the lever the numbers support, or refuse to name one."""
+def lever(sm, mt):
+    """Map the shared classification key to note-flavored wording."""
+    key = mt.dominant_lever(sm)
     share = sm.get("first_request_share_median")
     hit = sm.get("hit_ratio_median")
     sub = sm.get("subagent_output_share")
-    if share is None and hit is None:
+    if key == "nodata":
         return ("NO DATA", "Not enough measured sessions to name a lever.")
-    if share is not None and share >= 0.30:
+    if key == "shrink":
         return ("Shrink the always-loaded context",
                 f"The startup floor is {share:.0%} of everything read. Pruning what "
                 f"loads at session start pays on every call of every session, which "
                 f"no other lever does.")
-    if hit is not None and hit < 0.70:
+    if key == "cache":
         return ("Keep the cache hot",
                 f"A {hit:.2f} median hit ratio means the prefix is being rebuilt. "
                 f"Look for model or effort switches, a changed toolset, or idle gaps "
                 f"past the cache TTL.")
-    if sub is not None and sub >= 0.40:
+    if key == "route":
         return ("Route work deliberately",
                 f"Subagents produced {sub:.0%} of output tokens. That pays when it "
                 f"keeps exploration out of the parent context, and is waste when a "
@@ -68,7 +69,7 @@ def fmt(mt, v):
 
 
 def render(mt, sm, sessions, days, include_sessions):
-    name, why = lever(sm)
+    name, why = lever(sm, mt)
     stamp = time.strftime("%Y-%m-%d %H:%M")
     out = [
         "# Token dashboard",

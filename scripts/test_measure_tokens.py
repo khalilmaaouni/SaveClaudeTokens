@@ -148,6 +148,30 @@ def test_multipliers_match_published_rates():
     assert (mt.CACHE_WRITE_5M, mt.CACHE_WRITE_1H, mt.CACHE_READ) == (1.25, 2.0, 0.1)
 
 
+def test_dominant_lever_thresholds():
+    # One source of truth for the thresholds the dashboard and the note both use.
+    assert mt.dominant_lever({"first_request_share_median": 0.36,
+                              "hit_ratio_median": 0.95,
+                              "subagent_output_share": 0.1}) == "shrink"
+    assert mt.dominant_lever({"first_request_share_median": 0.05,
+                              "hit_ratio_median": 0.40,
+                              "subagent_output_share": 0.1}) == "cache"
+    assert mt.dominant_lever({"first_request_share_median": 0.05,
+                              "hit_ratio_median": 0.95,
+                              "subagent_output_share": 0.5}) == "route"
+    assert mt.dominant_lever({"first_request_share_median": 0.05,
+                              "hit_ratio_median": 0.95,
+                              "subagent_output_share": 0.1}) == "healthy"
+    # Nothing measured never yields a confident recommendation.
+    assert mt.dominant_lever({"first_request_share_median": None,
+                              "hit_ratio_median": None,
+                              "subagent_output_share": None}) == "nodata"
+    # Shrink outranks cache: the always-loaded floor is the bigger lever.
+    assert mt.dominant_lever({"first_request_share_median": 0.5,
+                              "hit_ratio_median": 0.4,
+                              "subagent_output_share": 0.1}) == "shrink"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

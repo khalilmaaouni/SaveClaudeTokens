@@ -1,7 +1,7 @@
 ---
 name: save-claude-tokens
 description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /rewind, /compact, /clear and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
-version: 1.2.0
+version: 1.3.0
 license: MIT
 ---
 
@@ -33,6 +33,8 @@ python3 <plugin>/scripts/measure_tokens.py --days 30 --sessions
 It reads the `usage` counters the API returned on every assistant message in the local transcripts, which are the counters billing is computed from, so its output is measurement rather than estimation. Anything it cannot measure it prints as NO DATA.
 
 Read it this way: a high first request share means Lever 2 dominates and nothing else is worth doing first; a hit ratio below roughly 0.7 on long sessions means Lever 1 has real headroom; a high subagent share means Lever 4 does. Snapshot with `--baseline`, change one thing, then `--compare`. One variable at a time, or the result attributes to nothing.
+
+For a visual read, `scripts/token_shield.py` renders the same measured numbers as a Brave-shields-style HTML dashboard: what caching saved, what it blocked, and the ranked pain points (model switching, the startup floor, mid-session rebuilds) with the fix for each. The full method, telemetry and honesty guarantees are in the repo's `docs/`; every claim carries the check that backs it in `docs/CLAIMS.md`.
 
 Two traps the script now guards, both of which produced a confident wrong number before it did:
 

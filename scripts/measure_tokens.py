@@ -268,6 +268,27 @@ def summarize(sessions):
     }
 
 
+def dominant_lever(sm):
+    """Classify which lever the numbers support, as a key.
+
+    One source for the thresholds so the dashboard and the exported note cannot
+    disagree about what the same numbers mean. Each renderer maps the key to its
+    own wording. Returns one of: nodata, shrink, cache, route, healthy.
+    """
+    share = sm.get("first_request_share_median")
+    hit = sm.get("hit_ratio_median")
+    sub = sm.get("subagent_output_share")
+    if share is None and hit is None:
+        return "nodata"
+    if share is not None and share >= 0.30:
+        return "shrink"
+    if hit is not None and hit < 0.70:
+        return "cache"
+    if sub is not None and sub >= 0.40:
+        return "route"
+    return "healthy"
+
+
 def fmt(n):
     if n is None:
         return "NO DATA"
