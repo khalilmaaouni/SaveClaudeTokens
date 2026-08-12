@@ -289,14 +289,13 @@ def build_report(year, month, root=None):
     start_ts, end_ts = _month_bounds(year, month)
     month_label = f"{year:04d}-{month:02d}"
 
-    # _month_bounds returns a half-open [start, end) calendar month, matching
-    # this file's own bounded raw scan. experiment.collect_cohort's window is
-    # inclusive on BOTH ends (its cohort reader excludes only ts > end_ts), so
-    # passing end_ts unchanged would count a record stamped exactly at next
-    # month's first instant as part of this month. Back it off by one second
-    # so the cohort's inclusive end lands on the calendar month's last second
-    # instead of the next month's first one.
-    sessions = ex.collect_cohort(root, start_ts, end_ts - 1)
+    # _month_bounds returns a half-open [start, end) calendar month, and
+    # experiment.collect_cohort's window is now half-open too, so end_ts passes
+    # through unchanged: a record stamped at next month's first instant falls
+    # outside both. This used to back the end off by one second to compensate
+    # for a cohort window that was inclusive on both ends; doing that now would
+    # drop a record stamped at the month's very last second.
+    sessions = ex.collect_cohort(root, start_ts, end_ts)
     sm = mt.summarize(sessions) or {}
 
     lines = [f"# Token Shield monthly report: {month_label}", ""]
