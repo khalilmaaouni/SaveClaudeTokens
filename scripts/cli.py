@@ -5,7 +5,7 @@ cli.py: one entry point for Token Shield.
   python3 cli.py                     quick honest summary (same as `summary`)
   python3 cli.py summary
   python3 cli.py dashboard           render the HTML dashboard and print its path
-  python3 cli.py experiment start|end <label>
+  python3 cli.py experiment start|end <label> [--treats PATH]
   python3 cli.py prices              per-model USD-equivalent of the saving
   python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
   python3 cli.py profile             deterministic session profile (profile.py)
@@ -31,25 +31,45 @@ import experiment as ex
 
 ROOT = os.path.expanduser("~/.claude/projects")
 OUT = os.path.expanduser("~/.token-shield/token-shield.html")
+EXPERIMENT_DAYS = 30  # window length both cohorts of an experiment must share
 
 
-def _verified_from_ledger():
-    """Sum the floor reductions of VERIFIED experiment records. This is the only
-    number the tool is allowed to call VERIFIED."""
+def _verified_by_label():
+    """VERIFIED floor changes, one row per label, in ledger order.
+
+    Never summed across labels: two labels measure two different changes, and
+    adding them produces a number neither experiment ever measured. Repeated
+    runs of the same label collapse to the LATEST record, because they
+    re-measure the same change and adding them counts it twice. A regression
+    stays negative; clipping it to zero would hide a change that cost tokens.
+    """
     if not os.path.exists(ex.LEDGER):
-        return None
-    n = 0
-    floor = 0
+        return []
+    latest = {}
+    order = []
     with open(ex.LEDGER, errors="ignore") as f:
         for line in f:
             try:
                 r = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if r.get("confidence") == "VERIFIED" and r.get("floor_reduction_tokens"):
-                n += 1
-                floor += max(0, r["floor_reduction_tokens"])
-    return {"experiments": n, "floor_reduction": floor}
+            if r.get("confidence") != "VERIFIED":
+                continue
+            fr = r.get("floor_reduction_tokens")
+            if fr is None:
+                continue
+            label = r.get("label") or "(unlabeled)"
+            if label not in latest:
+                order.append(label)
+            latest[label] = fr
+    return [(label, latest[label]) for label in order]
+
+
+def _print_verified_rows(rows, indent):
+    for label, fr in rows:
+        tail = ("fewer startup tokens per call" if fr >= 0
+                else "MORE startup tokens per call (regression)")
+        print(f"{indent}{label:<26} {fr:+,}  {tail}")
 
 
 def summary(days=30):
@@ -63,12 +83,13 @@ def summary(days=30):
     native = ts.savings_breakdown(sm)["saved"]
     rx = ts.prescriptions(sm, mt.collect(ROOT, days))
     tool = sum(r["saving"] for r in rx)
-    ver = _verified_from_ledger()
+    ver = _verified_by_label()
 
     print("Token Shield")
-    if ver and ver["experiments"]:
-        print(f"  VERIFIED     {ver['floor_reduction']:,} fewer startup tokens per call, "
-              f"across {ver['experiments']} experiment(s)")
+    if ver:
+        print("  VERIFIED     latest measured floor change per experiment "
+              "(never summed across experiments):")
+        _print_verified_rows(ver, "                 ")
     else:
         print("  VERIFIED     none yet. Run: python3 cli.py experiment start \"my-change\"")
     print(f"  NATIVE       {native/1e9:.1f}B token-units saved by Claude Code's caching "
@@ -143,11 +164,12 @@ def uninstall():
               f"{claude_token_shield_dir}.")
     print()
 
-    ver = _verified_from_ledger()
-    if ver and ver["experiments"]:
-        print(f"Exit summary: {ver['experiments']} VERIFIED experiment(s) on record, "
-              f"{ver['floor_reduction']:,} tokens of proven floor reduction. "
-              f"This history is deleted by this uninstall.")
+    ver = _verified_by_label()
+    if ver:
+        print(f"Exit summary: {len(ver)} VERIFIED experiment(s) on record, "
+              f"latest measured floor change each:")
+        _print_verified_rows(ver, "  ")
+        print("This history is deleted by this uninstall.")
     else:
         print("Exit summary: NO DATA. No VERIFIED experiments were on record.")
     print()
@@ -212,12 +234,21 @@ def main(argv):
         return uninstall()
     if cmd == "experiment":
         if len(argv) < 3 or argv[1] not in ("start", "end"):
-            print("usage: cli.py experiment start|end <label>")
+            print("usage: cli.py experiment start|end <label> [--treats PATH]")
             return 2
         import time
-        now = time.strftime("%Y-%m-%dT%H:%M:%S%z") or time.strftime("%Y-%m-%dT%H:%M:%S")
-        fn = ex.cmd_start if argv[1] == "start" else ex.cmd_end
-        return fn(argv[2], os.path.expanduser("~/.claude/projects"), 30, now)
+        # cmd_start and cmd_end take epoch seconds and do their own window
+        # arithmetic on them. A formatted string here is what made both
+        # commands crash instead of run.
+        now_ts = time.time()
+        if argv[1] == "end":
+            return ex.cmd_end(argv[2], ROOT, EXPERIMENT_DAYS, now_ts)
+        treats = None
+        if "--treats" in argv[3:]:
+            i = argv.index("--treats", 3)
+            if i + 1 < len(argv):
+                treats = argv[i + 1]
+        return ex.cmd_start(argv[2], ROOT, EXPERIMENT_DAYS, now_ts, treats)
     print(__doc__)
     return 2
 
