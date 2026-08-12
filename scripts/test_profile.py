@@ -125,6 +125,48 @@ def test_profile_json_written_and_valid_and_no_leak():
         assert prof["window_days"] == 30.0
 
 
+def test_arbitrary_effort_string_never_reaches_profile_json():
+    # Calibrated: reverting _raw_scan to `effort_values.add(eff)` (no
+    # effort_bucket call) puts MYSECRETEFFORTSTRING straight into
+    # profile.json and this test goes red; with the whitelist, green.
+    #
+    # The effort field is arbitrary text from outside this tool, so a
+    # transcript can carry anything there. profile.json promises counters and
+    # byte sizes only, which means an unrecognized value is counted, never
+    # copied.
+    bogus = "MYSECRETEFFORTSTRING"
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [
+            _rec("2026-08-12T10:00:00Z", effort=bogus),
+            _rec("2026-08-12T10:05:00Z", effort="high"),
+            _rec("2026-08-12T10:10:00Z", effort={"nested": bogus}),
+        ])
+        out = os.path.join(d, "out", "profile.json")
+
+        argv = sys.argv
+        sys.argv = ["profile.py", "--root", root, "--days", "30", "--out", out]
+        try:
+            rc = pf.main()
+        finally:
+            sys.argv = argv
+        assert rc == 0, rc
+        raw = open(out).read()
+
+    assert raw.count(bogus) == 0, "raw effort string leaked into profile.json"
+    prof = json.loads(raw)
+    seen = prof["behavior"]["effort_values_seen"]["value"]
+    assert sorted(seen) == ["high", "other"], seen
+
+
+def test_effort_bucket_whitelist():
+    for good in pf.EFFORT_VALUES:
+        assert pf.effort_bucket(good) == good
+    for bad in ("HIGH", "medium ", "", "sk-secret", 7, None, {"a": 1}, ["low"]):
+        assert pf.effort_bucket(bad) == pf.EFFORT_OTHER, bad
+
+
 def test_main_exits_2_on_empty_root():
     with tempfile.TemporaryDirectory() as d:
         empty_root = os.path.join(d, "empty")

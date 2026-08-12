@@ -30,6 +30,7 @@ USAGE
 """
 
 import argparse
+import html
 import importlib.util
 import json
 import os
@@ -48,6 +49,15 @@ def load_measure():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def esc(s):
+    """HTML-escape anything that came from outside this file before it enters
+    the page. Experiment labels are typed by the user, profile bases carry
+    file paths, and the companion registry is an editable JSON file, so all
+    three are attacker-shaped text as far as the renderer is concerned. None
+    renders as an empty string rather than the word None."""
+    return html.escape("" if s is None else str(s))
 
 
 def human(n):
@@ -283,6 +293,41 @@ def load_experiment_rows(path):
     return rows
 
 
+def verified_by_label(rows):
+    """One VERIFIED row per experiment label, newest record wins.
+
+    The contract, shared with the CLI summary and with
+    experiment.aggregate_by_label:
+      - never sum across labels. A floor reduction measured for one label is
+        a different quantity from one measured for another, so a total of the
+        two is a number about nothing;
+      - repeated runs of the SAME label do not add up either. The latest
+        record is the current state of that label, so it replaces the earlier
+        one instead of being counted twice;
+      - a regression stays negative. Clipping it to zero would let a change
+        that made the floor worse read as neutral.
+
+    Ledger order is the tiebreak (the file is append-only), and a parsable
+    timestamp beats file order when both records carry one.
+    """
+    by_label = {}
+    newest = {}
+    for i, r in enumerate(rows or []):
+        if r.get("confidence") != "VERIFIED":
+            continue
+        delta = r.get("floor_reduction_tokens")
+        if isinstance(delta, bool) or not isinstance(delta, (int, float)):
+            continue
+        label = r.get("label") or "(unlabeled)"
+        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
+        if label in newest and (ts, i) < newest[label]:
+            continue
+        newest[label] = (ts, i)
+        by_label[label] = {"label": label, "floor_reduction": delta,
+                           "timestamp": r.get("timestamp")}
+    return [by_label[k] for k in sorted(by_label)]
+
+
 def _leaf(profile, section, key):
     """Read profile[section][key]["value"], honoring the NO DATA label.
     Returns None on any missing path or a NO DATA leaf, never raises."""
@@ -390,15 +435,19 @@ def render_next_best_move(advise_result):
     else:
         best = advise_result["best"]
         parts.append(
-            f'<div class="rec"><p class="k">{best["evidence"]} recommendation</p>'
-            f'<h3>{best["title"]}</h3>'
-            f'<p><b>Why:</b> {best["why_selected"]}</p>'
-            f'<p><b>Expected benefit:</b> {best["expected_benefit"]}</p>'
-            f'<p><b>Drawback:</b> {best["drawback"]}</p>'
-            f'<p><b>Quality risk:</b> {best["quality_risk"]}</p>'
-            f'<p><b>Reversibility:</b> {best["reversibility"]}</p>'
-            f'<p><b>If you say no:</b> {best["if_you_say_no"]}</p>'
-            f'</div>')
+            f'<div class="rec"><p class="k">{esc(best["evidence"])} recommendation</p>'
+            f'<h3>{esc(best["title"])}</h3>'
+            f'<p><b>Why:</b> {esc(best["why_selected"])}</p>'
+            f'<p><b>Expected benefit:</b> {esc(best["expected_benefit"])}</p>'
+            f'<p><b>Drawback:</b> {esc(best["drawback"])}</p>'
+            f'<p><b>Quality risk:</b> {esc(best["quality_risk"])}</p>'
+            f'<p><b>Reversibility:</b> {esc(best["reversibility"])}</p>'
+            f'<p><b>If you say no:</b> {esc(best["if_you_say_no"])}</p>'
+            # advisor._card already renders `source` as a citable pointer (a
+            # docs/CLAIMS.md row, or a URL), so the page never shows a bare
+            # internal code a reader cannot look up.
+            + (f'<p><b>Source:</b> {esc(best["source"])}</p>' if best.get("source") else '')
+            + '</div>')
     cost = advise_result.get("advisor_cost_tokens", 0)
     parts.append(f'<p class="n">Advisor cost: {cost} tokens (deterministic)</p>')
     return "".join(parts)
@@ -414,7 +463,7 @@ def render_observed_pattern(profile):
     if label is None:
         parts.append('<p class="n">No dominant pattern measured; every tracked band is low.</p>')
     else:
-        parts.append(f'<p class="n">{label} (from <code>{metric_name}</code>).</p>')
+        parts.append(f'<p class="n">{esc(label)} (from <code>{esc(metric_name)}</code>).</p>')
     fr = _leaf(profile, "usage", "first_request_median_tokens")
     hit = _leaf(profile, "usage", "cache_hit_ratio_median")
     sw = _leaf(profile, "behavior", "model_switch_session_share")
@@ -440,9 +489,9 @@ def render_recommendation_queue(advise_result, suppressed_n):
         for i, c in enumerate(queue, 1):
             rows.append(
                 f'<div class="pain-item"><div class="rank">{i}</div>'
-                f'<div class="t">{c["title"]}'
-                f'<span class="cpill est" style="margin:0 0 0 8px">{c["evidence"]}</span></div>'
-                f'<div class="fix">{c["drawback"]}</div></div>')
+                f'<div class="t">{esc(c["title"])}'
+                f'<span class="cpill est" style="margin:0 0 0 8px">{esc(c["evidence"])}</span></div>'
+                f'<div class="fix">{esc(c["drawback"])}</div></div>')
         parts.append('<div class="pain">' + "".join(rows) + '</div>')
     if suppressed_n:
         parts.append(f'<p class="n">{suppressed_n} recommendation(s) suppressed by your '
@@ -463,26 +512,58 @@ def render_companions(companions_data, profile, cache_root):
         if _installed_companion(name, cache_root):
             rows.append(
                 f'<div class="pain-item"><div class="rank">&#10003;</div>'
-                f'<div class="t">{name}<span class="tag">installed</span></div>'
-                f'<div class="fix">Installed, measure it. {c["benefit"]}</div></div>')
+                f'<div class="t">{esc(name)}<span class="tag">installed</span></div>'
+                f'<div class="fix">Installed, measure it. {esc(c["benefit"])}</div></div>')
         elif _companion_plausible(name, profile):
             rows.append(
                 f'<div class="pain-item"><div class="rank">?</div>'
-                f'<div class="t">{name}<span class="tag">consider</span></div>'
-                f'<div class="fix">When: {c["when"]}<br>Drawback: {c["drawback"]}</div></div>')
+                f'<div class="t">{esc(name)}<span class="tag">consider</span></div>'
+                f'<div class="fix">When: {esc(c["when"])}<br>'
+                f'Drawback: {esc(c["drawback"])}</div></div>')
         else:
             collapsed.append(name)
     parts.append('<div class="pain">' + "".join(rows) + '</div>' if rows
                  else '<p class="n">No companion is indicated by your profile right now.</p>')
     if collapsed:
-        parts.append(f'<p class="n">Not indicated by your profile: {", ".join(collapsed)}.</p>')
+        parts.append('<p class="n">Not indicated by your profile: '
+                     + ", ".join(esc(n) for n in collapsed) + '.</p>')
     mentions = companions_data.get("mentions") or []
     if mentions:
         parts.append('<div class="legend">'
-                     + "".join(f'<span>{m["name"]} ({m["repo"]}), {m["status"]}</span>'
+                     + "".join(f'<span>{esc(m["name"])} ({esc(m["repo"])}), '
+                               f'{esc(m["status"])}</span>'
                               for m in mentions)
                      + '</div>')
     return "".join(parts)
+
+
+def render_verified_hero(verified_rows):
+    """The VERIFIED column of the hero, per label and never summed.
+
+    Returns (big_html, under_text_html). With one label the big number is
+    that label's own signed delta. With several, the big slot says how many
+    labels there are and every label is listed with its own figure, because
+    a single headline number across labels would be exactly the cross-label
+    total the rest of this page refuses to compute.
+    """
+    if not verified_rows:
+        return ('<span class="big muted">NONE YET</span>',
+                'No verified saving yet. Apply one recommendation, then run an experiment '
+                'to measure the before and after.')
+    items = "; ".join(f'{esc(r["label"])} {r["floor_reduction"]:+,}'
+                      for r in verified_rows)
+    if len(verified_rows) == 1:
+        r = verified_rows[0]
+        cls = "g" if r["floor_reduction"] >= 0 else "w"
+        big = f'<span class="big {cls}">{human(r["floor_reduction"])}</span>'
+        under = (f'fewer startup tokens per call on <b>{esc(r["label"])}</b>, proven by a '
+                 f'before/after experiment. Regressions are shown as they measured, '
+                 f'never clipped.')
+        return big, under
+    big = f'<span class="big muted">{len(verified_rows)} LABELS</span>'
+    under = (f'proven per experiment label, never summed across them: {items}. '
+             f'A repeated label shows its latest run, and a regression stays negative.')
+    return big, under
 
 
 def render_experiment_history(rows):
@@ -497,8 +578,9 @@ def render_experiment_history(rows):
         conf = r.get("confidence") or "NO DATA"
         delta = r.get("floor_reduction_tokens")
         delta_txt = f'{delta:+,}' if isinstance(delta, (int, float)) else "n/a"
-        date = (r.get("timestamp") or "n/a")[:10]
-        rowlist.append(f'<tr><td>{label}</td><td>{conf}</td><td>{delta_txt}</td><td>{date}</td></tr>')
+        date = str(r.get("timestamp") or "n/a")[:10]
+        rowlist.append(f'<tr><td>{esc(label)}</td><td>{esc(conf)}</td>'
+                       f'<td>{delta_txt}</td><td>{esc(date)}</td></tr>')
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Label</th><th>Verdict</th><th>Floor delta</th><th>Date</th>'
                  '</tr></thead><tbody>' + "".join(rowlist) + '</tbody></table></div>')
@@ -663,14 +745,9 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     # before/after), what Claude Code's caching did NATIVELY, and what is still
     # OPPORTUNITY (estimated). Merging these is the exact dishonesty this exists
     # to avoid, so they sit side by side, each with its own confidence label.
-    if verified and verified.get("experiments"):
-        vbig = f'<span class="big g">{human(verified["floor_reduction"])}</span>'
-        vu = (f'fewer startup tokens per call, proven across {verified["experiments"]} '
-              f'before/after experiment(s)')
-    else:
-        vbig = '<span class="big muted">NONE YET</span>'
-        vu = ('No verified saving yet. Apply one recommendation, then run an experiment '
-              'to measure the before and after.')
+    # `verified` is a list of per-label rows from verified_by_label(), never a
+    # cross-label total: the same refusal the experiment history states below.
+    vbig, vu = render_verified_hero(verified)
     nat_usd = f' &nbsp;&middot;&nbsp; about ${usd["usd"]:,.0f} API-equivalent' if usd else ''
     parts.append(
         '<div class="hero3">'
@@ -862,22 +939,9 @@ def main():
     except (OSError, ValueError, ImportError) as e:
         print(f"note: USD skipped ({e})", file=sys.stderr)
 
-    verified = None
     ledger = os.path.expanduser("~/.claude/token-shield/savings.jsonl")
-    if os.path.exists(ledger):
-        n = 0
-        floor = 0
-        with open(ledger, errors="ignore") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if r.get("confidence") == "VERIFIED" and r.get("floor_reduction_tokens"):
-                    n += 1
-                    floor += max(0, r["floor_reduction_tokens"])
-        verified = {"experiments": n, "floor_reduction": floor}
     experiment_rows = load_experiment_rows(ledger)
+    verified = verified_by_label(experiment_rows)
 
     # v1.7 advisor surfaces: profile, advice, and the companion registry. Each
     # degrades to None on any failure, rather than take the whole render down.

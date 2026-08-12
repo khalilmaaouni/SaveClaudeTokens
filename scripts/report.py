@@ -33,6 +33,7 @@ USAGE
 import argparse
 import datetime
 import json
+import math
 import os
 import sys
 
@@ -111,7 +112,7 @@ def _bounded_raw_scan(root, start_ts, end_ts):
                     continue
                 eff = rec.get("effort")
                 if eff is not None:
-                    effort_values.add(eff)
+                    effort_values.add(pf.effort_bucket(eff))
                 timestamps.append(raw_ts)
 
         timestamps.sort()
@@ -173,7 +174,9 @@ def _month_profile(root, start_ts, end_ts, sessions, sm):
         "effort_values_seen": (
             pf.metric(sorted(effort_values, key=str), "MEASURED",
                       f"distinct top-level effort field values across {files_scanned} "
-                      f"scanned transcripts")
+                      f"scanned transcripts, whitelisted to "
+                      f"{', '.join(pf.EFFORT_VALUES)}; anything else counts as "
+                      f"{pf.EFFORT_OTHER} and its raw text is never stored")
             if files_scanned else pf.no_data("no transcript files found in month")),
         "idle_gap_shares": (
             pf.no_data("no consecutive same-session timestamp pairs under 12h found")
@@ -289,14 +292,24 @@ def build_report(year, month, root=None):
     start_ts, end_ts = _month_bounds(year, month)
     month_label = f"{year:04d}-{month:02d}"
 
-    # _month_bounds returns a half-open [start, end) calendar month, matching
-    # this file's own bounded raw scan. experiment.collect_cohort's window is
-    # inclusive on BOTH ends (its cohort reader excludes only ts > end_ts), so
-    # passing end_ts unchanged would count a record stamped exactly at next
-    # month's first instant as part of this month. Back it off by one second
-    # so the cohort's inclusive end lands on the calendar month's last second
-    # instead of the next month's first one.
-    sessions = ex.collect_cohort(root, start_ts, end_ts - 1)
+    # The window is the half-open calendar month [month_start,
+    # next_month_start), the same bound this file's own raw scan uses, so
+    # every record belongs to exactly one month and none falls between two.
+    #
+    # It is expressed as the largest float below next_month_start because
+    # experiment.collect_cohort's window is inclusive on BOTH ends (its cohort
+    # reader excludes only ts > end_ts): passing end_ts unchanged there would
+    # pull in a record stamped at next month's first instant. Backing off by a
+    # whole second, as this line used to, drops the month's final sub-second
+    # instead, so a record at 2026-07-31T23:59:59.500Z lands in neither July
+    # nor August. Message timestamps are microsecond-precision at best, far
+    # coarser than the float step at these epochs, so nothing real can fall
+    # between this bound and end_ts.
+    #
+    # MERGE NOTE: once collect_cohort is itself half-open, this becomes plain
+    # `end_ts` and nothing about the month's meaning changes. The nextafter is
+    # only here to make the bound exact against the inclusive-end version.
+    sessions = ex.collect_cohort(root, start_ts, math.nextafter(end_ts, -math.inf))
     sm = mt.summarize(sessions) or {}
 
     lines = [f"# Token Shield monthly report: {month_label}", ""]

@@ -457,8 +457,115 @@ def test_dashboard_html_contains_no_en_or_em_dash():
                          profile=profile, advise_result=advise_result,
                          companions_data={"companions": [], "mentions": []},
                          experiment_rows=[])
-    assert "–" not in html, "en dash found in rendered dashboard"
-    assert "—" not in html, "em dash found in rendered dashboard"
+    assert "\u2013" not in html, "en dash found in rendered dashboard"
+    assert "\u2014" not in html, "em dash found in rendered dashboard"
+
+
+def test_verified_headline_is_per_label_and_never_a_cross_label_total():
+    # Calibrated: restoring the old headline (sum of floor_reduction_tokens
+    # with max(0, ...) per record) makes the page show 10,000 and this test
+    # goes red on both the total check and the regression check; with
+    # verified_by_label, green.
+    #
+    # The ledger below is the reviewer's repro: one label measured twice at
+    # +5000, and a second label that REGRESSED by 8000. The old headline
+    # clipped the regression to zero and added the repeats, printing 10,000,
+    # a number about nothing, on a page that says one paragraph later that
+    # floor deltas are never summed across labels.
+    rows = [
+        {"label": "diet-claude-md", "confidence": "VERIFIED",
+         "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000"},
+        {"label": "diet-claude-md", "confidence": "VERIFIED",
+         "floor_reduction_tokens": 5000, "timestamp": "2026-08-02T10:00:00+0000"},
+        {"label": "prune-mcp", "confidence": "VERIFIED",
+         "floor_reduction_tokens": -8000, "timestamp": "2026-08-03T10:00:00+0000"},
+    ]
+    verified = shield.verified_by_label(rows)
+    assert [r["label"] for r in verified] == ["diet-claude-md", "prune-mcp"], verified
+    assert [r["floor_reduction"] for r in verified] == [5000, -8000], verified
+
+    big, under = shield.render_verified_hero(verified)
+    hero = big + under
+    assert "10,000" not in hero and "10000" not in hero, hero
+    assert "2 LABELS" in big, big
+    assert "diet-claude-md +5,000" in under, under
+    assert "prune-mcp -8,000" in under, under
+
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=verified, profile=None, advise_result=None,
+                         companions_data=None, experiment_rows=rows)
+    assert "10,000" not in html and "10000" not in html
+    assert "prune-mcp -8,000" in html
+    # The regression is visible as a negative in the history table too, and
+    # the repeated label is one row per record there by design (the table is
+    # a log), while the headline carries the latest state only.
+    assert "-8,000" in html
+
+
+def test_verified_headline_shows_one_labels_own_number():
+    rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000"},
+            {"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 7000, "timestamp": "2026-08-04T10:00:00+0000"},
+            {"label": "half-done", "confidence": "NOT_PROVEN",
+             "floor_reduction_tokens": 900, "timestamp": "2026-08-05T10:00:00+0000"}]
+    verified = shield.verified_by_label(rows)
+    assert len(verified) == 1, verified              # NOT_PROVEN is not VERIFIED
+    assert verified[0]["floor_reduction"] == 7000    # latest run of the label wins
+    big, under = shield.render_verified_hero(verified)
+    assert "7.0K" in big, big
+    assert "12,000" not in big + under
+    assert "diet-claude-md" in under
+
+    # No VERIFIED record at all still reads NONE YET rather than a zero.
+    empty_big, empty_under = shield.render_verified_hero([])
+    assert "NONE YET" in empty_big
+    assert "No verified saving yet" in empty_under
+
+
+def test_experiment_label_is_escaped_before_it_reaches_the_page():
+    # Calibrated: dropping esc() from render_experiment_history puts the raw
+    # <img> tag in the page and this test goes red; with esc(), green.
+    #
+    # An experiment label is typed by the user and rendered into HTML, so it
+    # is script-injection shaped. The dashboard is written to a file the user
+    # opens in a browser, so an unescaped label executes there.
+    payload = '<img src=x onerror=alert(1)>'
+    rows = [{"label": payload, "confidence": '"><script>alert(2)</script>',
+             "floor_reduction_tokens": 100, "timestamp": "2026-08-01T10:00:00+0000"}]
+
+    history = shield.render_experiment_history(rows)
+    assert payload not in history, history
+    assert "<script>" not in history, history
+    assert "&lt;img src=x onerror=alert(1)&gt;" in history, history
+
+    hero_big, hero_under = shield.render_verified_hero(shield.verified_by_label(rows))
+    assert payload not in hero_big + hero_under
+
+    companions = shield.render_companions(
+        {"companions": [{"name": payload, "when": payload, "benefit": payload,
+                         "drawback": payload}],
+         "mentions": [{"name": payload, "repo": payload, "reason": payload,
+                       "status": payload}]},
+        None, "/nonexistent-cache-root")
+    assert payload not in companions, companions
+
+    card = {"id": "x", "title": payload, "rank": "RECOMMENDED", "evidence": "ESTIMATED",
+            "why_selected": payload, "expected_benefit": payload, "drawback": payload,
+            "quality_risk": payload, "reversibility": payload, "if_you_say_no": payload,
+            "source": payload}
+    advice = {"best": card, "alternatives": [], "companion": None, "queue": [card],
+              "do_nothing": False, "advisor_cost_tokens": 0, "insufficient": []}
+    assert payload not in shield.render_next_best_move(advice)
+    assert payload not in shield.render_recommendation_queue(advice, 0)
+
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=shield.verified_by_label(rows), profile=None,
+                         advise_result=advice, companions_data=None, experiment_rows=rows)
+    assert payload not in html
+    assert "onerror=alert(1)>" not in html
 
 
 def test_experiment_history_never_sums_across_labels():
