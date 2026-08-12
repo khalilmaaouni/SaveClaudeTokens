@@ -4,7 +4,7 @@ Save Claude Code tokens. Prove every saving.
 
 [![tests](https://github.com/khalilmaaouni/token-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/khalilmaaouni/token-shield/actions/workflows/ci.yml)
 
-Token Shield measures what Claude Code actually consumed, finds the biggest waste, and proves what you cut with a real before and after. It reads the API usage counters Claude Code already writes to your disk, so the numbers are measured, not guessed. It runs locally and sends nothing anywhere.
+Token Shield continuously finds the cheapest high-quality way for you to use Claude Code, using native capabilities first and specialist plugins only when they prove their value. It measures what Claude Code actually consumed, finds the biggest waste, and proves what you cut with a real before and after. It reads the API usage counters Claude Code already writes to your disk, so the numbers are measured, not guessed. It runs locally and sends nothing anywhere.
 
 - Measures real usage from your own transcripts.
 - Keeps three numbers apart and never merges them: what Anthropic's caching already saved (native), what you can still cut (estimated), and what you proved (a verified before and after).

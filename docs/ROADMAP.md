@@ -29,7 +29,7 @@ We built the smallest honest set that delivers the mission: measure token use an
 
 ## Adopted direction: the companion ecosystem (blueprint reviewed 2026-08-12)
 
-A product blueprint (Token Shield Native Companion Ecosystem, research snapshot 2026-08-12) was reviewed and its thesis is ADOPTED: Token Shield is the control plane, measurement layer, and verdict owner; specialist companions (ponytail, caveman, context isolation tools, dedupe tools) are treatments that Token Shield prescribes, measures, and keeps or rolls back. Token Shield decides what is worth changing, a companion executes the treatment, Token Shield proves whether it worked. The strongest position is not replacing every optimizer; it is making every optimizer measurable, personal, compatible, and reversible.
+A product blueprint (Token Shield Native Companion Ecosystem, research snapshot 2026-08-12) was reviewed and its thesis is ADOPTED: Token Shield is the control plane, measurement layer, and verdict owner; specialist companions (ponytail, caveman, context isolation tools, dedupe tools) are treatments that Token Shield prescribes, measures, and keeps or rolls back. Token Shield decides what is worth changing, a companion executes the treatment, Token Shield proves whether it worked. The strongest position is not replacing every optimizer; it is making every optimizer measurable, personal, compatible, and reversible. Positioning sentence (founder, 2026-08-13): Token Shield continuously finds the cheapest high-quality way for you to use Claude Code, using native capabilities first and specialist plugins only when they prove their value.
 
 Adopted principles, binding on all waves below:
 
@@ -39,6 +39,7 @@ Adopted principles, binding on all waves below:
 - **Marginal attribution, canonical baseline.** Stack effects report as a waterfall (baseline A, plus Core to B, plus companion to C); marginal deltas never sum as naive percentages, interaction effects are declared not separable, and a companion version change is a treatment change that ends any spanning experiment.
 - **External evidence never populates the user's savings.** A public benchmark is a reason to test, displayed apart from YOUR EVIDENCE, which starts at NOT PROVEN.
 - **The deep selector never executes.** Fable-tier selection picks one treatment from the curated registry when deterministic rules cannot decide; it never invents install commands, never alters labels, never touches files.
+- **Self-correction is routine, not an exception.** Founder directive 2026-08-13, after a re-benchmark found Token Shield's own optimization advice stale: the tool's advice is data with a shelf life. Every strategy carries its source and a last_reviewed date, the ecosystem doctor flags advice past its review window, and a re-benchmark that overturns the tool's own guidance is recorded like any other finding: the system working, never an embarrassment. This capability ranks with the meter itself.
 
 Sequencing, bent to the ratified gate (unchanged: no v1.8 implementation file before one VERIFIED experiment exists):
 
