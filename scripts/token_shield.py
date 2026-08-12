@@ -31,6 +31,7 @@ USAGE
 
 import argparse
 import importlib.util
+import json
 import os
 import sys
 
@@ -155,6 +156,9 @@ def prescriptions(sm, sessions):
         out.append({
             "tag": "PROVEN",
             "title": "Switching model mid-session",
+            "longterm": "Make subagent routing the default: fix the parent model and "
+                        "effort at session start as policy, and send any cheaper sub-task "
+                        "to a subagent, so the main loop's cache is never rebuilt.",
             "measure": f"{len(switched)} of {n} of your sessions "
                        f"({len(switched) / n:.0%}) ran more than one model",
             "painkiller": "Pick your model and effort once, at the top of a session, "
@@ -181,6 +185,11 @@ def prescriptions(sm, sessions):
         out.append({
             "tag": "PROVEN",
             "title": "The always-loaded startup floor",
+            "longterm": "Shrink the always-loaded core for good: keep CLAUDE.md to hard "
+                        "rules only, move rarely-relevant rules into path-scoped "
+                        ".claude/rules/ that load only when a matching file is read, and "
+                        "disable plugins and MCP servers you do not use. A small core is "
+                        "paid once; a bloated one is paid on every call forever.",
             "measure": f"your median session pays {human(fr)} before any work, "
                        f"{share:.0%} of everything it reads, on every one of "
                        f"{total_calls:,} calls this window",
@@ -205,6 +214,9 @@ def prescriptions(sm, sessions):
         out.append({
             "tag": "SIGNAL",
             "title": "Prefix rebuilt mid-session",
+            "longterm": "Adopt a fixed config window: do settings, hook and MCP edits "
+                        "between sessions, and background every long wait with a completion "
+                        "callback so a session never goes cold past the cache TTL.",
             "measure": f"{len(rebuilt)} of {n} of your sessions "
                        f"({len(rebuilt) / n:.0%}) wrote cache heavily relative to reads",
             "painkiller": "Do config edits between sessions, not during one. Editing "
@@ -286,6 +298,27 @@ table.se{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
 table.se th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:5px 7px;border-bottom:1px solid var(--line);}
 table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
 .scroll{overflow-x:auto;}
+.hero3{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin:16px 0 6px;}
+@media(max-width:640px){.hero3{grid-template-columns:1fr;}}
+.h3c{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:19px 19px 17px;}
+.h3c.lead{background:linear-gradient(135deg,var(--panel2),var(--panel));}
+.h3c .big{font-size:clamp(28px,6vw,44px);font-weight:750;line-height:1;letter-spacing:-.02em;}
+.h3c .big.g{color:var(--good);} .h3c .big.a{color:var(--accent);} .h3c .big.w{color:var(--warn);}
+.h3c .big.muted{color:var(--muted);font-size:20px;font-weight:640;}
+.h3c .u{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
+.cpill{display:inline-block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:20px;border:1px solid var(--line);margin-bottom:10px;color:var(--muted);}
+.cpill.ver{color:var(--good);border-color:var(--good);}
+.cpill.nat{color:var(--accent);border-color:var(--accent);}
+.cpill.est{color:var(--warn);border-color:var(--warn);}
+.usdline{font-size:13.5px;color:var(--muted);margin:2px 0 8px;max-width:66ch;}
+.usdline b{color:var(--ink);}
+.wins{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px;}
+.win{font-size:12px;font-family:var(--mono);padding:6px 11px;border-radius:20px;border:1px solid var(--line);color:var(--muted);}
+.win.ok{color:var(--good);border-color:var(--line);}
+.win.bad{color:var(--warn);border-color:var(--line);}
+.pain-item .fix .lt{color:var(--warn);}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin:2px 0 10px;font-family:var(--mono);font-size:10.5px;color:var(--muted);}
+.legend b{font-weight:600;}
 """
 
 SHIELD_SVG = (
@@ -306,72 +339,116 @@ def stat(k, v, note, is_nodata=False):
             f'<div{cls}>{v}</div><p class="n">{note}</p></div>')
 
 
-def render(mt, sm, sessions, days, stamp, include_sessions):
+def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None):
     sv = savings_breakdown(sm)
     pp = pain_points(sessions)
-    fr_med = sm["first_request_median"]
+    rx = prescriptions(sm, sessions)
+    total_rx = sum(r["saving"] for r in rx)
     share = sm["first_request_share_median"]
     hit = sm["hit_ratio_median"]
     sub = sm["subagent_output_share"]
-    w5, w1 = sm["write_5m_total"] or 0, sm["write_1h_total"] or 0
-    wtot = w5 + w1
+    usd = usd_res if (usd_res and usd_res.get("status") == "OK") else None
 
     parts = [f"<style>{CSS}</style>", '<div class="wrap">']
     parts.append(f'<div class="top">{SHIELD_SVG}<div>'
                  f'<p class="eyebrow">Token Shield</p>'
-                 f'<h1>What you saved, what it blocked, what still costs you</h1></div></div>')
-    parts.append(f'<p class="stamp">Measured {stamp}, transcripts touched in the '
-                 f'last {days:g} days. Every figure is read from the API usage counters, '
-                 f'not estimated. Measured on this machine; the method is portable, these '
-                 f'numbers are not.</p>')
+                 f'<h1>Save Claude Code tokens. Prove every saving.</h1></div></div>')
+    parts.append(f'<p class="stamp">Measured {stamp}, over transcripts touched in the last '
+                 f'{days:g} days. Every figure is read from the API usage counters, never '
+                 f'estimated. Measured on this machine; the method is portable, these numbers '
+                 f'are not.</p>')
 
-    # HERO: the native caching benefit, attributed honestly to Claude Code,
-    # NOT to this tool. Overclaiming it as the plugin's own saving is the exact
-    # dishonesty this project exists to avoid.
-    parts.append('<div class="hero"><p class="k">Claude Code\'s built-in caching already '
-                 'saves you, net</p>'
-                 f'<div><span class="big">{human(sv["saved"])}</span>'
-                 f'<span class="unit">base-input token-units, this window</span></div>'
-                 f'<p class="sub"><b>This is Anthropic\'s automatic prompt caching, not this '
-                 f'tool.</b> Claude Code caches for you by default. You reused '
-                 f'{human(sv["read"])} tokens at 0.1x instead of full price, a net '
-                 f'{human(sv["saved"])} after the {human(sv["write_premium"])} write premium. '
-                 f'Token Shield did not create this saving and does not claim to. What it '
-                 f'adds is below: it lets you see this number, its rules keep it from '
-                 f'collapsing, and it finds the waste caching cannot touch.</p></div>')
+    # THREE HONEST COLUMNS, never merged: what Token Shield PROVED (verified
+    # before/after), what Claude Code's caching did NATIVELY, and what is still
+    # OPPORTUNITY (estimated). Merging these is the exact dishonesty this exists
+    # to avoid, so they sit side by side, each with its own confidence label.
+    if verified and verified.get("experiments"):
+        vbig = f'<span class="big g">{human(verified["floor_reduction"])}</span>'
+        vu = (f'fewer startup tokens per call, proven across {verified["experiments"]} '
+              f'before/after experiment(s)')
+    else:
+        vbig = '<span class="big muted">NONE YET</span>'
+        vu = ('No verified saving yet. Apply one recommendation, then run an experiment '
+              'to measure the before and after.')
+    nat_usd = f' &nbsp;&middot;&nbsp; about ${usd["usd"]:,.0f} API-equivalent' if usd else ''
+    parts.append(
+        '<div class="hero3">'
+        '<div class="h3c lead"><span class="cpill ver">Verified &middot; Token Shield</span>'
+        f'<div>{vbig}</div><p class="u">{vu}</p></div>'
+        '<div class="h3c"><span class="cpill nat">Native &middot; Claude Code</span>'
+        f'<div><span class="big a">{human(sv["saved"])}</span></div>'
+        f'<p class="u">token-units saved by Anthropic\'s automatic caching{nat_usd}. Not this '
+        f'tool\'s doing, and it does not claim it.</p></div>'
+        '<div class="h3c"><span class="cpill est">Opportunity &middot; estimated</span>'
+        f'<div><span class="big w">{human(total_rx)}</span></div>'
+        '<p class="u">token-units still addressable in your own sessions, estimated from the '
+        'issues below.</p></div>'
+        '</div>')
 
-    # THE HONEST DISTINCTION: native vs what this tool adds.
-    parts.append('<h2>What this tool actually does</h2>')
-    parts.append('<div class="grid">'
-                 + stat("1. Sees it", "measurement",
-                        "the number above was invisible before; it is read from the API "
-                        "usage counters, not estimated")
-                 + stat("2. Protects it", f"{pp['switch_share']:.0%} at risk" if pp['switch_n']
-                        else "held",
-                        "when you switch model or edit config mid-session you throw native "
-                        "caching away; the pain points below are where you are leaking it")
-                 + stat("3. Cuts the rest", "the floor",
-                        "caching cannot shrink the always-loaded rent you pay on every call; "
-                        "the prescriptions below can, on top of caching")
-                 + '</div>')
+    # USD honesty line.
+    if usd:
+        unp = (f' {human(usd["unpriced_units"])} units ran on models not in the snapshot and '
+               f'are left unpriced.' if usd.get("unpriced_units") else '')
+        parts.append(f'<p class="usdline"><b>Dollars, honestly.</b> The native caching saving '
+                     f'is about <b>${usd["usd"]:,.0f}</b> API-equivalent at list prices '
+                     f'(snapshot {usd["snapshot"]}), priced at each model\'s own rate.{unp} On '
+                     f'a subscription your bill did not drop by this; it is what the same '
+                     f'tokens would cost at API prices.</p>')
+    elif usd_res and usd_res.get("status") == "NO_PRICE_DATA":
+        parts.append('<p class="usdline"><b>Dollars: NO PRICE DATA.</b> The pricing snapshot '
+                     'is stale, so no dollar figure is shown. The token saving still stands.</p>')
 
-    # WHAT CACHING BLOCKS (native) versus what the tool blocks (its own).
-    parts.append('<h2>What caching blocks for you</h2>')
-    blk = sv["unblocked"] - sv["paid"]
-    parts.append('<div class="grid">'
-                 + stat("Reprocessing blocked (native)", human(blk),
-                        "tokens of history Claude Code re-read from cache instead of "
-                        "reprocessing at full price; this is caching, not this tool")
-                 + stat("Cache hit ratio (native)",
-                        f"{hit:.2f}" if hit is not None else "NO DATA",
-                        "per-session median; how well the native cache is working for you",
-                        hit is None)
-                 + stat("Bad comparisons blocked (this tool)", "by design",
-                        "the one blocking this tool does: the meter refuses a delta across a "
-                        "metric change or mismatched window, printing NO DATA over a guess")
-                 + '</div>')
+    # WINS AND ISSUES at a glance, Brave-style reassurance.
+    wins = []
+    wins.append(('ok', '&#10003; Cache reuse healthy') if (hit is not None and hit >= 0.7)
+                else ('bad', '! Cache running cold') if hit is not None
+                else ('ok', 'cache: NO DATA'))
+    wins.append(('ok', '&#10003; No model switching') if not pp['switch_n']
+                else ('bad', f'! Model switching {pp["switch_share"]:.0%}'))
+    wins.append(('ok', '&#10003; Output routing ok') if (sub is not None and sub < 0.40)
+                else ('bad', f'! Subagent output {pct(sub)}') if sub is not None
+                else ('ok', 'routing: NO DATA'))
+    wins.append(('bad', f'! Startup context {pct(share)}') if (share is not None and share >= 0.30)
+                else ('ok', '&#10003; Startup context lean') if share is not None
+                else ('ok', 'startup: NO DATA'))
+    parts.append('<h2>Wins and issues</h2>')
+    parts.append('<div class="wins">'
+                 + ''.join(f'<span class="win {c}">{t}</span>' for c, t in wins) + '</div>')
 
-    # WHERE THE NATIVE SAVING COMES FROM.
+    # ISSUE CARDS, ranked. OPPORTUNITY, so labeled ESTIMATED: measured waste plus
+    # an estimated saving from fixing it. Only Experiment Mode makes it VERIFIED.
+    parts.append('<h2>Your top issues, ranked</h2>')
+    if not rx:
+        parts.append('<div class="pain"><div class="pain-item"><div class="rank">&#10003;</div>'
+                     '<div class="t">No dominant issue measured<span class="tag">OK</span></div>'
+                     '<div class="m">every session pattern is inside its healthy range</div>'
+                     '<div class="fix">Keep the shield on and re-check monthly.</div></div></div>')
+    else:
+        pain = ['<div class="pain">']
+        for i, r in enumerate(sorted(rx, key=lambda x: -x["saving"]), 1):
+            impact = 'HIGH' if i == 1 else 'MEDIUM'
+            lt = r.get("longterm", "")
+            lt_html = f'<br><b class="lt">Long-term fix.</b> {lt}' if lt else ''
+            pain.append(
+                f'<div class="pain-item"><div class="rank">{i}</div>'
+                f'<div class="t">{r["title"]}<span class="tag">{impact} impact</span>'
+                f'<span class="cpill est" style="margin:0 0 0 8px">Estimated</span></div>'
+                f'<div class="m">{r["measure"]}</div>'
+                f'<div class="fix"><b style="color:var(--good)">Painkiller.</b> '
+                f'{r["painkiller"]}<br><b style="color:var(--accent)">Medicine.</b> '
+                f'{r["medicine"]}{lt_html}<br><b style="color:var(--shield)">The math.</b> '
+                f'{r["math"]}</div></div>')
+        pain.append('</div>')
+        parts.append("".join(pain))
+        parts.append(f'<p class="n" style="margin-top:8px">Treating all of these is worth on '
+                     f'the order of {human(total_rx)} base-input units this window on your data, '
+                     f'estimated, and it is the tool\'s own contribution, separate from the '
+                     f'native caching. To turn an estimate into a VERIFIED number, run '
+                     f'<code>experiment start</code>, apply one fix, then '
+                     f'<code>experiment end</code>.</p>')
+
+    # NATIVE DETAIL, secondary: where the native saving comes from, so the hero
+    # number is checkable rather than asserted.
     parts.append('<h2>Where the native saving comes from</h2>')
     umax = sv["unblocked"] or 1
     parts.append('<div class="compare">'
@@ -389,80 +466,8 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
                  '<div class="lbl">cache writes (1.25x / 2x)</div></div></div>'
                  '<p class="n" style="margin-top:10px">Almost all of the saving is the gap '
                  'between the first two bars: history re-read from cache instead of '
-                 'reprocessed. Writes are the price of admission that makes the reads cheap.</p>')
-
-    # KEY STATS still worth a glance.
-    parts.append('<h2>The recurring cost</h2>')
-    parts.append('<div class="grid">'
-                 + stat("Always-loaded rent",
-                        human(fr_med) if fr_med is not None else "NO DATA",
-                        "median first-request tokens, paid before any work on every call",
-                        fr_med is None)
-                 + stat("Startup share", pct(share),
-                        "of everything a session reads is that floor, re-paid each call",
-                        share is None)
-                 + stat("Subagent output", pct(sub),
-                        "share of output from subagents rather than the main thread",
-                        sub is None)
-                 + (stat("Cache writes",
-                         f"{human(w5)}/{human(w1)}",
-                         "5m at 1.25x / 1h at 2x; a subscription defaults to 1h")
-                    if wtot else stat("Cache writes", "NO DATA", "no TTL split this window", True))
-                 + '</div>')
-
-    # KEY PAIN POINTS, each with its own prescription and the saving math,
-    # computed from this user's own sessions. Adaptive: only the pain points the
-    # data actually shows appear, and every number is theirs.
-    rx = prescriptions(sm, sessions)
-    parts.append('<h2>What this tool would save you: your pain points, treated</h2>')
-    parts.append('<p class="n" style="margin:-4px 0 12px">This is the part native caching '
-                 'does NOT do for you, and the reason to keep the tool. Each is measured '
-                 'waste in your own sessions, with the token saving from fixing it computed '
-                 'from your own numbers.</p>')
-    if not rx:
-        parts.append('<div class="pain"><div class="pain-item"><div class="rank">-</div>'
-                     '<div class="t">No dominant pain point measured<span class="tag">OK</span></div>'
-                     '<div class="m">every session pattern is inside its healthy range</div>'
-                     '<div class="fix">Keep the shield on and re-check monthly.</div></div></div>')
-    else:
-        parts.append('<p class="n" style="margin:-4px 0 12px">Ranked by the tokens each '
-                     'costs you, largest first. Every figure is from your own sessions, so '
-                     'another machine shows a different profile.</p>')
-        pain = ['<div class="pain">']
-        for i, r in enumerate(sorted(rx, key=lambda x: -x["saving"]), 1):
-            pain.append(
-                f'<div class="pain-item"><div class="rank">{i}</div>'
-                f'<div class="t">{r["title"]}<span class="tag">{r["tag"]}</span></div>'
-                f'<div class="m">{r["measure"]}</div>'
-                f'<div class="fix"><b style="color:var(--good)">Painkiller.</b> '
-                f'{r["painkiller"]}<br><b style="color:var(--accent)">Medicine.</b> '
-                f'{r["medicine"]}<br><b style="color:var(--shield)">The math.</b> '
-                f'{r["math"]}</div></div>')
-        pain.append('</div>')
-        total_rx = sum(r["saving"] for r in rx)
-        parts.append("".join(pain))
-        parts.append(f'<p class="n" style="margin-top:10px">Treating all of these is worth '
-                     f'on the order of {human(total_rx)} base-input units this window on your '
-                     f'data. That figure is THIS tool\'s contribution, separate from and on '
-                     f'top of the native caching above. The PROVEN lines are mechanism-backed '
-                     f'lower bounds; the SIGNAL line points rather than proves.</p>')
-
-    # WHY KEEP IT ON: honest about the split between native and tool.
-    parts.append('<h2>Why keep the tool</h2>')
-    tool_worth = sum(r["saving"] for r in rx) if rx else 0
-    parts.append('<div class="why">'
-                 f'<h3>Native caching is free and automatic. The tool is for the rest.</h3>'
-                 f'<p>Claude Code caches for you whether or not this tool exists, so the '
-                 f'{human(sv["saved"])} above is not a reason to install anything. Two things '
-                 f'are: first, that saving collapses the moment a session turns cache-hostile '
-                 f'(you switch model in {pp["switch_share"]:.0%} of sessions, and each one '
-                 f'throws native caching away), and the tool\'s rules are how you stop leaking '
-                 f'it.</p>'
-                 f'<p>Second, native caching cannot touch the {human(fr_med)} startup floor '
-                 f'you pay on every call, and the prescriptions above can. On your data that '
-                 f'is worth about {human(tool_worth)} this window. The tool is how you see '
-                 f'that number move, measured, so a cleanup that did not actually save shows '
-                 f'up as no change instead of a good feeling.</p></div>')
+                 'reprocessed. This is Anthropic\'s caching, shown so the hero number is '
+                 'checkable, not so the tool can claim it.</p>')
 
     if include_sessions and sessions:
         top = sorted((s for s in sessions if s["first_request"] > 0),
@@ -475,15 +480,19 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
         parts.append('<div class="scroll"><table class="se"><thead><tr>'
                      '<th>First request</th><th>Share</th><th>Calls</th>'
                      '<th>Hit</th><th>Models</th></tr></thead><tbody>'
-                     + rows + '</tbody></table></div>'
-                     '<p class="n" style="color:var(--muted);font-size:11.5px">'
-                     'More than one model in a session means a mid-flight switch, '
-                     'which rebuilds that session\'s cache from zero.</p>')
+                     + rows + '</tbody></table></div>')
 
-    parts.append('<footer>Token Shield. Every figure is '
-                 'measured from local API usage counters; NO DATA means it could not '
-                 'be measured, never a guess. Aggregates only: no conversation text, '
-                 'file paths, or session identifiers are read into this page.</footer>')
+    parts.append('<h2>What the labels mean</h2>')
+    parts.append('<div class="legend">'
+                 '<span><b style="color:var(--good)">VERIFIED</b> before/after, proven</span>'
+                 '<span><b style="color:var(--muted)">MEASURED</b> from counters, cause not proven</span>'
+                 '<span><b style="color:var(--warn)">ESTIMATED</b> a transparent projection</span>'
+                 '<span><b style="color:var(--accent)">NATIVE</b> Claude Code\'s own saving</span>'
+                 '</div>')
+    parts.append('<footer>Token Shield. Every figure is measured from local API usage '
+                 'counters; NO DATA means it could not be measured, never a guess. Aggregates '
+                 'only: no conversation text, file paths, or session identifiers reach this '
+                 'page. Nothing is uploaded.</footer>')
     parts.append("</div>")
     return "\n".join(parts) + "\n"
 
@@ -525,7 +534,35 @@ def main():
         import time
         stamp = time.strftime("%Y-%m-%d %H:%M")
 
-    body = render(mt, sm, sessions, a.days, stamp, a.include_sessions)
+    # Optional honest enrichment: per-model USD from the pricing snapshot, and
+    # the VERIFIED total from the experiment ledger. Both degrade to None without
+    # breaking the render, and a failure is surfaced, not swallowed.
+    usd_res = None
+    try:
+        import pricing as pr
+        today = stamp.split()[0]
+        usd_res = pr.price_saving(pr.saving_by_model(a.root, a.days),
+                                  pr.load_pricing(), today)
+    except (OSError, ValueError, ImportError) as e:
+        print(f"note: USD skipped ({e})", file=sys.stderr)
+
+    verified = None
+    ledger = os.path.expanduser("~/.claude/token-shield/savings.jsonl")
+    if os.path.exists(ledger):
+        n = 0
+        floor = 0
+        with open(ledger, errors="ignore") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("confidence") == "VERIFIED" and r.get("floor_reduction_tokens"):
+                    n += 1
+                    floor += max(0, r["floor_reduction_tokens"])
+        verified = {"experiments": n, "floor_reduction": floor}
+
+    body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified)
     out_html = body if a.body_only else render_standalone(body)
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)

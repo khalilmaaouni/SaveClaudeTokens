@@ -1,0 +1,18 @@
+{
+  "snapshot": "2026-08-12",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "note": "First-party Claude API list prices, USD per 1,000,000 tokens. Base-input token-units are input-equivalent, so a measured saving is priced at the model's INPUT rate; output rates are listed for reference only. A model not in this table is left UNPRICED, never priced at another model's rate. Re-fetch and bump snapshot when prices change.",
+  "stale_after_days": 120,
+  "models": {
+    "claude-fable-5":    {"input": 10.0, "output": 50.0},
+    "claude-opus-5":     {"input": 5.0,  "output": 25.0},
+    "claude-opus-4-8":   {"input": 5.0,  "output": 25.0},
+    "claude-opus-4-7":   {"input": 5.0,  "output": 25.0},
+    "claude-opus-4-6":   {"input": 5.0,  "output": 25.0},
+    "claude-opus-4-5":   {"input": 5.0,  "output": 25.0},
+    "claude-sonnet-5":   {"input": 2.0,  "output": 10.0},
+    "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0},
+    "claude-sonnet-4-5": {"input": 3.0,  "output": 15.0},
+    "claude-haiku-4-5":  {"input": 1.0,  "output": 5.0}
+  }
+}

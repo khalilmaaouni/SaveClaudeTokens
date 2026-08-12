@@ -257,11 +257,13 @@ def test_dashboard_attributes_the_saving_to_native_caching():
     sessions = [{"first_request": 8000, "calls": 20, "models": 2,
                  "rewrite_ratio": 0.02, "read": 1000, "hit_ratio": 0.9}]
     html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False)
-    assert "not this tool" in html
-    assert "did not create this saving" in html
+    assert "not this tool" in html.lower()          # "Not this tool's doing"
+    assert "does not claim it" in html              # the hero's explicit disclaimer
     assert "native" in html.lower()
+    # The three confidence-labeled columns must stay distinct, never merged.
+    assert "Verified" in html and "Native" in html and "Opportunity" in html
     # The tool's own value must be framed as separate and additional.
-    assert "on top of" in html.lower() or "separate from" in html.lower()
+    assert "separate from" in html.lower() or "on top of" in html.lower()
 
 
 def test_prescriptions_are_adaptive_and_carry_the_math():
