@@ -18,6 +18,34 @@ Verified against the Anthropic prompt caching docs (platform.claude.com/docs/en/
 3. The TTL refreshes free on every use. A session that keeps moving stays cached. A session that idles past the TTL re-pays the full write on its next turn.
 4. Claude Code places cache breakpoints automatically. You cannot place them yourself, but you control the two things that matter: whether the prefix stays stable, and how big it is.
 
+## Measure before you optimize
+
+Do not reason about which lever matters most. Measure it, then act. Run
+`/token-audit`, or the script directly:
+
+```bash
+python3 <plugin>/scripts/measure_tokens.py --days 30 --sessions
+```
+
+It reads the `usage` counters the API returned on every assistant message in
+the local session transcripts, which are the counters billing is computed
+from, so its output is measurement rather than estimation. It reports the
+preamble cost (what every call pays before any work happens), the cache hit
+ratio, a per-session rewrite ratio that isolates cache busting, and the output
+share. Anything it cannot measure it prints as NO DATA.
+
+Read it this way: a high preamble means Lever 2 dominates and nothing else is
+worth doing first; a hit ratio below roughly 0.7 on long sessions means Lever
+1 has real headroom; a high output share means Lever 5 does. Snapshot a
+baseline with `--baseline`, change one thing, then `--compare`. One variable
+at a time, or the result attributes to nothing.
+
+A worked case: on one machine the audit returned a 0.95 median hit ratio with
+rewrite ratios of 0.01 to 0.07, which killed the assumption that cache
+discipline was the problem, and a 62,860 token median preamble, which showed
+the entire headroom was in the always-loaded set. The measurement redirected
+the work; the intuition would have sent it the wrong way.
+
 ## Lever 1: keep the cache hot (habits, not settings)
 
 - Never edit CLAUDE.md, settings.json, hooks, or MCP config mid-session. Each edit changes the prefix for every later request and re-bills the whole preamble. Config changes happen at session end, then the next session starts clean.

@@ -33,6 +33,31 @@ That is the whole setup. The skill loads on demand, so it adds one listing line 
 - Lever 6: durable on-disk memory (works well with an Obsidian vault) so sessions stop re-deriving what past sessions already learned.
 - An anti-pattern ledger seeded from real incidents.
 
+## Measure, do not guess
+
+The plugin ships a measurement script and a `/token-audit` command. The script
+reads the `usage` counters the API returned on every assistant message in your
+local session transcripts, which are the counters billing is computed from, so
+its output is measurement rather than estimation. It reports:
+
+- **Preamble cost**: what every call in a session pays before any work happens.
+- **Cache hit ratio**: how much of your context was re-read cheaply.
+- **Rewrite ratio per session**: isolates which sessions busted the cache.
+- **Output share**: whether verbosity, not context size, is the real cost.
+
+```bash
+python3 scripts/measure_tokens.py --days 30 --sessions
+python3 scripts/measure_tokens.py --days 30 --baseline before.json
+# change one thing, then:
+python3 scripts/measure_tokens.py --days 30 --compare before.json
+```
+
+Anything it cannot measure it prints as NO DATA rather than filling the gap
+with a plausible number. Use it to pick the lever before pulling it: on one
+machine it showed a 0.95 cache hit ratio, which ruled out cache discipline as
+the problem, and a 62,860 token median preamble, which showed the headroom was
+entirely in the always-loaded set.
+
 ## Pairs well with
 
 - caveman (terse narration) and ponytail (minimal generated code) for the output side.
