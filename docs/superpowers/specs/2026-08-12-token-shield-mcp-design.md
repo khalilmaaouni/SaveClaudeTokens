@@ -21,6 +21,7 @@ Tools, each a wrapper over an existing tested script, output shapes matching the
 - list_strategies: the full registry with citable sources.
 - record_decision(strategy_id, decision): the existing treatment-memory write; echoes exactly what it recorded and when it resurfaces.
 - experiment_start(label, treats), experiment_end(label): the existing guarded experiment; refusals and NOT_PROVEN reasons returned verbatim.
+- get_detailed_report(window_days): the consumption report, read only; schema and sections in docs/superpowers/specs/2026-08-13-consumption-report-design.md (amendment ratified 2026-08-13).
 
 Resources: the rendered dashboard HTML; docs/METHODOLOGY.md; docs/CLAIMS.md.
 
