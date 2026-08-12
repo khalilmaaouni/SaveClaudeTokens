@@ -99,6 +99,37 @@ not say which statistic it is, is not yet a scientific number.
 | C9 | The telemetry hook exits 0 and prints nothing to stdout on hostile input, so it can never break the session it measures. | CONFIRMED | `test_telemetry_never_breaks_the_session` |
 | C10 | The dashboard export writes aggregates only, no session-identifying text. | CONFIRMED | `test_lever_naming_follows_the_measurement`, and the export omits per-session rows unless asked |
 
+## D. Advisor sweep claims, checked 2026-08-12 before the v1.7 build
+
+Source key: SET = code.claude.com/docs/en/settings, IM =
+code.claude.com/docs/en/interactive-mode, SA = code.claude.com/docs/en/sub-agents,
+HK and MCP as above. Verified by a read-only sweep, each quote from an opened
+first-party page, then spot-checked by the orchestrator against local files.
+
+| # | Claim | Verdict | Evidence |
+|---|---|---|---|
+| D1 | An `InstructionsLoaded` hook event fires at session start and when instruction files load lazily. | CONFIRMED | HK: "Fires at session start and when files are lazily loaded during a session." |
+| D2 | `includeGitInstructions: false` removes the built-in commit and PR workflow instructions. | CONFIRMED | SET: "Default: true... Set to false to remove both." |
+| D3 | `claudeMdExcludes` skips named CLAUDE.md files when loading memory. | CONFIRMED | SET: "Glob patterns or absolute paths of CLAUDE.md files to skip when loading memory." |
+| D4 | `skillOverrides` can hide or collapse a skill per name. | CONFIRMED | SET: "Per-skill visibility overrides keyed by skill name." |
+| D5 | `MAX_MCP_OUTPUT_TOKENS` caps MCP tool output size. | CONFIRMED | MCP: "adjust the maximum allowed MCP output tokens using the MAX_MCP_OUTPUT_TOKENS environment variable." |
+| D6 | Tool search is on by default and `ENABLE_TOOL_SEARCH` controls it. | CONFIRMED | MCP: "Tool search is enabled by default... Control tool search behavior with the ENABLE_TOOL_SEARCH environment variable." |
+| D7 | `/btw` asks a question without adding to conversation history. | CONFIRMED | IM: "Use /btw to ask a question about your current work without adding to the conversation history." |
+| D8 | Effort changes are observable in transcripts; fast-mode state is not. | SPLIT: effort CONFIRMED, fast-mode REFUTED | Top-level `"effort":"xhigh"` appears 79 times in one real transcript; a `fastMode` counter field appears in none (the one literal hit is conversation text, not a field). Fast-mode detection is CUT from the profiler. |
+| D9 | Agent frontmatter supports `model`, `effort`, and `maxTurns`. | CONFIRMED | SA: "`maxTurns`... Maximum number of agentic turns"; "`effort`... Options: low, medium, high, xhigh, max." |
+| D10 | The blueprint's companion repos exist as named, but the token-saver installed here is `ppgranger/token-saver`, a different project from the blueprint's `ww-w-ai/claude-code-token-saver`. | CONFIRMED with correction | `gh api repos/<owner>/<repo>` resolved each blueprint repo; local `~/.claude/plugins/cache/claude-community/token-saver` manifest names ppgranger. The registry keys token-saver to ppgranger and lists claude-code-token-saver separately, mention-only. |
+
+Consequences applied to the build: fast-mode signals are excluded everywhere;
+`data/companions.json` uses the installed, verified sources; every strategy that
+cites D1 to D9 names the row it stands on.
+
+## E. Review-driven scope decisions, 2026-08-12 adversarial review
+
+| Row | Decision | Reason |
+|-----|----------|--------|
+| E1 | The experiment fingerprint hashes the user CLAUDE.md, `~/.claude/settings.json`, `~/.claude.json`, and the `~/.claude/skills` tree, as a sorted per-file manifest of sha256 lines. Project-level CLAUDE.md files stay OUT of fingerprint scope. | The experiment is machine-level and the working directory can change between start and end, so hashing one project's CLAUDE.md would make the fingerprint depend on where the command was typed. The gap is recorded here rather than hidden: a project CLAUDE.md edit during an experiment window is a confounder the fingerprint will not catch. |
+| E2 | When `--treats` names a file inside fingerprint scope, the exclusion is recorded in the experiment record and printed at close, never applied silently. | The reviewer proved a treated `settings.json` blinds the guard to every other change in that file; visibility is the affordable fix, structural key-level hashing is deferred. |
+
 ## The standing caveat on every measured number
 
 Every MEASURED figure here was taken on one machine's transcripts. They are

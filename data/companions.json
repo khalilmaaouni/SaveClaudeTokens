@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "updated": "2026-08-12",
+  "companions": [
+    {
+      "name": "ponytail",
+      "repo": "github.com/DietrichGebert/ponytail",
+      "install": "claude plugin install ponytail@claude-community",
+      "tier": "full",
+      "when": "profile shows overbuilding: large diffs per accepted change",
+      "benefit": "smaller diffs, YAGNI ladder",
+      "drawback": "can under-build; user must ask for the full version when needed",
+      "uninstall": "claude plugin uninstall ponytail"
+    },
+    {
+      "name": "caveman",
+      "repo": "github.com/JuliusBrussee/caveman",
+      "install": "claude plugin install caveman@claude-community",
+      "tier": "full",
+      "when": "output tokens are the measured pain AND corrective turns are not rising",
+      "benefit": "compressed narration",
+      "drawback": "compression prompt has its own overhead; net negative for users who need explanations; never for user-facing prose",
+      "uninstall": "claude plugin uninstall caveman"
+    },
+    {
+      "name": "token-saver",
+      "repo": "github.com/ppgranger/token-saver",
+      "install": "claude plugin install token-saver@claude-community",
+      "tier": "detect-and-measure only, never default-recommended",
+      "when": "already installed: measure it; not installed: mention only on huge shell-output profiles",
+      "benefit": "compresses noisy shell output before the model reads it",
+      "drawback": "compressed output must never stand as evidence where exact text matters; needs Python 3.10+",
+      "uninstall": "claude plugin uninstall token-saver",
+      "note": "This is ppgranger's token-saver, a different project from ww-w-ai/claude-code-token-saver."
+    }
+  ],
+  "mentions": [
+    {
+      "name": "context-mode",
+      "repo": "github.com/mksglu/context-mode",
+      "reason": "",
+      "status": "not vetted on this machine"
+    },
+    {
+      "name": "claude-dcp",
+      "repo": "github.com/exploreborders/claude-dcp",
+      "reason": "",
+      "status": "not vetted on this machine"
+    },
+    {
+      "name": "ccusage",
+      "repo": "github.com/ccusage/ccusage",
+      "reason": "usage accounting for multi-agent users",
+      "status": "not vetted on this machine"
+    },
+    {
+      "name": "claude-code-token-saver",
+      "repo": "github.com/ww-w-ai/claude-code-token-saver",
+      "reason": "different project from the installed token-saver; compat note only",
+      "status": "not vetted on this machine"
+    }
+  ]
+}

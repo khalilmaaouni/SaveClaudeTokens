@@ -29,6 +29,7 @@ telem = _load("session_end_telemetry")
 export = _load("obsidian_export")
 shield = _load("token_shield")
 mt = _load("measure_tokens")
+adv = _load("advisor")
 
 
 def test_loaded_content_matches_what_claude_code_loads():
@@ -293,6 +294,292 @@ def test_prescriptions_are_adaptive_and_carry_the_math():
     sm_clean = {"first_request_median": 9000, "first_request_share_median": 0.10,
                 "read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0}
     assert shield.prescriptions(sm_clean, clean) == []
+
+
+def _leaf(v, label="MEASURED"):
+    return {"value": v, "label": label, "basis": "test basis"}
+
+
+def _synthetic_profile(switch_share=0.5, floor_share=0.05, output_total=1000,
+                        hit_ratio=0.9, first_request=9000):
+    return {
+        "schema": 1,
+        "usage": {
+            "first_request_median_tokens": _leaf(first_request),
+            "cache_hit_ratio_median": _leaf(hit_ratio),
+            "output_tokens_total": _leaf(output_total),
+            "subagent_output_share": _leaf(0.1),
+            "cache_write_5m_tokens": _leaf(0),
+            "cache_write_1h_tokens": _leaf(0),
+        },
+        "behavior": {
+            "sessions": _leaf(10),
+            "model_switch_session_share": _leaf(switch_share),
+            "effort_values_seen": _leaf([]),
+            "idle_gap_shares": _leaf(0.0),
+            "subagent_transcript_share": _leaf(0.1),
+        },
+        "instruction": {
+            "claude_md_user_bytes": _leaf(500),
+            "claude_md_project_bytes": _leaf(500),
+            "startup_floor_share": _leaf(floor_share),
+            "memory_index_bytes": _leaf(500),
+        },
+        "environment": {
+            "plugin_count": _leaf(1, "INFERRED"),
+            "ttl_regime": _leaf("api-5m", "INFERRED"),
+        },
+        "skipped": {"files": _leaf(0), "lines": _leaf(0)},
+    }
+
+
+def _mini_strategy(sid, category, metric, op, value, band):
+    return {
+        "id": sid, "category": category, "title": f"title-{sid}",
+        "trigger": {"metric": metric, "op": op, "value": value, "band": band},
+        "what_it_changes": "x", "expected_benefit": "x", "evidence": "ESTIMATED",
+        "drawback": "x", "quality_risk": "LOW", "reversibility": "x", "how_measured": "x",
+        "if_you_say_no": "x", "alternatives": [], "companion": None,
+        "requires_confirmation": False, "source": "test",
+    }
+
+
+def _sm_and_sessions():
+    sm = {"read_total": 1000, "write_5m_total": 100, "write_1h_total": 50,
+          "input_total": 10, "first_request_median": 9000,
+          "first_request_share_median": 0.36, "hit_ratio_median": 0.9,
+          "subagent_output_share": 0.1, "output_total": 1000}
+    sessions = [{"first_request": 9000, "calls": 20, "models": 2,
+                 "rewrite_ratio": 0.02, "read": 1000, "hit_ratio": 0.9}]
+    return sm, sessions
+
+
+def test_dashboard_new_sections_render_with_all_sources_present():
+    # Calibrated: with the six shield.render_*() calls commented out of
+    # render(), this test goes red (markers missing); restored, it is green.
+    with tempfile.TemporaryDirectory() as d:
+        profile = shield.load_profile(_write_json(d, "profile.json",
+                                                    _synthetic_profile(switch_share=0.5)))
+        strategies = adv.load_strategies()
+        advise_result = adv.advise(profile, {}, strategies)
+        assert advise_result["best"] is not None  # 0.5 switch share fires a HIGH card
+
+        companions_data = shield.load_companions(_write_json(d, "companions.json", {
+            "companions": [{"name": "ponytail", "when": "test when",
+                            "benefit": "smaller diffs", "drawback": "can under-build"}],
+            "mentions": [{"name": "ccusage", "repo": "github.com/ccusage/ccusage",
+                         "reason": "usage accounting", "status": "not vetted"}],
+        }))
+        cache_root = os.path.join(d, "plugins", "cache")
+        os.makedirs(os.path.join(cache_root, "claude-community", "ponytail"))
+
+        with open(os.path.join(d, "savings.jsonl"), "w") as f:
+            f.write(json.dumps({"label": "shrink-claude-md", "confidence": "VERIFIED",
+                                "floor_reduction_tokens": 500,
+                                "timestamp": "2026-08-12T10:00:00+0000"}) + "\n")
+        experiment_rows = shield.load_experiment_rows(os.path.join(d, "savings.jsonl"))
+
+        sm, sessions = _sm_and_sessions()
+        html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                             profile=profile, advise_result=advise_result, suppressed_n=0,
+                             companions_data=companions_data, experiment_rows=experiment_rows,
+                             plugin_cache_root=cache_root)
+
+    for marker in ("Next best move", "Observed pattern", "Recommendation queue",
+                   "Companions", "Experiment history", "Alerts"):
+        assert marker in html, marker
+    assert "installed" in html.lower()
+    assert "shrink-claude-md" in html
+
+
+def _write_json(d, name, data):
+    p = os.path.join(d, name)
+    with open(p, "w") as f:
+        json.dump(data, f)
+    return p
+
+
+def test_dashboard_new_sections_show_no_data_with_every_source_absent():
+    sm = {"read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0,
+          "first_request_median": None, "first_request_share_median": None,
+          "hit_ratio_median": None, "subagent_output_share": None, "output_total": 0}
+    html = shield.render(mt, sm, [], 30, "stamp", include_sessions=False,
+                         profile=None, advise_result=None, suppressed_n=0,
+                         companions_data=None, experiment_rows=None)
+    assert html.count("NO DATA") >= 5  # next best move, observed pattern, queue, companions, alerts
+    assert "No experiments yet." in html
+
+
+def test_recommendation_queue_never_renders_more_than_three_items():
+    # Calibrated: dropping the `[:3]` slice in render_recommendation_queue lets
+    # this go red (5 rendered instead of 3); restored, it is green.
+    fake_cards = [{"id": f"c{i}", "title": f"t{i}", "evidence": "ESTIMATED", "drawback": "d"}
+                  for i in range(5)]
+    fake_result = {"best": fake_cards[0], "alternatives": fake_cards[1:], "companion": None,
+                   "queue": fake_cards, "do_nothing": False, "advisor_cost_tokens": 0,
+                   "insufficient": []}
+    html = shield.render_recommendation_queue(fake_result, 0)
+    assert html.count('class="pain-item"') == 3, html.count('class="pain-item"')
+
+
+def test_suppressed_treatment_reduces_the_rendered_queue():
+    # Calibrated: passing {} instead of `treatments` to the "with" advise()
+    # call makes both queues equal length and this test goes red; restored,
+    # the suppressed queue is the shorter one and it is green.
+    strategies = [
+        _mini_strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH"),
+        _mini_strategy("startup.b", "startup", "usage.m2", ">=", 1, "HIGH"),
+    ]
+    profile = {"usage": {"m1": _leaf(5), "m2": _leaf(5)}}
+    treatments = {"cache.a": {"decision": "rejected", "until": "2999-01-01T00:00:00"}}
+
+    without = adv.advise(profile, {}, strategies)
+    with_t = adv.advise(profile, treatments, strategies)
+    assert len(without["queue"]) == 2
+    assert len(with_t["queue"]) == 1
+
+    n = shield.suppressed_recommendation_count(adv, profile, treatments, strategies)
+    assert n == 1
+
+    html_without = shield.render_recommendation_queue(without, 0)
+    html_with = shield.render_recommendation_queue(with_t, n)
+    assert html_without.count('class="pain-item"') == 2
+    assert html_with.count('class="pain-item"') == 1
+    assert "suppressed by your earlier choices" in html_with
+
+
+def test_dashboard_html_contains_no_en_or_em_dash():
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    strategies = adv.load_strategies()
+    advise_result = adv.advise(profile, {}, strategies)
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[])
+    assert "\u2013" not in html, "en dash found in rendered dashboard"
+    assert "\u2014" not in html, "em dash found in rendered dashboard"
+
+
+def test_verified_headline_is_per_label_and_never_a_cross_label_total():
+    # Calibrated: restoring the old headline (sum of floor_reduction_tokens
+    # with max(0, ...) per record) makes the page show 10,000 and this test
+    # goes red on both the total check and the regression check; with
+    # verified_by_label, green.
+    #
+    # The ledger below is the reviewer's repro: one label measured twice at
+    # +5000, and a second label that REGRESSED by 8000. The old headline
+    # clipped the regression to zero and added the repeats, printing 10,000,
+    # a number about nothing, on a page that says one paragraph later that
+    # floor deltas are never summed across labels.
+    rows = [
+        {"label": "diet-claude-md", "confidence": "VERIFIED",
+         "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000"},
+        {"label": "diet-claude-md", "confidence": "VERIFIED",
+         "floor_reduction_tokens": 5000, "timestamp": "2026-08-02T10:00:00+0000"},
+        {"label": "prune-mcp", "confidence": "VERIFIED",
+         "floor_reduction_tokens": -8000, "timestamp": "2026-08-03T10:00:00+0000"},
+    ]
+    verified = shield.verified_by_label(rows)
+    assert [r["label"] for r in verified] == ["diet-claude-md", "prune-mcp"], verified
+    assert [r["floor_reduction"] for r in verified] == [5000, -8000], verified
+
+    big, under = shield.render_verified_hero(verified)
+    hero = big + under
+    assert "10,000" not in hero and "10000" not in hero, hero
+    assert "2 LABELS" in big, big
+    assert "diet-claude-md +5,000" in under, under
+    assert "prune-mcp -8,000" in under, under
+
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=verified, profile=None, advise_result=None,
+                         companions_data=None, experiment_rows=rows)
+    assert "10,000" not in html and "10000" not in html
+    assert "prune-mcp -8,000" in html
+    # The regression is visible as a negative in the history table too, and
+    # the repeated label is one row per record there by design (the table is
+    # a log), while the headline carries the latest state only.
+    assert "-8,000" in html
+
+
+def test_verified_headline_shows_one_labels_own_number():
+    rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000"},
+            {"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 7000, "timestamp": "2026-08-04T10:00:00+0000"},
+            {"label": "half-done", "confidence": "NOT_PROVEN",
+             "floor_reduction_tokens": 900, "timestamp": "2026-08-05T10:00:00+0000"}]
+    verified = shield.verified_by_label(rows)
+    assert len(verified) == 1, verified              # NOT_PROVEN is not VERIFIED
+    assert verified[0]["floor_reduction"] == 7000    # latest run of the label wins
+    big, under = shield.render_verified_hero(verified)
+    assert "7.0K" in big, big
+    assert "12,000" not in big + under
+    assert "diet-claude-md" in under
+
+    # No VERIFIED record at all still reads NONE YET rather than a zero.
+    empty_big, empty_under = shield.render_verified_hero([])
+    assert "NONE YET" in empty_big
+    assert "No verified saving yet" in empty_under
+
+
+def test_experiment_label_is_escaped_before_it_reaches_the_page():
+    # Calibrated: dropping esc() from render_experiment_history puts the raw
+    # <img> tag in the page and this test goes red; with esc(), green.
+    #
+    # An experiment label is typed by the user and rendered into HTML, so it
+    # is script-injection shaped. The dashboard is written to a file the user
+    # opens in a browser, so an unescaped label executes there.
+    payload = '<img src=x onerror=alert(1)>'
+    rows = [{"label": payload, "confidence": '"><script>alert(2)</script>',
+             "floor_reduction_tokens": 100, "timestamp": "2026-08-01T10:00:00+0000"}]
+
+    history = shield.render_experiment_history(rows)
+    assert payload not in history, history
+    assert "<script>" not in history, history
+    assert "&lt;img src=x onerror=alert(1)&gt;" in history, history
+
+    hero_big, hero_under = shield.render_verified_hero(shield.verified_by_label(rows))
+    assert payload not in hero_big + hero_under
+
+    companions = shield.render_companions(
+        {"companions": [{"name": payload, "when": payload, "benefit": payload,
+                         "drawback": payload}],
+         "mentions": [{"name": payload, "repo": payload, "reason": payload,
+                       "status": payload}]},
+        None, "/nonexistent-cache-root")
+    assert payload not in companions, companions
+
+    card = {"id": "x", "title": payload, "rank": "RECOMMENDED", "evidence": "ESTIMATED",
+            "why_selected": payload, "expected_benefit": payload, "drawback": payload,
+            "quality_risk": payload, "reversibility": payload, "if_you_say_no": payload,
+            "source": payload}
+    advice = {"best": card, "alternatives": [], "companion": None, "queue": [card],
+              "do_nothing": False, "advisor_cost_tokens": 0, "insufficient": []}
+    assert payload not in shield.render_next_best_move(advice)
+    assert payload not in shield.render_recommendation_queue(advice, 0)
+
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=shield.verified_by_label(rows), profile=None,
+                         advise_result=advice, companions_data=None, experiment_rows=rows)
+    assert payload not in html
+    assert "onerror=alert(1)>" not in html
+
+
+def test_experiment_history_never_sums_across_labels():
+    # Calibrated: adding a "total" row with 500 + 700 = 1200 to
+    # render_experiment_history makes this go red; without it, green.
+    rows = [
+        {"label": "shrink-claude-md", "confidence": "VERIFIED", "floor_reduction_tokens": 500,
+         "timestamp": "2026-08-01T10:00:00+0000"},
+        {"label": "prune-plugins", "confidence": "VERIFIED", "floor_reduction_tokens": 700,
+         "timestamp": "2026-08-05T10:00:00+0000"},
+    ]
+    html = shield.render_experiment_history(rows)
+    assert "shrink-claude-md" in html and "prune-plugins" in html
+    assert "1,200" not in html and "1200" not in html
 
 
 if __name__ == "__main__":

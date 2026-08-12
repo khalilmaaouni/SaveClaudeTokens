@@ -30,12 +30,16 @@ USAGE
 """
 
 import argparse
+import html
 import importlib.util
 import json
 import os
 import sys
 
 CACHE_READ = 0.1  # a cached token bills at 0.1x, so the saving is (1 - 0.1)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+COMPANIONS_PATH = os.path.join(HERE, "..", "data", "companions.json")
 
 
 def load_measure():
@@ -45,6 +49,15 @@ def load_measure():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def esc(s):
+    """HTML-escape anything that came from outside this file before it enters
+    the page. Experiment labels are typed by the user, profile bases carry
+    file paths, and the companion registry is an editable JSON file, so all
+    three are attacker-shaped text as far as the renderer is concerned. None
+    renders as an empty string rather than the word None."""
+    return html.escape("" if s is None else str(s))
 
 
 def human(n):
@@ -233,6 +246,374 @@ def prescriptions(sm, sessions):
     return out
 
 
+# --- v1.7 advisor surfaces --------------------------------------------------
+# Every function below degrades to a NO DATA render when its source (profile,
+# ledger, companions.json) is absent; none of them ever invent a number.
+
+def load_profile(path):
+    """profile.json, or None if missing/corrupt. Never raises."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def load_companions(path):
+    """data/companions.json, or None if missing/corrupt. Never raises."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def load_experiment_rows(path):
+    """One row per experiment ledger record, tolerant of corrupt lines. Rows
+    are never aggregated here: a floor reduction measured for one experiment
+    is not the same quantity as one measured for another, so the renderer
+    keeps them per-label all the way down.
+    """
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path, errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def verified_by_label(rows):
+    """One VERIFIED row per experiment label, newest record wins.
+
+    The contract, shared with the CLI summary and with
+    experiment.aggregate_by_label:
+      - never sum across labels. A floor reduction measured for one label is
+        a different quantity from one measured for another, so a total of the
+        two is a number about nothing;
+      - repeated runs of the SAME label do not add up either. The latest
+        record is the current state of that label, so it replaces the earlier
+        one instead of being counted twice;
+      - a regression stays negative. Clipping it to zero would let a change
+        that made the floor worse read as neutral.
+
+    Ledger order is the tiebreak (the file is append-only), and a parsable
+    timestamp beats file order when both records carry one.
+    """
+    by_label = {}
+    newest = {}
+    for i, r in enumerate(rows or []):
+        if r.get("confidence") != "VERIFIED":
+            continue
+        delta = r.get("floor_reduction_tokens")
+        if isinstance(delta, bool) or not isinstance(delta, (int, float)):
+            continue
+        label = r.get("label") or "(unlabeled)"
+        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
+        if label in newest and (ts, i) < newest[label]:
+            continue
+        newest[label] = (ts, i)
+        by_label[label] = {"label": label, "floor_reduction": delta,
+                           "timestamp": r.get("timestamp")}
+    return [by_label[k] for k in sorted(by_label)]
+
+
+def _leaf(profile, section, key):
+    """Read profile[section][key]["value"], honoring the NO DATA label.
+    Returns None on any missing path or a NO DATA leaf, never raises."""
+    node = ((profile or {}).get(section) or {}).get(key) or {}
+    if not isinstance(node, dict) or node.get("label") == "NO DATA" or node.get("value") is None:
+        return None
+    return node["value"]
+
+
+def suppressed_recommendation_count(adv_mod, profile, treatments, strategies):
+    """advise() filters suppressed/rejected treatments before ranking and does
+    not expose what it filtered. Computed here by diffing the queue and
+    companion ids with treatments applied against the same call without them.
+    The queue caps at 3, so this can undercount when more than 3 cards would
+    otherwise fire, but it never invents a figure.
+    """
+    if not treatments:
+        return 0
+    with_t = adv_mod.advise(profile, treatments, strategies)
+    without_t = adv_mod.advise(profile, None, strategies)
+
+    def ids(res):
+        s = {c["id"] for c in res["queue"]}
+        if res["companion"]:
+            s.add(res["companion"]["id"])
+        return s
+
+    return len(ids(without_t) - ids(with_t))
+
+
+def _band_rank(value, low, med, high):
+    """0/1/2/3 band for a metric against three rising thresholds; -1 for an
+    unmeasured value, so it never wins a max() over a real 0."""
+    if value is None:
+        return -1
+    if value >= high:
+        return 3
+    if value >= med:
+        return 2
+    if value >= low:
+        return 1
+    return 0
+
+
+def dominant_pattern(profile):
+    """The single loudest signal in a profile: whichever of the startup floor
+    share, the model-switch share, or total output volume sits in the
+    highest band. Ties keep the fixed priority order below (floor first),
+    mirroring advisor.py's own cache > startup > output ranking. Returns
+    (label, metric_name), or (None, None) when nothing is measured or every
+    tracked band is at its lowest.
+    """
+    fv = _leaf(profile, "instruction", "startup_floor_share")
+    sv = _leaf(profile, "behavior", "model_switch_session_share")
+    ov = _leaf(profile, "usage", "output_tokens_total")
+    candidates = [
+        ("The always-loaded startup floor is heavy",
+         "instruction.startup_floor_share", _band_rank(fv, 0.10, 0.15, 0.30)),
+        ("Sessions keep switching model mid-session",
+         "behavior.model_switch_session_share", _band_rank(sv, 0.10, 0.20, 0.40)),
+        ("Output volume is high",
+         "usage.output_tokens_total", _band_rank(ov, 300_000, 1_000_000, 3_000_000)),
+    ]
+    candidates = [c for c in candidates if c[2] > 0]
+    if not candidates:
+        return None, None
+    best = max(candidates, key=lambda c: c[2])
+    return best[0], best[1]
+
+
+def _installed_companion(name, cache_root):
+    """True if <cache_root>/*/<name> is a directory, mirroring how profile.py
+    counts installed plugins two levels under the plugin cache root."""
+    try:
+        marketplaces = os.listdir(cache_root)
+    except OSError:
+        return False
+    return any(os.path.isdir(os.path.join(cache_root, m, name)) for m in marketplaces)
+
+
+def _companion_plausible(name, profile):
+    """Whether a non-installed companion's own "when" text maps onto a metric
+    profile.py actually measures. Only token-saver's when (a huge
+    shell-output profile) does; ponytail's (large diffs per accepted change)
+    and caveman's (corrective turns not rising) name signals profile.py does
+    not carry, so they are never claimed plausible here: they collapse
+    instead of turning into a guess.
+    """
+    if name != "token-saver":
+        return False
+    v = _leaf(profile, "usage", "output_tokens_total")
+    return v is not None and v >= 1_000_000
+
+
+def render_next_best_move(advise_result):
+    parts = ['<h2>Next best move</h2>']
+    if not advise_result:
+        parts.append('<p class="nodata">NO DATA: no profile to advise on. Run '
+                     '<code>python3 profile.py</code> first.</p>')
+        return "".join(parts)
+    if advise_result.get("do_nothing"):
+        msg = advise_result.get("message", "Nothing to recommend right now.")
+        parts.append(f'<div class="rec"><p class="k">Healthy profile</p>'
+                     f'<h3>Nothing crossed a trigger</h3><p>{msg}</p></div>')
+    else:
+        best = advise_result["best"]
+        parts.append(
+            f'<div class="rec"><p class="k">{esc(best["evidence"])} recommendation</p>'
+            f'<h3>{esc(best["title"])}</h3>'
+            f'<p><b>Why:</b> {esc(best["why_selected"])}</p>'
+            f'<p><b>Expected benefit:</b> {esc(best["expected_benefit"])}</p>'
+            f'<p><b>Drawback:</b> {esc(best["drawback"])}</p>'
+            f'<p><b>Quality risk:</b> {esc(best["quality_risk"])}</p>'
+            f'<p><b>Reversibility:</b> {esc(best["reversibility"])}</p>'
+            f'<p><b>If you say no:</b> {esc(best["if_you_say_no"])}</p>'
+            # advisor._card already renders `source` as a citable pointer (a
+            # docs/CLAIMS.md row, or a URL), so the page never shows a bare
+            # internal code a reader cannot look up.
+            + (f'<p><b>Source:</b> {esc(best["source"])}</p>' if best.get("source") else '')
+            + '</div>')
+    cost = advise_result.get("advisor_cost_tokens", 0)
+    parts.append(f'<p class="n">Advisor cost: {cost} tokens (deterministic)</p>')
+    return "".join(parts)
+
+
+def render_observed_pattern(profile):
+    parts = ['<h2>Observed pattern</h2>']
+    if not profile:
+        parts.append('<p class="nodata">NO DATA: no profile.json found. Run '
+                     '<code>python3 profile.py</code> first.</p>')
+        return "".join(parts)
+    label, metric_name = dominant_pattern(profile)
+    if label is None:
+        parts.append('<p class="n">No dominant pattern measured; every tracked band is low.</p>')
+    else:
+        parts.append(f'<p class="n">{esc(label)} (from <code>{esc(metric_name)}</code>).</p>')
+    fr = _leaf(profile, "usage", "first_request_median_tokens")
+    hit = _leaf(profile, "usage", "cache_hit_ratio_median")
+    sw = _leaf(profile, "behavior", "model_switch_session_share")
+    parts.append('<div class="grid">'
+                 + stat("First-request median", human(fr), "tokens paid before any work", fr is None)
+                 + stat("Cache hit ratio median", pct(hit), "share of reads served from cache", hit is None)
+                 + stat("Model-switch share", pct(sw), "sessions that ran more than one model", sw is None)
+                 + '</div>')
+    return "".join(parts)
+
+
+def render_recommendation_queue(advise_result, suppressed_n):
+    parts = ['<h2>Recommendation queue</h2>']
+    if not advise_result:
+        parts.append('<p class="nodata">NO DATA: no profile to advise on.</p>')
+        return "".join(parts)
+    queue = (advise_result.get("queue") or [])[:3]
+    if not queue:
+        parts.append('<p class="n">Queue is empty: profile is healthy right now '
+                     '(see Next best move).</p>')
+    else:
+        rows = []
+        for i, c in enumerate(queue, 1):
+            rows.append(
+                f'<div class="pain-item"><div class="rank">{i}</div>'
+                f'<div class="t">{esc(c["title"])}'
+                f'<span class="cpill est" style="margin:0 0 0 8px">{esc(c["evidence"])}</span></div>'
+                f'<div class="fix">{esc(c["drawback"])}</div></div>')
+        parts.append('<div class="pain">' + "".join(rows) + '</div>')
+    if suppressed_n:
+        parts.append(f'<p class="n">{suppressed_n} recommendation(s) suppressed by your '
+                     f'earlier choices.</p>')
+    return "".join(parts)
+
+
+def render_companions(companions_data, profile, cache_root):
+    parts = ['<h2>Companions</h2>']
+    if not companions_data:
+        parts.append('<p class="nodata">NO DATA: data/companions.json not found or '
+                     'unreadable.</p>')
+        return "".join(parts)
+    rows = []
+    collapsed = []
+    for c in companions_data.get("companions", []):
+        name = c["name"]
+        if _installed_companion(name, cache_root):
+            rows.append(
+                f'<div class="pain-item"><div class="rank">&#10003;</div>'
+                f'<div class="t">{esc(name)}<span class="tag">installed</span></div>'
+                f'<div class="fix">Installed, measure it. {esc(c["benefit"])}</div></div>')
+        elif _companion_plausible(name, profile):
+            rows.append(
+                f'<div class="pain-item"><div class="rank">?</div>'
+                f'<div class="t">{esc(name)}<span class="tag">consider</span></div>'
+                f'<div class="fix">When: {esc(c["when"])}<br>'
+                f'Drawback: {esc(c["drawback"])}</div></div>')
+        else:
+            collapsed.append(name)
+    parts.append('<div class="pain">' + "".join(rows) + '</div>' if rows
+                 else '<p class="n">No companion is indicated by your profile right now.</p>')
+    if collapsed:
+        parts.append('<p class="n">Not indicated by your profile: '
+                     + ", ".join(esc(n) for n in collapsed) + '.</p>')
+    mentions = companions_data.get("mentions") or []
+    if mentions:
+        parts.append('<div class="legend">'
+                     + "".join(f'<span>{esc(m["name"])} ({esc(m["repo"])}), '
+                               f'{esc(m["status"])}</span>'
+                              for m in mentions)
+                     + '</div>')
+    return "".join(parts)
+
+
+def render_verified_hero(verified_rows):
+    """The VERIFIED column of the hero, per label and never summed.
+
+    Returns (big_html, under_text_html). With one label the big number is
+    that label's own signed delta. With several, the big slot says how many
+    labels there are and every label is listed with its own figure, because
+    a single headline number across labels would be exactly the cross-label
+    total the rest of this page refuses to compute.
+    """
+    if not verified_rows:
+        return ('<span class="big muted">NONE YET</span>',
+                'No verified saving yet. Apply one recommendation, then run an experiment '
+                'to measure the before and after.')
+    items = "; ".join(f'{esc(r["label"])} {r["floor_reduction"]:+,}'
+                      for r in verified_rows)
+    if len(verified_rows) == 1:
+        r = verified_rows[0]
+        cls = "g" if r["floor_reduction"] >= 0 else "w"
+        big = f'<span class="big {cls}">{human(r["floor_reduction"])}</span>'
+        under = (f'fewer startup tokens per call on <b>{esc(r["label"])}</b>, proven by a '
+                 f'before/after experiment. Regressions are shown as they measured, '
+                 f'never clipped.')
+        return big, under
+    big = f'<span class="big muted">{len(verified_rows)} LABELS</span>'
+    under = (f'proven per experiment label, never summed across them: {items}. '
+             f'A repeated label shows its latest run, and a regression stays negative.')
+    return big, under
+
+
+def render_experiment_history(rows):
+    parts = ['<h2>Experiment history</h2>']
+    if not rows:
+        parts.append('<p class="n">No experiments yet. Your first: '
+                     '/token-shield:start names one.</p>')
+        return "".join(parts)
+    rowlist = []
+    for r in rows:
+        label = r.get("label") or "(unlabeled)"
+        conf = r.get("confidence") or "NO DATA"
+        delta = r.get("floor_reduction_tokens")
+        delta_txt = f'{delta:+,}' if isinstance(delta, (int, float)) else "n/a"
+        date = str(r.get("timestamp") or "n/a")[:10]
+        rowlist.append(f'<tr><td>{esc(label)}</td><td>{esc(conf)}</td>'
+                       f'<td>{delta_txt}</td><td>{esc(date)}</td></tr>')
+    parts.append('<div class="scroll"><table class="se"><thead><tr>'
+                 '<th>Label</th><th>Verdict</th><th>Floor delta</th><th>Date</th>'
+                 '</tr></thead><tbody>' + "".join(rowlist) + '</tbody></table></div>')
+    parts.append('<p class="n">One row per experiment. Floor deltas are never summed '
+                 'across labels.</p>')
+    return "".join(parts)
+
+
+def render_alerts(profile):
+    parts = ['<h2>Alerts</h2>']
+    if not profile:
+        parts.append('<p class="nodata">NO DATA: no profile.json found.</p>')
+        return "".join(parts)
+    alerts = []
+    sw = _leaf(profile, "behavior", "model_switch_session_share")
+    if sw is not None and sw >= 0.20:
+        alerts.append(f'{sw * 100:.0f}% of your sessions switched model mid-session and '
+                      f'rebuilt their cache.')
+    floor = _leaf(profile, "instruction", "startup_floor_share")
+    if floor is not None and floor >= 0.30:
+        alerts.append(f'Startup floor is {floor * 100:.0f}% of everything a session reads.')
+    hit = _leaf(profile, "usage", "cache_hit_ratio_median")
+    if hit is not None and hit < 0.5:
+        alerts.append(f'Cache hit ratio median is {hit * 100:.0f}%, below the healthy range.')
+    alerts = alerts[:3]
+    if not alerts:
+        parts.append('<div class="wins"><span class="win ok">&#10003; no active alerts</span></div>')
+    else:
+        parts.append('<div class="wins">'
+                     + "".join(f'<span class="win bad">! {a}</span>' for a in alerts) + '</div>')
+    return "".join(parts)
+
+
 CSS = """
 :root{
   --bg:#16131f; --panel:#1e1a2b; --panel2:#251f36; --line:#332a47;
@@ -339,7 +720,9 @@ def stat(k, v, note, is_nodata=False):
             f'<div{cls}>{v}</div><p class="n">{note}</p></div>')
 
 
-def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None):
+def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
+           profile=None, advise_result=None, suppressed_n=0, companions_data=None,
+           experiment_rows=None, plugin_cache_root=None):
     sv = savings_breakdown(sm)
     pp = pain_points(sessions)
     rx = prescriptions(sm, sessions)
@@ -362,14 +745,9 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     # before/after), what Claude Code's caching did NATIVELY, and what is still
     # OPPORTUNITY (estimated). Merging these is the exact dishonesty this exists
     # to avoid, so they sit side by side, each with its own confidence label.
-    if verified and verified.get("experiments"):
-        vbig = f'<span class="big g">{human(verified["floor_reduction"])}</span>'
-        vu = (f'fewer startup tokens per call, proven across {verified["experiments"]} '
-              f'before/after experiment(s)')
-    else:
-        vbig = '<span class="big muted">NONE YET</span>'
-        vu = ('No verified saving yet. Apply one recommendation, then run an experiment '
-              'to measure the before and after.')
+    # `verified` is a list of per-label rows from verified_by_label(), never a
+    # cross-label total: the same refusal the experiment history states below.
+    vbig, vu = render_verified_hero(verified)
     nat_usd = f' &nbsp;&middot;&nbsp; about ${usd["usd"]:,.0f} API-equivalent' if usd else ''
     parts.append(
         '<div class="hero3">'
@@ -397,6 +775,17 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     elif usd_res and usd_res.get("status") == "NO_PRICE_DATA":
         parts.append('<p class="usdline"><b>Dollars: NO PRICE DATA.</b> The pricing snapshot '
                      'is stale, so no dollar figure is shown. The token saving still stands.</p>')
+
+    # v1.7 advisor surfaces. Each degrades to its own NO DATA state, never a
+    # crash, when its source (profile.json, the experiment ledger, or
+    # data/companions.json) is missing.
+    cache_root = plugin_cache_root or os.path.expanduser("~/.claude/plugins/cache")
+    parts.append(render_next_best_move(advise_result))
+    parts.append(render_observed_pattern(profile))
+    parts.append(render_recommendation_queue(advise_result, suppressed_n))
+    parts.append(render_companions(companions_data, profile, cache_root))
+    parts.append(render_experiment_history(experiment_rows or []))
+    parts.append(render_alerts(profile))
 
     # WINS AND ISSUES at a glance, Brave-style reassurance.
     wins = []
@@ -550,23 +939,30 @@ def main():
     except (OSError, ValueError, ImportError) as e:
         print(f"note: USD skipped ({e})", file=sys.stderr)
 
-    verified = None
     ledger = os.path.expanduser("~/.claude/token-shield/savings.jsonl")
-    if os.path.exists(ledger):
-        n = 0
-        floor = 0
-        with open(ledger, errors="ignore") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if r.get("confidence") == "VERIFIED" and r.get("floor_reduction_tokens"):
-                    n += 1
-                    floor += max(0, r["floor_reduction_tokens"])
-        verified = {"experiments": n, "floor_reduction": floor}
+    experiment_rows = load_experiment_rows(ledger)
+    verified = verified_by_label(experiment_rows)
 
-    body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified)
+    # v1.7 advisor surfaces: profile, advice, and the companion registry. Each
+    # degrades to None on any failure, rather than take the whole render down.
+    profile = None
+    advise_result = None
+    suppressed_n = 0
+    try:
+        import advisor as adv
+        profile = load_profile(adv.PROFILE_PATH)
+        if profile is not None:
+            strategies = adv.load_strategies()
+            treatments = adv.load_treatments()
+            advise_result = adv.advise(profile, treatments, strategies)
+            suppressed_n = suppressed_recommendation_count(adv, profile, treatments, strategies)
+    except (OSError, ValueError, ImportError) as e:
+        print(f"note: advisor skipped ({e})", file=sys.stderr)
+    companions_data = load_companions(COMPANIONS_PATH)
+
+    body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified,
+                  profile=profile, advise_result=advise_result, suppressed_n=suppressed_n,
+                  companions_data=companions_data, experiment_rows=experiment_rows)
     out_html = body if a.body_only else render_standalone(body)
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)

@@ -12,6 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Check Python 3.11 syntax floor
+        run: |
+          python3 scripts/check_py311.py --selftest && python3 scripts/check_py311.py
       - name: Run tests
         run: |
-          cd scripts && python3 test_measure_tokens.py && python3 test_tools.py && python3 test_pricing.py && python3 test_experiment.py
+          cd scripts && python3 test_measure_tokens.py && python3 test_tools.py && python3 test_pricing.py && python3 test_experiment.py && python3 test_optimize.py && python3 test_profile.py && python3 test_advisor.py && python3 test_report.py

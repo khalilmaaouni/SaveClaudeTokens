@@ -36,6 +36,8 @@ Read it this way: a high first request share means Lever 2 dominates and nothing
 
 For a visual read, `scripts/token_shield.py` renders the same measured numbers as a Brave-shields-style HTML dashboard: what caching saved, what it blocked, and the ranked pain points (model switching, the startup floor, mid-session rebuilds) with the fix for each. The full method, telemetry and honesty guarantees are in the repo's `docs/`; every claim carries the check that backs it in `docs/CLAIMS.md`.
 
+Three more scripts round out the toolkit. `scripts/profile.py` builds a deterministic session profile of cache rebuilds, the startup floor, and model switches, each labeled MEASURED or NO DATA (`python3 cli.py profile`). `scripts/advisor.py` ranks the single best next move against that profile, with full drawback disclosure and "do nothing" as a valid answer (`python3 cli.py advise`). `scripts/report.py` writes a monthly report comparing this month's pattern to last month's (`python3 cli.py report --month YYYY-MM`). To remove everything Token Shield wrote to disk, run `python3 cli.py uninstall`: it prints what exists, asks for a typed `YES`, and never touches `settings.json` or `CLAUDE.md`.
+
 Two traps the script now guards, both of which produced a confident wrong number before it did:
 
 - Compare like windows. A 1 day window against a 90 day baseline is not a measurement of your change, it is a measurement of which sessions fell inside each window.
