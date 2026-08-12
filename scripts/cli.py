@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cli.py: one entry point for Token Shield. Four subcommands, on purpose.
+cli.py: one entry point for Token Shield.
 
   python3 cli.py                     quick honest summary (same as `summary`)
   python3 cli.py summary
@@ -8,11 +8,16 @@ cli.py: one entry point for Token Shield. Four subcommands, on purpose.
   python3 cli.py experiment start|end <label>
   python3 cli.py prices              per-model USD-equivalent of the saving
   python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
+  python3 cli.py profile             deterministic session profile (profile.py)
+  python3 cli.py advise              ranked next-move cards (advisor.py)
+  python3 cli.py report              monthly report; --month YYYY-MM --out PATH
+  python3 cli.py uninstall           remove local Token Shield data: prints
+                                      what exists, requires typing YES, deletes
 
 The scripts underneath (measure_tokens, token_shield, pricing, experiment,
-optimize) stay the source of truth; this only routes to them and never
-re-implements a metric. Kept small deliberately: a command per feature is how a
-small tool turns into a sprawling one.
+optimize, profile, advisor, report) stay the source of truth; this only
+routes to them and never re-implements a metric. Kept small deliberately: a
+command per feature is how a small tool turns into a sprawling one.
 """
 
 import json
@@ -110,6 +115,71 @@ def prices(days=90):
     return 0
 
 
+def uninstall():
+    """Destructive. Print an inventory, print the VERIFIED savings a user is
+    about to lose, require a typed YES, then delete. Never touches
+    ~/.claude/settings.json or CLAUDE.md; those are the user's own to edit."""
+    token_shield_dir = os.path.expanduser("~/.token-shield")
+    claude_token_shield_dir = os.path.expanduser("~/.claude/token-shield")
+
+    print("Token Shield uninstall")
+    print("This removes local Token Shield data only. It never touches "
+          "~/.claude/settings.json or CLAUDE.md.")
+    print()
+
+    found = []
+    for base in (token_shield_dir, claude_token_shield_dir):
+        if os.path.isdir(base):
+            for root, _dirs, files in os.walk(base):
+                for name in files:
+                    found.append(os.path.join(root, name))
+
+    if found:
+        print("Found on disk:")
+        for p in sorted(found):
+            print(f"  {p}")
+    else:
+        print(f"Found on disk: nothing under {token_shield_dir} or "
+              f"{claude_token_shield_dir}.")
+    print()
+
+    ver = _verified_from_ledger()
+    if ver and ver["experiments"]:
+        print(f"Exit summary: {ver['experiments']} VERIFIED experiment(s) on record, "
+              f"{ver['floor_reduction']:,} tokens of proven floor reduction. "
+              f"This history is deleted by this uninstall.")
+    else:
+        print("Exit summary: NO DATA. No VERIFIED experiments were on record.")
+    print()
+
+    if found:
+        print("Removal is irreversible: your measurement history and treatment "
+              "memory will be gone for good.")
+        print("Type YES to remove everything listed above. Anything else aborts "
+              "with nothing deleted.")
+        answer = sys.stdin.readline().strip()
+        if answer != "YES":
+            print("Aborted. Nothing deleted.")
+            return 1
+        import shutil
+        for base in (token_shield_dir, claude_token_shield_dir):
+            if os.path.isdir(base):
+                shutil.rmtree(base)
+        print("Removed.")
+    else:
+        print("Nothing to remove.")
+
+    print()
+    print("This script does not remove the plugin itself. To finish:")
+    print("  claude plugin uninstall token-shield")
+    print("  If you ever ran /token-shield:start, also remove the opted-in "
+          '"SessionEnd" hook by hand from ~/.claude/settings.json: look under '
+          'hooks.SessionEnd for the entry whose command references '
+          "session_end_telemetry.py (docs/TELEMETRY.md). This script does not "
+          "touch settings.json.")
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] == "summary":
         return summary()
@@ -123,6 +193,23 @@ def main(argv):
         here = os.path.dirname(os.path.abspath(__file__))
         return subprocess.run(
             [sys.executable, os.path.join(here, "optimize.py")] + argv[1:]).returncode
+    if cmd == "profile":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "profile.py")] + argv[1:]).returncode
+    if cmd == "advise":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "advisor.py")] + argv[1:]).returncode
+    if cmd == "report":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "report.py")] + argv[1:]).returncode
+    if cmd == "uninstall":
+        return uninstall()
     if cmd == "experiment":
         if len(argv) < 3 or argv[1] not in ("start", "end"):
             print("usage: cli.py experiment start|end <label>")

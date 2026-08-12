@@ -23,12 +23,12 @@ That is the whole setup. The skill loads on demand, so it adds one listing line 
 Then run one of these six commands:
 
 ```bash
-python3 scripts/cli.py stats                 # /token-shield:stats
+python3 scripts/cli.py summary               # /token-shield:stats
 python3 scripts/cli.py dashboard             # open the GUI
 python3 scripts/cli.py optimize              # /token-shield:optimize
 python3 scripts/cli.py experiment start "X"  # /token-shield:token-audit
-python3 scripts/cli.py advisor               # /token-shield:advisor
-python3 scripts/cli.py monthly               # /token-shield:monthly
+python3 scripts/cli.py advise                # /token-shield:advisor
+python3 scripts/cli.py report                # /token-shield:monthly
 ```
 
 > Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
