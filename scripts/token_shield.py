@@ -472,11 +472,15 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     if include_sessions and sessions:
         top = sorted((s for s in sessions if s["first_request"] > 0),
                      key=lambda x: -x["first_request"])[:10]
-        rows = "".join(
-            f'<tr><td>{s["first_request"]:,}</td>'
-            f'<td>{"n/a" if s["first_request_share"] is None else f"{s['first_request_share']:.2f}"}</td>'
-            f'<td>{s["calls"]}</td><td>{s["hit_ratio"]:.2f}</td>'
-            f'<td>{s["models"]}</td></tr>' for s in top)
+        rowlist = []
+        for s in top:
+            sh = ("n/a" if s["first_request_share"] is None
+                  else f'{s["first_request_share"]:.2f}')
+            rowlist.append(
+                f'<tr><td>{s["first_request"]:,}</td><td>{sh}</td>'
+                f'<td>{s["calls"]}</td><td>{s["hit_ratio"]:.2f}</td>'
+                f'<td>{s["models"]}</td></tr>')
+        rows = "".join(rowlist)
         parts.append('<div class="scroll"><table class="se"><thead><tr>'
                      '<th>First request</th><th>Share</th><th>Calls</th>'
                      '<th>Hit</th><th>Models</th></tr></thead><tbody>'
