@@ -248,9 +248,11 @@ def test_shield_saving_is_net_of_the_write_premium():
 
 
 def test_dashboard_attributes_the_saving_to_native_caching():
-    # The load-bearing honesty: the hero saving is Claude Code's native caching,
+    # The load-bearing honesty: the native caching saving is Claude Code's,
     # not this tool's doing. A future edit that quietly re-claims it as the
-    # plugin's own must fail here.
+    # plugin's own must fail here. Since v1.7.1 the dashboard shows only
+    # what the user can act on: native caching is one pointer sentence, no
+    # numbers, no bars, pointing at docs/METHODOLOGY.md for the accounting.
     sm = {"read_total": 1000, "write_5m_total": 100, "write_1h_total": 50,
           "input_total": 10, "first_request_median": 8000,
           "first_request_share_median": 0.36, "hit_ratio_median": 0.9,
@@ -258,13 +260,35 @@ def test_dashboard_attributes_the_saving_to_native_caching():
     sessions = [{"first_request": 8000, "calls": 20, "models": 2,
                  "rewrite_ratio": 0.02, "read": 1000, "hit_ratio": 0.9}]
     html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False)
-    assert "not this tool" in html.lower()          # "Not this tool's doing"
-    assert "does not claim it" in html              # the hero's explicit disclaimer
+    assert "not this tool" in html.lower()          # "not this tool's, and it does not claim it"
+    assert "does not claim it" in html              # the pointer line's explicit disclaimer
     assert "native" in html.lower()
-    # The three confidence-labeled columns must stay distinct, never merged.
-    assert "Verified" in html and "Native" in html and "Opportunity" in html
+    assert "docs/METHODOLOGY.md" in html
+    # Verified and the addressable opportunity both still appear, kept apart
+    # from native by construction (native carries no number on this page).
+    assert "Verified" in html and "Opportunity" in html
     # The tool's own value must be framed as separate and additional.
     assert "separate from" in html.lower() or "on top of" in html.lower()
+
+
+def test_dashboard_shows_no_native_bars_or_dollars_only_a_methodology_pointer():
+    # Calibrated: reinjecting the old hero3 dollar fragment and the "Where
+    # the native saving comes from" bars section makes this go red; with
+    # both removed and the single pointer line in their place, it is green.
+    sm = {"read_total": 1000, "write_5m_total": 100, "write_1h_total": 50,
+          "input_total": 10, "first_request_median": 8000,
+          "first_request_share_median": 0.36, "hit_ratio_median": 0.9,
+          "subagent_output_share": 0.2, "output_total": 0}
+    sessions = [{"first_request": 8000, "calls": 20, "models": 2,
+                 "rewrite_ratio": 0.02, "read": 1000, "hit_ratio": 0.9}]
+    usd_res = {"status": "OK", "usd": 401962, "snapshot": "2026-08-01",
+               "rows": [], "unpriced_units": 0}
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False, usd_res=usd_res)
+    assert "API-equivalent" not in html
+    assert "$" not in html
+    assert "Where the native saving comes from" not in html
+    assert 'class="compare"' not in html
+    assert "docs/METHODOLOGY.md" in html
 
 
 def test_prescriptions_are_adaptive_and_carry_the_math():
@@ -408,6 +432,60 @@ def test_dashboard_new_sections_show_no_data_with_every_source_absent():
                          companions_data=None, experiment_rows=None)
     assert html.count("NO DATA") >= 5  # next best move, observed pattern, queue, companions, alerts
     assert "No experiments yet." in html
+
+
+def test_alerts_band_fires_on_a_bad_profile_and_stays_quiet_on_a_healthy_one():
+    # Calibrated: raising ALERT_THRESHOLDS well above what the bad profile
+    # carries (or deleting the fired-card loop) makes the first assert go
+    # red; restored, all three thresholds fire and it is green. The healthy
+    # profile below crosses none of them, by construction: no alert ever
+    # fires on healthy data.
+    bad = _synthetic_profile(switch_share=0.9, floor_share=0.9, hit_ratio=0.1)
+    bad_html = shield.render_alerts(bad)
+    assert bad_html.count('class="alert"') == 3, bad_html.count('class="alert"')
+    assert "Why it matters" in bad_html and "Action" in bad_html and "When" in bad_html
+    assert "no active alerts" not in bad_html
+
+    healthy = _synthetic_profile(switch_share=0.1, floor_share=0.05, hit_ratio=0.95)
+    healthy_html = shield.render_alerts(healthy)
+    assert 'class="alert"' not in healthy_html
+    assert "no active alerts" in healthy_html
+
+    # The meter itself reporting NO DATA (no profile.json at all) is its own
+    # alert-shaped state, distinct from a healthy read.
+    nodata_html = shield.render_alerts(None)
+    assert "NO DATA" in nodata_html
+
+
+def test_card_renders_its_numbered_how_steps_and_command():
+    # Calibrated: removing the _render_how()/_render_chips() calls from
+    # render_recommendation_queue makes this go red (no "How, exactly" block,
+    # no command); restored, both render and the command is copy-pasteable.
+    real = adv.load_strategies()
+    profile = _nest_flat({"behavior.model_switch_session_share": _leaf(0.5)})
+    result = adv.advise(profile, {}, real)
+    assert result["best"] is not None
+    html = shield.render_recommendation_queue(result, 0)
+    assert "How, exactly" in html
+    assert "<code>python3 scripts/cli.py advise --decide" in html
+    assert "not-now" in html and "never" in html and " done</code>" in html
+    assert "Did it" in html and "Not now (90 days quiet)" in html and "Never recommend" in html
+    assert "/token-shield:advisor" in html
+
+    best_html = shield.render_next_best_move(result)
+    assert "How, exactly" in best_html
+    assert "<code>python3 scripts/cli.py advise --decide" in best_html
+
+
+def _nest_flat(flat):
+    profile = {}
+    for dotted, val in flat.items():
+        node = profile
+        parts = dotted.split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = val
+    return profile
 
 
 def test_recommendation_queue_never_renders_more_than_three_items():

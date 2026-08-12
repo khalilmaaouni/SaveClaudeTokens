@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "updated": "2026-08-12",
   "strategies": [
     {
@@ -25,7 +25,12 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A6"
+      "source": "A6",
+      "how": [
+        {"text": "At the start of a session, choose one model and effort level and state it once."},
+        {"text": "When a step needs a cheaper model, route it to a subagent instead of switching the parent session's model or effort."},
+        {"text": "Check whether it worked after a few sessions of the habit.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "startup.floor-ladder",
@@ -54,7 +59,14 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A7"
+      "source": "A7",
+      "how": [
+        {"text": "See your current startup floor share.", "command": "python3 scripts/cli.py profile"},
+        {"text": "Get a safe, reversible CLAUDE.md diet proposal before touching anything.", "command": "python3 scripts/cli.py optimize"},
+        {"text": "Move rarely-used rules into path-scoped files under .claude/rules/ so they load only when a matching file is touched."},
+        {"text": "Disable plugins and MCP servers you do not use.", "command": "claude plugin disable <plugin-name>"},
+        {"text": "Measure the change with a real before and after.", "command": "python3 scripts/cli.py experiment start \"startup-floor-diet\""}
+      ]
     },
     {
       "id": "routing.subagent-not-switch",
@@ -79,7 +91,12 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A6"
+      "source": "A6",
+      "how": [
+        {"text": "Before switching model or effort mid-session, ask whether the sub-task could run as a subagent instead."},
+        {"text": "Spawn the subagent for the cheaper sub-task and keep the parent session's model fixed."},
+        {"text": "Re-check your model-switch share after a few sessions of this habit.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "overbuild.git-instructions-off",
@@ -102,7 +119,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": true,
-      "source": "D2"
+      "source": "D2",
+      "how": [
+        {"text": "Confirm you never ask Claude Code to draft commits or PRs; if you do, skip this card."},
+        {"text": "Open ~/.claude/settings.json and set includeGitInstructions to false."},
+        {"text": "Confirm the setting took, then measure the floor again.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "boundaries.mcp-tool-search",
@@ -125,7 +147,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "D6"
+      "source": "D6",
+      "how": [
+        {"text": "Open your settings and check that ENABLE_TOOL_SEARCH has not been set to a disabling value."},
+        {"text": "If it was turned off, remove or fix that setting so deferred tool schemas stay out of the always-loaded context."},
+        {"text": "This is a check, not a change: nothing else to do once confirmed."}
+      ]
     },
     {
       "id": "cache.ttl-idle-gaps",
@@ -148,7 +175,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A3, A4"
+      "source": "A3, A4",
+      "how": [
+        {"text": "Before a long wait, background it with a completion callback instead of leaving the session idle."},
+        {"text": "If a wait cannot be backgrounded, know your active TTL: 5 minutes on an API key, 1 hour on a subscription."},
+        {"text": "Watch your idle-gap share over the next few sessions.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "memory.fresh-over-compact",
@@ -171,7 +203,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A14"
+      "source": "A14",
+      "how": [
+        {"text": "At a real phase boundary, write a checkpoint file with the state so far instead of reaching for /compact."},
+        {"text": "Start a fresh session pointed at that checkpoint file."},
+        {"text": "Compare your cache hit ratio before and after adopting this habit.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "redundancy.bounded-reads",
@@ -194,7 +231,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "https://code.claude.com/docs/en/hooks"
+      "source": "https://code.claude.com/docs/en/hooks",
+      "how": [
+        {"text": "Before reading a large file in full, grep or search for the symbol you actually need."},
+        {"text": "Use Read with an offset and limit on large files instead of reading them whole."},
+        {"text": "Check whether output volume dropped over the next window.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "output.isolate-huge-logs",
@@ -219,7 +261,13 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "D5"
+      "source": "D5",
+      "how": [
+        {"text": "Identify build, test, or log commands that produce mostly noise."},
+        {"text": "Route that output through a filter or a file instead of letting it land raw in the transcript."},
+        {"text": "Keep reading raw output directly for logs you are actively debugging line by line."},
+        {"text": "Recheck your output token total after adopting this.", "command": "python3 scripts/cli.py profile"}
+      ]
     },
     {
       "id": "memory.claude-md-user-oversize",
@@ -244,7 +292,13 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A17"
+      "source": "A17",
+      "how": [
+        {"text": "See your current user-level CLAUDE.md byte size.", "command": "python3 scripts/cli.py profile"},
+        {"text": "Get a safe, reversible diet proposal before editing anything.", "command": "python3 scripts/cli.py optimize"},
+        {"text": "Move project-specific or rarely-needed rules into per-project or path-scoped files."},
+        {"text": "Measure the before and after with an experiment.", "command": "python3 scripts/cli.py experiment start \"user-claude-md-diet\""}
+      ]
     },
     {
       "id": "companion.ponytail",
@@ -267,7 +321,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A10"
+      "source": "A10",
+      "how": [
+        {"text": "Check whether ponytail is already installed and enabled.", "command": "claude plugin list"},
+        {"text": "Enable it if it is installed but off.", "command": "claude plugin enable ponytail"},
+        {"text": "Watch whether diffs shrink over your next few sessions without losing what you actually needed."}
+      ]
     },
     {
       "id": "companion.caveman",
@@ -290,7 +349,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A10"
+      "source": "A10",
+      "how": [
+        {"text": "Check whether caveman is already installed and enabled.", "command": "claude plugin list"},
+        {"text": "Enable it if it is installed but off.", "command": "claude plugin enable caveman"},
+        {"text": "Watch whether corrective turns rise after enabling it; if they do, this card was a net loss for you."}
+      ]
     },
     {
       "id": "companion.token-saver",
@@ -313,7 +377,12 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "D5"
+      "source": "D5",
+      "how": [
+        {"text": "Check whether token-saver is already installed.", "command": "claude plugin list"},
+        {"text": "This card is detect-only: it never turns anything on, so there is nothing further to apply."},
+        {"text": "If not installed and you want it, install it yourself; this card does not recommend that step."}
+      ]
     }
   ]
 }
