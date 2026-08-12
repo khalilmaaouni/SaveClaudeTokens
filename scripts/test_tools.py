@@ -246,6 +246,24 @@ def test_shield_saving_is_net_of_the_write_premium():
     assert sv["saved"] == 90.0 - 20.0               # 70.0 net, not 90 gross
 
 
+def test_dashboard_attributes_the_saving_to_native_caching():
+    # The load-bearing honesty: the hero saving is Claude Code's native caching,
+    # not this tool's doing. A future edit that quietly re-claims it as the
+    # plugin's own must fail here.
+    sm = {"read_total": 1000, "write_5m_total": 100, "write_1h_total": 50,
+          "input_total": 10, "first_request_median": 8000,
+          "first_request_share_median": 0.36, "hit_ratio_median": 0.9,
+          "subagent_output_share": 0.2, "output_total": 0}
+    sessions = [{"first_request": 8000, "calls": 20, "models": 2,
+                 "rewrite_ratio": 0.02, "read": 1000, "hit_ratio": 0.9}]
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False)
+    assert "not this tool" in html
+    assert "did not create this saving" in html
+    assert "native" in html.lower()
+    # The tool's own value must be framed as separate and additional.
+    assert "on top of" in html.lower() or "separate from" in html.lower()
+
+
 def test_prescriptions_are_adaptive_and_carry_the_math():
     mt2 = mt
 

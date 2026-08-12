@@ -325,37 +325,54 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
                  f'not estimated. Measured on this machine; the method is portable, these '
                  f'numbers are not.</p>')
 
-    # HERO: net saving, after the cache-write premium.
-    mult = (sv["unblocked"] / sv["paid"]) if sv["paid"] else 0
-    parts.append('<div class="hero"><p class="k">Prompt caching saved you, net</p>'
+    # HERO: the native caching benefit, attributed honestly to Claude Code,
+    # NOT to this tool. Overclaiming it as the plugin's own saving is the exact
+    # dishonesty this project exists to avoid.
+    parts.append('<div class="hero"><p class="k">Claude Code\'s built-in caching already '
+                 'saves you, net</p>'
                  f'<div><span class="big">{human(sv["saved"])}</span>'
                  f'<span class="unit">base-input token-units, this window</span></div>'
-                 f'<p class="sub">You reused {human(sv["read"])} tokens from cache. Uncached '
-                 f'they would bill at full price ({human(sv["unblocked"])}); cached they '
-                 f'billed at a tenth ({human(sv["paid"])}), earning {human(sv["gross"])}. '
-                 f'Caching costs a write premium of {human(sv["write_premium"])}, and this '
-                 f'headline already subtracts it, so it is the net benefit, not the gross '
-                 f'read saving. Base-input units, not dollars: no model price table ships '
-                 f'here, so a stale price can never inflate it.</p></div>')
+                 f'<p class="sub"><b>This is Anthropic\'s automatic prompt caching, not this '
+                 f'tool.</b> Claude Code caches for you by default. You reused '
+                 f'{human(sv["read"])} tokens at 0.1x instead of full price, a net '
+                 f'{human(sv["saved"])} after the {human(sv["write_premium"])} write premium. '
+                 f'SaveClaudeTokens did not create this saving and does not claim to. What it '
+                 f'adds is below: it lets you see this number, its rules keep it from '
+                 f'collapsing, and it finds the waste caching cannot touch.</p></div>')
 
-    # WHAT IT BLOCKED: the reprocessing that caching stopped.
-    parts.append('<h2>What it blocked</h2>')
-    blk = sv["unblocked"] - sv["paid"]
+    # THE HONEST DISTINCTION: native vs what this tool adds.
+    parts.append('<h2>What this tool actually does</h2>')
     parts.append('<div class="grid">'
-                 + stat("Reprocessing blocked", human(blk),
-                        "tokens of history that would have been re-read at full price, "
-                        "served from cache instead")
-                 + stat("Cache hit ratio",
-                        f"{hit:.2f}" if hit is not None else "NO DATA",
-                        "per-session median; the fraction of input served cheap from cache",
-                        hit is None)
-                 + stat("Bad comparisons blocked", "by design",
-                        "the meter refuses a delta across a metric change or mismatched "
-                        "window, and prints NO DATA rather than a guess")
+                 + stat("1. Sees it", "measurement",
+                        "the number above was invisible before; it is read from the API "
+                        "usage counters, not estimated")
+                 + stat("2. Protects it", f"{pp['switch_share']:.0%} at risk" if pp['switch_n']
+                        else "held",
+                        "when you switch model or edit config mid-session you throw native "
+                        "caching away; the pain points below are where you are leaking it")
+                 + stat("3. Cuts the rest", "the floor",
+                        "caching cannot shrink the always-loaded rent you pay on every call; "
+                        "the prescriptions below can, on top of caching")
                  + '</div>')
 
-    # WHERE YOU SAVE: the breakdown.
-    parts.append('<h2>Where the saving comes from</h2>')
+    # WHAT CACHING BLOCKS (native) versus what the tool blocks (its own).
+    parts.append('<h2>What caching blocks for you</h2>')
+    blk = sv["unblocked"] - sv["paid"]
+    parts.append('<div class="grid">'
+                 + stat("Reprocessing blocked (native)", human(blk),
+                        "tokens of history Claude Code re-read from cache instead of "
+                        "reprocessing at full price; this is caching, not this tool")
+                 + stat("Cache hit ratio (native)",
+                        f"{hit:.2f}" if hit is not None else "NO DATA",
+                        "per-session median; how well the native cache is working for you",
+                        hit is None)
+                 + stat("Bad comparisons blocked (this tool)", "by design",
+                        "the one blocking this tool does: the meter refuses a delta across a "
+                        "metric change or mismatched window, printing NO DATA over a guess")
+                 + '</div>')
+
+    # WHERE THE NATIVE SAVING COMES FROM.
+    parts.append('<h2>Where the native saving comes from</h2>')
     umax = sv["unblocked"] or 1
     parts.append('<div class="compare">'
                  '<div class="col"><div class="barc"><div class="fill" '
@@ -397,7 +414,11 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
     # computed from this user's own sessions. Adaptive: only the pain points the
     # data actually shows appear, and every number is theirs.
     rx = prescriptions(sm, sessions)
-    parts.append('<h2>Your pain points, and how to treat each</h2>')
+    parts.append('<h2>What this tool would save you: your pain points, treated</h2>')
+    parts.append('<p class="n" style="margin:-4px 0 12px">This is the part native caching '
+                 'does NOT do for you, and the reason to keep the tool. Each is measured '
+                 'waste in your own sessions, with the token saving from fixing it computed '
+                 'from your own numbers.</p>')
     if not rx:
         parts.append('<div class="pain"><div class="pain-item"><div class="rank">-</div>'
                      '<div class="t">No dominant pain point measured<span class="tag">OK</span></div>'
@@ -406,7 +427,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
     else:
         parts.append('<p class="n" style="margin:-4px 0 12px">Ranked by the tokens each '
                      'costs you, largest first. Every figure is from your own sessions, so '
-                     'another machine would show a different profile.</p>')
+                     'another machine shows a different profile.</p>')
         pain = ['<div class="pain">']
         for i, r in enumerate(sorted(rx, key=lambda x: -x["saving"]), 1):
             pain.append(
@@ -422,22 +443,26 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
         parts.append("".join(pain))
         parts.append(f'<p class="n" style="margin-top:10px">Treating all of these is worth '
                      f'on the order of {human(total_rx)} base-input units this window on your '
-                     f'data, on top of what caching already saves. The PROVEN lines are '
-                     f'mechanism-backed lower bounds; the SIGNAL line points rather than '
-                     f'proves.</p>')
+                     f'data. That figure is THIS tool\'s contribution, separate from and on '
+                     f'top of the native caching above. The PROVEN lines are mechanism-backed '
+                     f'lower bounds; the SIGNAL line points rather than proves.</p>')
 
-    # WHY KEEP IT ON.
-    parts.append('<h2>Why keep the shield on</h2>')
+    # WHY KEEP IT ON: honest about the split between native and tool.
+    parts.append('<h2>Why keep the tool</h2>')
+    tool_worth = sum(r["saving"] for r in rx) if rx else 0
     parts.append('<div class="why">'
-                 f'<h3>The saving is recurring, and so is the waste.</h3>'
-                 f'<p>Caching saved {human(sv["saved"])} in this {days:g} day window alone, '
-                 f'and it does that every window, for free, as long as the prefix stays '
-                 f'stable. Turn a session cache-hostile (switch model, edit config mid-run) '
-                 f'and you pay full price on every re-read for the rest of it.</p>'
-                 f'<p>The {human(fr_med)} startup floor is paid on every one of your calls, '
-                 f'so shaving it once pays back on every session after. The shield is how '
-                 f'you see both numbers move, measured, so a cleanup that did not actually '
-                 f'save shows up as no change instead of a good feeling.</p></div>')
+                 f'<h3>Native caching is free and automatic. The tool is for the rest.</h3>'
+                 f'<p>Claude Code caches for you whether or not this tool exists, so the '
+                 f'{human(sv["saved"])} above is not a reason to install anything. Two things '
+                 f'are: first, that saving collapses the moment a session turns cache-hostile '
+                 f'(you switch model in {pp["switch_share"]:.0%} of sessions, and each one '
+                 f'throws native caching away), and the tool\'s rules are how you stop leaking '
+                 f'it.</p>'
+                 f'<p>Second, native caching cannot touch the {human(fr_med)} startup floor '
+                 f'you pay on every call, and the prescriptions above can. On your data that '
+                 f'is worth about {human(tool_worth)} this window. The tool is how you see '
+                 f'that number move, measured, so a cleanup that did not actually save shows '
+                 f'up as no change instead of a good feeling.</p></div>')
 
     if include_sessions and sessions:
         top = sorted((s for s in sessions if s["first_request"] > 0),
