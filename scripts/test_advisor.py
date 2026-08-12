@@ -121,8 +121,47 @@ def test_strategies_json_loads_validates_and_carries_no_dashes():
     assert 10 <= len(strategies) <= 14, len(strategies)
     for s in strategies:
         assert s["source"], s["id"]
+    # The dash needles are written as escapes so this source file itself
+    # carries no literal em or en dash byte for the push gate to find.
     raw = open(STRATEGIES_PATH, encoding="utf-8").read()
-    assert "–" not in raw and "—" not in raw, "em or en dash found in strategies.json"
+    assert "\u2013" not in raw and "\u2014" not in raw, "em or en dash found in strategies.json"
+
+
+def test_card_source_is_a_citable_pointer_not_a_bare_code():
+    # Calibrated: reverting _card to `"source": strategy["source"]` leaves the
+    # bare code A6 on the card and this test goes red; with format_source, green.
+    #
+    # A6 and D5 are row ids in the tables of docs/CLAIMS.md. On a card they
+    # were unlookupable: a reader saw two characters and no way to check the
+    # claim behind them.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    a6 = [s for s in real if s["source"] == "A6"]
+    assert a6, "fixture assumption: at least one strategy is sourced A6"
+
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    result = adv.advise(profile, {}, real)
+    card = result["best"]
+    assert card["id"] == "cache.fixed-parent-model", card["id"]
+    assert card["source"] == "docs/CLAIMS.md row A6", card["source"]
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_card(card)
+    assert "docs/CLAIMS.md row A6" in printed.getvalue(), printed.getvalue()
+
+    # Several codes are each named, and anything that is not a claim code (a
+    # URL, free text) is left exactly as it was rather than being dressed up
+    # as a row id that does not exist.
+    assert adv.format_source("A3, A4") == "docs/CLAIMS.md rows A3, A4"
+    url = "https://code.claude.com/docs/en/hooks"
+    assert adv.format_source(url) == url
+    assert adv.format_source("measured on this machine") == "measured on this machine"
+
+    # Every shipped strategy ends up citable: a CLAIMS row or a URL.
+    for s in real:
+        rendered = adv.format_source(s["source"])
+        assert rendered.startswith("docs/CLAIMS.md row") or "://" in rendered, (s["id"], rendered)
 
 
 def test_token_saver_entry_can_never_be_best():

@@ -111,7 +111,7 @@ def _bounded_raw_scan(root, start_ts, end_ts):
                     continue
                 eff = rec.get("effort")
                 if eff is not None:
-                    effort_values.add(eff)
+                    effort_values.add(pf.effort_bucket(eff))
                 timestamps.append(raw_ts)
 
         timestamps.sort()
@@ -173,7 +173,9 @@ def _month_profile(root, start_ts, end_ts, sessions, sm):
         "effort_values_seen": (
             pf.metric(sorted(effort_values, key=str), "MEASURED",
                       f"distinct top-level effort field values across {files_scanned} "
-                      f"scanned transcripts")
+                      f"scanned transcripts, whitelisted to "
+                      f"{', '.join(pf.EFFORT_VALUES)}; anything else counts as "
+                      f"{pf.EFFORT_OTHER} and its raw text is never stored")
             if files_scanned else pf.no_data("no transcript files found in month")),
         "idle_gap_shares": (
             pf.no_data("no consecutive same-session timestamp pairs under 12h found")

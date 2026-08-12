@@ -51,6 +51,21 @@ SCHEMA = 1
 
 IDLE_BUCKETS = ("under_5m", "5m_to_15m", "15m_to_60m", "over_60m")
 
+# The only effort values this profile will ever name. The top-level `effort`
+# field is arbitrary text from outside this tool, and copying it verbatim into
+# profile.json would break the "counters and byte sizes only" promise at the
+# top of this file: one unexpected string in a transcript would be persisted
+# to disk and rendered on the dashboard. Anything outside the whitelist is
+# counted as "other" and the raw string is never stored.
+EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+EFFORT_OTHER = "other"
+
+
+def effort_bucket(raw):
+    """Whitelist one raw `effort` field value. Returns a known effort name or
+    EFFORT_OTHER; never returns caller-supplied text."""
+    return raw if raw in EFFORT_VALUES else EFFORT_OTHER
+
 
 def metric(value, label, basis):
     return {"value": value, "label": label, "basis": basis}
@@ -110,7 +125,7 @@ def _raw_scan(root, cutoff):
                     continue
                 eff = rec.get("effort")
                 if eff is not None:
-                    effort_values.add(eff)
+                    effort_values.add(effort_bucket(eff))
                 ts = rec.get("timestamp")
                 if isinstance(ts, str):
                     timestamps.append(ts)
@@ -228,7 +243,9 @@ def build_profile(root=None, days=30):
         "effort_values_seen": (
             metric(sorted(effort_values, key=str), "MEASURED",
                    f"distinct top-level effort field values across {files_scanned} "
-                   f"scanned transcripts")
+                   f"scanned transcripts, whitelisted to "
+                   f"{', '.join(EFFORT_VALUES)}; anything else counts as "
+                   f"{EFFORT_OTHER} and its raw text is never stored")
             if files_scanned else no_data("no transcript files found in window")),
         "idle_gap_shares": (
             no_data("no consecutive same-session timestamp pairs under 12h found")

@@ -104,6 +104,34 @@ def load_strategies(path=DEFAULT_STRATEGIES):
     return strategies
 
 
+CLAIMS_DOC = "docs/CLAIMS.md"
+
+
+def _is_claim_code(text):
+    """A docs/CLAIMS.md row id: one letter then digits, such as A6 or D10."""
+    return len(text) >= 2 and text[0].isalpha() and text[1:].isdigit()
+
+
+def format_source(source):
+    """Render a strategy's `source` as something a reader can go and check.
+
+    strategies.json stores claim codes (A6, D5, "A3, A4"), which are row ids
+    in the tables of docs/CLAIMS.md. Printed bare they are opaque: the reader
+    cannot tell what A6 is or where to look it up, which is what made 12 of
+    the 13 shipped sources uncitable. Only the exact code shape is rewritten,
+    so a URL source, or any other free text, passes through untouched rather
+    than being dressed up as a row id that does not exist.
+    """
+    if not source:
+        return source
+    text = str(source).strip()
+    codes = [c.strip() for c in text.split(",") if c.strip()]
+    if not codes or not all(_is_claim_code(c) for c in codes):
+        return text
+    word = "row" if len(codes) == 1 else "rows"
+    return f"{CLAIMS_DOC} {word} {', '.join(codes)}"
+
+
 def _get_leaf(profile, dotted_key):
     """Walk a dotted key into the profile dict. Returns the leaf dict, or None
     if any part of the path is missing or the leaf is not the expected shape.
@@ -186,7 +214,9 @@ def _card(strategy, rank, profile):
         "reversibility": strategy["reversibility"],
         "how_measured": strategy["how_measured"],
         "if_you_say_no": strategy["if_you_say_no"],
-        "source": strategy["source"],
+        # Citable at the point every surface reads it (CLI, dashboard, report),
+        # so no consumer has to know that A6 is a docs/CLAIMS.md row id.
+        "source": format_source(strategy["source"]),
         "requires_confirmation": strategy["requires_confirmation"],
     }
 

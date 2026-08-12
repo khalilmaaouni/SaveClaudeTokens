@@ -114,6 +114,44 @@ def test_month_windowing_includes_only_records_inside_the_calendar_month():
           "800,000" not in report)
 
 
+def test_final_subsecond_of_the_month_belongs_to_that_month():
+    # Calibrated: restoring the old `end_ts - 1` bound in build_report makes
+    # the 23:59:59.500 record vanish from BOTH months and this test goes red
+    # on the July check; with the half-open bound, green.
+    #
+    # A record in the last second of a month must land in exactly one month.
+    # The workaround that backed the cohort's inclusive end off by a whole
+    # second put it in neither.
+    def month_report(root, year, month, ledger):
+        orig_ledger, orig_load = ex.LEDGER, adv.load_treatments
+        ex.LEDGER, adv.load_treatments = ledger, _no_treatments
+        try:
+            return rp.build_report(year, month, root=root)
+        finally:
+            ex.LEDGER, adv.load_treatments = orig_ledger, orig_load
+
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [
+            _usage_rec("2026-07-31T23:59:59.500000+00:00", out=333),  # July's last half-second
+            _usage_rec("2026-08-01T00:00:00.000000+00:00", out=444),  # August's first instant
+        ])
+        ledger = os.path.join(d, "savings.jsonl")
+        july = month_report(root, 2026, 7, ledger)
+        august = month_report(root, 2026, 8, ledger)
+
+    july_usage, august_usage = _section(july, "Usage"), _section(august, "Usage")
+    check("the 23:59:59.500 record is counted in July",
+          "output: 333 tokens" in july_usage)
+    check("the 23:59:59.500 record is not counted in August",
+          "333" not in august_usage)
+    check("August's first instant is counted in August",
+          "output: 444 tokens" in august_usage)
+    check("August's first instant is not counted in July",
+          "444" not in july_usage)
+
+
 def test_verified_section_lists_only_verified_records_ended_in_the_month():
     with tempfile.TemporaryDirectory() as d:
         root = os.path.join(d, "projects")
