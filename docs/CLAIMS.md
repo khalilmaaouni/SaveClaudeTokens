@@ -123,6 +123,13 @@ Consequences applied to the build: fast-mode signals are excluded everywhere;
 `data/companions.json` uses the installed, verified sources; every strategy that
 cites D1 to D9 names the row it stands on.
 
+## E. Review-driven scope decisions, 2026-08-12 adversarial review
+
+| Row | Decision | Reason |
+|-----|----------|--------|
+| E1 | The experiment fingerprint hashes the user CLAUDE.md, `~/.claude/settings.json`, `~/.claude.json`, and the `~/.claude/skills` tree, as a sorted per-file manifest of sha256 lines. Project-level CLAUDE.md files stay OUT of fingerprint scope. | The experiment is machine-level and the working directory can change between start and end, so hashing one project's CLAUDE.md would make the fingerprint depend on where the command was typed. The gap is recorded here rather than hidden: a project CLAUDE.md edit during an experiment window is a confounder the fingerprint will not catch. |
+| E2 | When `--treats` names a file inside fingerprint scope, the exclusion is recorded in the experiment record and printed at close, never applied silently. | The reviewer proved a treated `settings.json` blinds the guard to every other change in that file; visibility is the affordable fix, structural key-level hashing is deferred. |
+
 ## The standing caveat on every measured number
 
 Every MEASURED figure here was taken on one machine's transcripts. They are

@@ -29,6 +29,18 @@ Keep a Changelog. Entries are newest first.
   output so you see what the meter actually saw.
 - Verification sweep (docs/CLAIMS.md section D): one claim refuted and
   removed (fast-mode transcript observability). Remaining claims re-checked.
+- Adversarial review hardening (docs/CLAIMS.md section E): experiment cli
+  routing fixed (crashed on both start and end); legacy v1.6 baselines now
+  refuse the v2 guards honestly (NOT_PROVEN with reason, never VERIFIED);
+  verified savings reported per label with regressions visible, never summed
+  across labels or clipped to zero; both cohorts must meet the minimum
+  session count; config fingerprint widened to ~/.claude.json and the skills
+  tree as a sha256 manifest, with any --treats exclusion printed, never
+  silent; half-open cohort and month boundaries; startup floor taken only
+  from true session starts; experiment labels HTML-escaped; effort values
+  whitelisted before landing in profile.json; a Python 3.11 tokenizer gate
+  added to CI; advisor sources rendered as citable pointers into
+  docs/CLAIMS.md.
 
 ## 1.6.0
 

@@ -27,6 +27,31 @@ We built the smallest honest set that delivers the mission: measure token use an
 - **Full intervention ledger.** Folded into Experiment Mode, which is its only honest producer today.
 - **v1.8 deep layer (Fable advisor subagent, semantic optimizer v2).** Gated on the first VERIFIED experiment on this machine, per the ratified acceptance gate.
 
+## Adopted direction: the companion ecosystem (blueprint reviewed 2026-08-12)
+
+A product blueprint (Token Shield Native Companion Ecosystem, research snapshot 2026-08-12) was reviewed and its thesis is ADOPTED: Token Shield is the control plane, measurement layer, and verdict owner; specialist companions (ponytail, caveman, context isolation tools, dedupe tools) are treatments that Token Shield prescribes, measures, and keeps or rolls back. Token Shield decides what is worth changing, a companion executes the treatment, Token Shield proves whether it worked. The strongest position is not replacing every optimizer; it is making every optimizer measurable, personal, compatible, and reversible.
+
+Adopted principles, binding on all waves below:
+
+- **Prescribed, never bundled.** No companion becomes a plugin dependency. Recommendation, preview, explicit user choice, then activation at a clean session boundary for attribution.
+- **Capability first, brand second.** Recommendations name the missing capability (minimal_code, output_compression, tool_output_isolation, deterministic_deduplication), then map it to the safest available provider, with Token Shield Core native treatment tried first.
+- **Telemetry hooks stay silent.** Token Shield observes and never injects behavioral context; companions own behavioral injection. An optimizer that prints advice every turn becomes the waste it measures.
+- **Marginal attribution, canonical baseline.** Stack effects report as a waterfall (baseline A, plus Core to B, plus companion to C); marginal deltas never sum as naive percentages, interaction effects are declared not separable, and a companion version change is a treatment change that ends any spanning experiment.
+- **External evidence never populates the user's savings.** A public benchmark is a reason to test, displayed apart from YOUR EVIDENCE, which starts at NOT PROVEN.
+- **The deep selector never executes.** Fable-tier selection picks one treatment from the curated registry when deterministic rules cannot decide; it never invents install commands, never alters labels, never touches files.
+
+Sequencing, bent to the ratified gate (unchanged: no v1.8 implementation file before one VERIFIED experiment exists):
+
+- **v1.8 wave 1: see the ecosystem.** Registry schema v2 (tested version ranges, hook footprints, curated activation and rollback commands, last_reviewed dates), native discovery through Claude Code's own plugin inventory (claude plugin list, plugin details footprint captured as CLAUDE PROJECTED, never as a saving), local companion state file, and an ecosystem doctor (read-only health, overlap, and conflict report).
+- **v1.8 wave 2: judge the stack.** Machine-readable compatibility matrix (data/compatibility.json), hook ownership table, overlap detection with suppression of Token Shield's own duplicate advice when an active companion owns the capability, suppression memory and cooldowns for rejected or failed treatments.
+- **v1.9: work the treatments.** Companion adapter layer (scripts/companions/, one adapter per verified companion), mode guidance phrased as intent (conservative, balanced, aggressive), guided install and rollback recipes from the curated registry only, marginal attribution waterfall on the dashboard.
+- **Later: the open contract.** An optional token-shield.integration.json any optimization plugin can ship to declare capabilities, modes, state and health commands; Token Shield keeps supporting companions that never adopt it.
+
+Cautions recorded at adoption, so they are not rediscovered the hard way:
+
+- The blueprint is single-sourced research. Its descriptions of specific companion internals (context-mode, Claude DCP, Caveman 2 proxy modes) are UNVERIFIED here; no registry entry ships until the companion's real source, hooks, and modes are confirmed first-party, the same discipline that caught the token-saver identity mixup recorded in docs/CLAIMS.md section D.
+- Blueprint P0 to P10 ordering is superseded by the gate above: its Experiment Engine V2 items largely shipped in 1.7, and its Fable Deep Selector is the gated 1.8 deep advisor, not a new track.
+
 ## Passed on
 
 - **Status line, the 7-Day Diet, Show Your Shield community, case studies.** Growth and marketing, not code. Discussions is a checkbox, not a build.
