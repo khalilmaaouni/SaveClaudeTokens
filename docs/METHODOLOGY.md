@@ -67,6 +67,35 @@ was 85,021 tokens and its share of everything read was 36 percent (snapshot in
 `docs/CLAIMS.md`). That share is the single largest lever, because it is paid
 again on every call of every session. Cutting it is where real savings live.
 
+## 3b. Native caching versus what this tool adds (the load-bearing distinction)
+
+The Token Shield's headline is the saving from prompt caching. That saving is
+Claude Code's, not this tool's. Claude Code manages prompt caching
+automatically, by default, so the cache reads that produce the headline happen
+whether or not SaveClaudeTokens is installed. The dashboard attributes the
+number to Anthropic's caching in the hero itself, in bold, and does not claim
+it. Presenting a native benefit as the plugin's own achievement is the exact
+dishonesty this whole project exists to avoid, so it is called out rather than
+quietly enjoyed.
+
+What this tool actually contributes, and what it is honest to credit it with:
+
+1. **Visibility.** The native saving was invisible before; the meter makes it a
+   measured number you can watch.
+2. **Protection.** Native caching collapses the moment a session turns
+   cache-hostile. On one machine, 28 percent of sessions switched model
+   mid-flight, and each one threw the native saving away for the rest of the
+   session. The tool's rules are how you stop leaking a benefit you already
+   have.
+3. **Cuts caching cannot make.** The always-loaded startup floor is paid on
+   every call and caching cannot shrink it. The pain-point prescriptions can,
+   and their projected savings are computed from your own sessions. That figure,
+   not the native one, is the tool's own contribution.
+
+So the dashboard reports two different quantities and never merges them: the
+native saving (large, not ours) and the tool-attributable saving (smaller,
+ours, and the actual reason to keep the tool).
+
 ## 4. How it stays honest over time
 
 A meter drifts into dishonesty in predictable ways. Each is closed by a
