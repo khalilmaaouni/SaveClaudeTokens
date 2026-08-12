@@ -3,6 +3,38 @@
 All notable changes to this project are recorded here. The format follows
 Keep a Changelog. Entries are newest first.
 
+## 1.7.1
+
+- Actionable Advisor: every strategy card (data/strategies.json, schema 2)
+  gains a "how" field, 2 to 5 concrete steps with a real copy-paste command
+  where one applies. advisor.py validates it (non-empty steps, no em or en
+  dash); every rendered card on the dashboard gets a "How, exactly" block.
+- Decision chips: each card carries a ready-to-copy command row (Did it,
+  Not now for 90 days, Never recommend) driving the new
+  `python3 scripts/cli.py advise --decide <strategy-id> <done|not-now|never>`,
+  which round-trips into the existing treatment memory. The dashboard is
+  static HTML, so a chip is its own command, not a button.
+- Deterministic alerts band, at the top of the dashboard: fires only on a
+  named MEASURED threshold (cache hit ratio median below 0.5, startup floor
+  share or model-switch share above 0.5, or the meter itself reporting NO
+  DATA), never on healthy data. Each alert names what it is, why it matters,
+  the action, and when to act.
+- Your routine: a short static section naming what already runs by itself
+  monthly and the two commands to run around a config change or an
+  experiment.
+- Dashboard now shows only what you influence; native caching mechanics
+  moved to the methodology doc. The hero is a single "What Token Shield
+  verified" card; native caching is one pointer sentence to
+  docs/METHODOLOGY.md, no numbers, no bars, no dollars, replacing the old
+  three-column hero, the "Where the native saving comes from" bars, and the
+  $401,962-style API-equivalent figure that read as hype.
+- Guided command flows: `/token-shield:advisor` now shows one best card in
+  plain words, asks the decision through the question UI (Do it now guided
+  / Explain more first / Not now / Never), and walks accepted steps one at
+  a time, handing file edits to their own yes/no question. `/token-shield:start`
+  leads with three plain numbers and one hero issue before any opt-in ask,
+  and acknowledges already-installed companions first.
+
 ## 1.7.0
 
 - Deterministic profiler (profile.py): MEASURED signals (cache rebuilds,
