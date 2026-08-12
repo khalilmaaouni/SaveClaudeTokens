@@ -88,6 +88,21 @@ CACHE_WRITE_1H = 2.0
 CACHE_READ = 0.1
 
 
+def net_saving(read, write_5m, write_1h):
+    """Net caching saving in base-input units, for a bucket of counters.
+
+    The canonical formula, defined once so every view (the dashboard, the
+    per-model pricing walk) prices the same number. It is what caching earns on
+    reads (0.9x each) minus the premium it pays to write the cache (0.25x extra
+    at the 5 minute TTL, 1.0x extra at the 1 hour TTL): exactly uncached cost
+    minus cached cost for the same token flow. token_shield.savings_breakdown
+    computes the aggregate the same way; a test locks the two together.
+    """
+    gross = (1.0 - CACHE_READ) * read
+    write_premium = (CACHE_WRITE_5M - 1.0) * write_5m + (CACHE_WRITE_1H - 1.0) * write_1h
+    return gross - write_premium
+
+
 def iter_session_files(root, cutoff):
     for dirpath, _dirs, files in os.walk(root):
         for fn in files:
