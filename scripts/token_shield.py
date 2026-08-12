@@ -336,7 +336,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
                  f'tool.</b> Claude Code caches for you by default. You reused '
                  f'{human(sv["read"])} tokens at 0.1x instead of full price, a net '
                  f'{human(sv["saved"])} after the {human(sv["write_premium"])} write premium. '
-                 f'SaveClaudeTokens did not create this saving and does not claim to. What it '
+                 f'Token Shield did not create this saving and does not claim to. What it '
                  f'adds is below: it lets you see this number, its rules keep it from '
                  f'collapsing, and it finds the waste caching cannot touch.</p></div>')
 
@@ -480,7 +480,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions):
                      'More than one model in a session means a mid-flight switch, '
                      'which rebuilds that session\'s cache from zero.</p>')
 
-    parts.append('<footer>Token Shield, from SaveClaudeTokens. Every figure is '
+    parts.append('<footer>Token Shield. Every figure is '
                  'measured from local API usage counters; NO DATA means it could not '
                  'be measured, never a guess. Aggregates only: no conversation text, '
                  'file paths, or session identifiers are read into this page.</footer>')

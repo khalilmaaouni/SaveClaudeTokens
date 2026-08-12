@@ -72,7 +72,7 @@ again on every call of every session. Cutting it is where real savings live.
 The Token Shield's headline is the saving from prompt caching. That saving is
 Claude Code's, not this tool's. Claude Code manages prompt caching
 automatically, by default, so the cache reads that produce the headline happen
-whether or not SaveClaudeTokens is installed. The dashboard attributes the
+whether or not Token Shield is installed. The dashboard attributes the
 number to Anthropic's caching in the hero itself, in bold, and does not claim
 it. Presenting a native benefit as the plugin's own achievement is the exact
 dishonesty this whole project exists to avoid, so it is called out rather than

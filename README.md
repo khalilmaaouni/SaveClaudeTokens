@@ -1,6 +1,6 @@
-# SaveClaudeTokens
+# Token Shield
 
-Run Claude Code cheaply without losing quality. This plugin ships one skill, `save-claude-tokens`, a playbook Claude loads on demand when the work touches token cost: prompt caching, compaction decisions, model routing, config pruning, or output verbosity.
+Run Claude Code cheaply without losing quality. This plugin ships one skill, `token-shield`, a playbook Claude loads on demand when the work touches token cost: prompt caching, compaction decisions, model routing, config pruning, or output verbosity.
 
 ## Why this exists
 
@@ -18,11 +18,13 @@ Every behavioral claim in the skill is sourced to first-party documentation and 
 ## Install
 
 ```bash
-claude plugin marketplace add khalilmaaouni/SaveClaudeTokens
-claude plugin install save-claude-tokens@saveclaudetokens
+claude plugin marketplace add khalilmaaouni/token-shield
+claude plugin install token-shield@token-shield
 ```
 
 That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
+
+> Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add under the new name: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
 
 ## What is inside
 
