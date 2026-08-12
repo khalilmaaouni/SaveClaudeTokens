@@ -1,0 +1,319 @@
+{
+  "schema": 1,
+  "updated": "2026-08-12",
+  "strategies": [
+    {
+      "id": "cache.fixed-parent-model",
+      "category": "cache",
+      "title": "Fix your model and effort at session start",
+      "trigger": {
+        "metric": "behavior.model_switch_session_share",
+        "op": ">=",
+        "value": 0.2,
+        "band": "HIGH"
+      },
+      "what_it_changes": "Pick one model and effort level before work starts and keep them for the whole session; route any cheaper sub-task to a subagent instead of switching the parent mid-session.",
+      "expected_benefit": "Avoids rebuilding the whole cached prefix on every mid-session model or effort change.",
+      "evidence": "ESTIMATED",
+      "drawback": "Locks you to one model and effort choice for the session; a genuine need to escalate mid-task means starting a new session instead of switching in place.",
+      "quality_risk": "LOW",
+      "reversibility": "Fully reversible, it is a habit, not a config change.",
+      "how_measured": "behavior.model_switch_session_share is the share of your recent sessions that ran more than one model or effort value.",
+      "if_you_say_no": "Each mid-session switch keeps rebuilding your cached prefix from zero at full price.",
+      "alternatives": [
+        "routing.subagent-not-switch"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A6"
+    },
+    {
+      "id": "startup.floor-ladder",
+      "category": "startup",
+      "title": "Shrink the always-loaded startup floor",
+      "trigger": {
+        "metric": "instruction.startup_floor_share",
+        "op": ">=",
+        "value": 0.15,
+        "band": "MED",
+        "escalate": {
+          "value": 0.3,
+          "band": "HIGH"
+        }
+      },
+      "what_it_changes": "Diet CLAUDE.md to hard rules only, move rarely-used rules into path-scoped .claude/rules/ so they load only when a matching file is touched, and disable plugins and MCP servers you do not use.",
+      "expected_benefit": "Cuts the fixed startup floor that gets re-read at cache-read price on every call in the session.",
+      "evidence": "ESTIMATED",
+      "drawback": "Moving a rule out of the always-loaded file means it stops applying to files that never match its new path scope; a rule that was silently always-on can silently stop firing.",
+      "quality_risk": "MED",
+      "reversibility": "Reversible, restore the moved content.",
+      "how_measured": "instruction.startup_floor_share is first-request tokens divided by everything the session reads.",
+      "if_you_say_no": "The floor keeps being paid, at cache-read price, on every call for the life of the session.",
+      "alternatives": [
+        "memory.claude-md-user-oversize"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A7"
+    },
+    {
+      "id": "routing.subagent-not-switch",
+      "category": "routing",
+      "title": "Route cheap sub-tasks to a subagent, not a model switch",
+      "trigger": {
+        "metric": "behavior.model_switch_session_share",
+        "op": ">=",
+        "value": 0.2,
+        "band": "MED"
+      },
+      "what_it_changes": "When a step calls for a cheaper model, spawn a subagent for it instead of switching the parent session's model or effort in place.",
+      "expected_benefit": "Keeps the parent session's cache intact while still using a cheaper model where it genuinely fits.",
+      "evidence": "ESTIMATED",
+      "drawback": "Subagents always use the 5 minute cache TTL, even on a subscription, so heavy subagent use pays more cache-write premium than parent-session work would.",
+      "quality_risk": "LOW",
+      "reversibility": "Fully reversible.",
+      "how_measured": "Same behavior.model_switch_session_share signal as the fixed-parent-model card, read as a routing habit rather than a config change.",
+      "if_you_say_no": "Switches keep happening in the parent session, rebuilding its cache from zero each time.",
+      "alternatives": [
+        "cache.fixed-parent-model"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A6"
+    },
+    {
+      "id": "overbuild.git-instructions-off",
+      "category": "overbuild",
+      "title": "Turn off git instructions you never use",
+      "trigger": {
+        "metric": "instruction.startup_floor_share",
+        "op": ">=",
+        "value": 0.1,
+        "band": "LOW"
+      },
+      "what_it_changes": "Set includeGitInstructions: false in settings if Claude Code is never asked to draft commits or PRs, removing the built-in git workflow instructions from what loads every session.",
+      "expected_benefit": "Removes instructions you never use from the fixed context that every call re-reads.",
+      "evidence": "ESTIMATED",
+      "drawback": "If you ever do ask Claude to commit or open a PR, the built-in workflow guidance is gone and results get less consistent; the settings edit itself also costs one cache rebuild the next time it loads.",
+      "quality_risk": "MED",
+      "reversibility": "Fully reversible, flip the setting back.",
+      "how_measured": "instruction.startup_floor_share signals a heavy floor; this card is a check on whether an unused built-in feature is part of it. The profile carries no direct git-usage signal, so this is a coarse gate, not a precise detection.",
+      "if_you_say_no": "The built-in git instructions keep loading on every session whether or not you use them.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": true,
+      "source": "D2"
+    },
+    {
+      "id": "boundaries.mcp-tool-search",
+      "category": "boundaries",
+      "title": "Confirm MCP tool search is on",
+      "trigger": {
+        "metric": "environment.plugin_count",
+        "op": ">=",
+        "value": 5,
+        "band": "LOW"
+      },
+      "what_it_changes": "Check that ENABLE_TOOL_SEARCH has not been turned off; with several plugins and MCP servers installed, tool-search deferral is what keeps their tool schemas out of the always-loaded context.",
+      "expected_benefit": "Keeps unused MCP tool definitions out of the fixed prompt instead of loading every schema up front.",
+      "evidence": "ESTIMATED",
+      "drawback": "Tool search adds one extra round trip the first time a deferred tool is actually called.",
+      "quality_risk": "LOW",
+      "reversibility": "Fully reversible, it is a check, not a change.",
+      "how_measured": "environment.plugin_count from the profile; more installed plugins and MCP servers means more schemas are at stake if deferral is off.",
+      "if_you_say_no": "If tool search was disabled some other way, every tool schema loads on every call whether it is used or not.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "D6"
+    },
+    {
+      "id": "cache.ttl-idle-gaps",
+      "category": "cache",
+      "title": "Keep waits under the cache TTL",
+      "trigger": {
+        "metric": "behavior.idle_gap_shares.5m_to_15m",
+        "op": ">=",
+        "value": 0.15,
+        "band": "MED"
+      },
+      "what_it_changes": "Recommend-only: background long waits with a completion callback instead of leaving the session idle past the active cache TTL (5 minutes on an API key, 1 hour on a subscription).",
+      "expected_benefit": "Avoids paying full cache-write price again after the prefix goes cold.",
+      "evidence": "ESTIMATED",
+      "drawback": "This is advice only, no config change; and the 1 hour TTL is not free either, a write at the 1 hour TTL bills at 2x base input against 0.1x for a read, a real premium paid for the longer window, so a wait that stays under the TTL beats waiting past it and rebuilding.",
+      "quality_risk": "LOW",
+      "reversibility": "Not applicable, this is a workflow habit, not a setting.",
+      "how_measured": "behavior.idle_gap_shares is the share of gaps between calls that ran past the session's active cache TTL.",
+      "if_you_say_no": "Every gap that outlives the TTL means the next call rebuilds the prefix from a write instead of a 0.1x read.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A3, A4"
+    },
+    {
+      "id": "memory.fresh-over-compact",
+      "category": "memory",
+      "title": "Prefer a fresh session at real phase boundaries",
+      "trigger": {
+        "metric": "usage.cache_hit_ratio_median",
+        "op": "<=",
+        "value": 0.5,
+        "band": "MED"
+      },
+      "what_it_changes": "At a real phase boundary, start a fresh session pointed at a checkpoint file instead of reaching for /compact reflexively.",
+      "expected_benefit": "Avoids paying repeated summarization cost on a context that would be cheaper to restart from a written checkpoint.",
+      "evidence": "ESTIMATED",
+      "drawback": "A fresh session pays the full startup floor again with nothing cached yet, so this only wins when you were going to spend even more compacting; a warm mid-session /compact already costs a fraction of what the context size suggests, so this card can be wrong for a session that compacts rarely.",
+      "quality_risk": "MED",
+      "reversibility": "Not applicable, this is a workflow habit.",
+      "how_measured": "usage.cache_hit_ratio_median from the profile; a low median hints the cache keeps getting rebuilt, one cause being repeated mid-session compaction. This is a correlational signal, not a direct measurement of compact frequency.",
+      "if_you_say_no": "Nothing breaks; compact still works, this is only a suggestion to compare against a fresh session at real boundaries.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A14"
+    },
+    {
+      "id": "redundancy.bounded-reads",
+      "category": "redundancy",
+      "title": "Bound reads and search before you read",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 500000,
+        "band": "LOW"
+      },
+      "what_it_changes": "Use Read with offset and limit on large files, and grep or search for the symbol first, instead of reading a whole file to find one thing.",
+      "expected_benefit": "Cuts redundant tokens spent re-reading content that a targeted read or search would have found directly.",
+      "evidence": "ESTIMATED",
+      "drawback": "A bounded read can miss context just outside the window, causing a second read later; net worse than one full read on a small file.",
+      "quality_risk": "LOW",
+      "reversibility": "Not applicable, this is a workflow habit.",
+      "how_measured": "usage.output_tokens_total is a coarse volume proxy; the profile carries no direct measurement of redundant full-file reads, so this gates on overall activity rather than the behavior itself.",
+      "if_you_say_no": "Nothing breaks; large files just keep being read in full where a bounded read or a search would have done the job.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+      "id": "output.isolate-huge-logs",
+      "category": "output",
+      "title": "Isolate huge tool output instead of inlining it",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 1000000,
+        "band": "MED"
+      },
+      "what_it_changes": "Route build, test, or log output that is mostly noise through a filter or a file instead of letting it land raw in the transcript.",
+      "expected_benefit": "Keeps large, low-signal tool output from inflating every later call that re-reads the conversation.",
+      "evidence": "ESTIMATED",
+      "drawback": "Isolating output can hide a detail you needed to see directly; only worth it for logs that are mostly noise, not ones you are actively debugging line by line.",
+      "quality_risk": "MED",
+      "reversibility": "Fully reversible, stop filtering and read raw output again.",
+      "how_measured": "usage.output_tokens_total is a coarse volume proxy for how much tool output exists; the profile carries no direct per-tool-call size measurement.",
+      "if_you_say_no": "Large tool output keeps landing in the transcript raw and gets re-read on every later call in the session.",
+      "alternatives": [
+        "redundancy.bounded-reads"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "D5"
+    },
+    {
+      "id": "memory.claude-md-user-oversize",
+      "category": "memory",
+      "title": "Trim an oversize user-level CLAUDE.md",
+      "trigger": {
+        "metric": "instruction.claude_md_user_bytes",
+        "op": ">=",
+        "value": 25000,
+        "band": "MED"
+      },
+      "what_it_changes": "Trim the user-level CLAUDE.md toward the documented under-200-lines target; move project-specific or rarely-needed rules into per-project or path-scoped files instead.",
+      "expected_benefit": "A smaller user CLAUDE.md is a smaller fixed floor paid on every session, in every project, not just this one.",
+      "evidence": "ESTIMATED",
+      "drawback": "CLAUDE.md loads in full regardless of length, so shrinking it does not change per-call truncation risk the way MEMORY.md does; the saving here is purely the extra tokens re-read as part of the startup floor, and cutting a rule you actually needed loses it everywhere until restored.",
+      "quality_risk": "MED",
+      "reversibility": "Reversible, restore the trimmed lines.",
+      "how_measured": "instruction.claude_md_user_bytes from the profile, the byte size of the user-level CLAUDE.md.",
+      "if_you_say_no": "The full file keeps loading and being re-read as part of the floor on every session, in every project.",
+      "alternatives": [
+        "startup.floor-ladder"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A17"
+    },
+    {
+      "id": "companion.ponytail",
+      "category": "companion",
+      "title": "Companion: ponytail (build-the-minimum bias)",
+      "trigger": {
+        "metric": "instruction.claude_md_project_bytes",
+        "op": ">=",
+        "value": 15000,
+        "band": "LOW"
+      },
+      "what_it_changes": "Turn on the ponytail skill, which enforces a build-the-minimum ladder (reuse before writing, stdlib before a dependency, one line before ten) on every response.",
+      "expected_benefit": "Less generated code and config to load and re-read later; smaller diffs, fewer new files.",
+      "evidence": "ESTIMATED",
+      "drawback": "It is a behavioral bias, not a check: on a task that genuinely needs the fuller version, a lazy first pass can undershoot and need a second pass, which costs more than building it properly once.",
+      "quality_risk": "LOW",
+      "reversibility": "Fully reversible, disable it any time.",
+      "how_measured": "instruction.claude_md_project_bytes from the profile; a heavier project instruction file correlates with more built-up scope in general, a loose proxy rather than a direct measurement of code volume.",
+      "if_you_say_no": "No change; you keep whatever default building style you already have.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A10"
+    },
+    {
+      "id": "companion.caveman",
+      "category": "companion",
+      "title": "Companion: caveman (terse narration)",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 300000,
+        "band": "LOW"
+      },
+      "what_it_changes": "Turn on the caveman skill to compress narration and status lines into ultra-terse output.",
+      "expected_benefit": "Cuts output tokens spent on narration and status commentary.",
+      "evidence": "ESTIMATED",
+      "drawback": "Net-negative risk: a compressed instruction can be misread, causing a corrective turn; if corrective turns rise after enabling it, the extra back-and-forth can cost more than the compression saved. Worth checking, not assuming.",
+      "quality_risk": "MED",
+      "reversibility": "Fully reversible, turn it off any time.",
+      "how_measured": "usage.output_tokens_total from the profile; more output volume is where compression has more to work with, a loose proxy rather than a direct narration measurement.",
+      "if_you_say_no": "Output stays in full prose; no risk, no saving either.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "A10"
+    },
+    {
+      "id": "companion.token-saver",
+      "category": "companion",
+      "title": "Companion: token-saver (detect and measure only)",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 200000,
+        "band": "LOW"
+      },
+      "what_it_changes": "Detect-and-measure only: token-saver is already enforced by its own hook when installed, so this card surfaces that its compression is active, it never turns anything on and is never offered as a recommended fix.",
+      "expected_benefit": "Visibility into how much shell and tool output volume the plugin is already compressing.",
+      "evidence": "ESTIMATED",
+      "drawback": "This card never recommends installing or enabling token-saver as a fix; its file_content and env processors carry a real redaction risk when enabled and stay out of scope for a detect-only card.",
+      "quality_risk": "LOW",
+      "reversibility": "Not applicable, detection only, nothing is changed.",
+      "how_measured": "usage.output_tokens_total from the profile, a proxy for how much command output volume exists to compress.",
+      "if_you_say_no": "No effect either way; this card only reports, it never changes anything.",
+      "alternatives": [],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "D5"
+    }
+  ]
+}

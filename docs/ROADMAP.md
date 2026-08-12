@@ -10,12 +10,22 @@ We built the smallest honest set that delivers the mission: measure token use an
 - **One CLI.** `python3 scripts/cli.py` with four subcommands: summary, dashboard, experiment, prices. The scripts stay internal.
 - **Distribution basics.** CI over the self-checks with a badge, an outcome-first README, a repository description and topics.
 
+## Shipped (1.7.0)
+
+- **Deterministic profiler and confidence labels.** MEASURED signals (cache rebuilds, startup floor, model switches) split from INFERRED patterns. Every finding now carries its confidence so you know what is proven versus pattern-based.
+- **Quick Advisor.** Ranked action cards with full drawback disclosure, treatment memory for learned patterns on your machine, and do-nothing as a valid answer when the gain is marginal.
+- **Companion registry.** Curated verified sources for tools that pair well with Token Shield (caveman, ponytail, token-saver, and mentions of related tools).
+- **Monthly report and onboarding.** Session-end telemetry hook (opt-in only, no hooks by default) feeds the advisor and monthly report. No traces left on uninstall.
+- **Experiment Mode v2.** Message-timestamp cohorts and config fingerprints for tighter before/after matching; NOT_PROVEN downgrade when data is thin; no cross-label summing.
+- **Meter honesty.** Skipped files and lines are now counted and reported, so you see what the meter actually observed.
+
 ## Deferred, with the reason
 
 - **Protect Mode and its four blocking hooks** (cold-cache, oversized-read, duplicate, output). The biggest build and the biggest risk. It reverses the no-hooks-by-default trust position before the measurement story has shipped, and its attribution math as blueprinted was unsound: a prevented event is a counterfactual, so it is estimated, never verified. Flip condition: revisit only after the first real VERIFIED experiment, and then one guard at a time, cold-cache first.
 - **Tokens per accepted result.** Needs an acceptance-signal subsystem (tests pass, PR merged, user marks accepted) with weak signal availability. Flip condition: a reliable acceptance signal exists.
 - **Share card and README badge generator.** Worth building once there is a VERIFIED number to share. Flip condition: Experiment Mode has produced real verified results.
 - **Full intervention ledger.** Folded into Experiment Mode, which is its only honest producer today.
+- **v1.8 deep layer (Fable advisor subagent, semantic optimizer v2).** Gated on the first VERIFIED experiment on this machine, per the ratified acceptance gate.
 
 ## Passed on
 

@@ -113,6 +113,26 @@ def test_unsplit_writes_give_no_data_not_a_guess():
     assert s["output_to_input"] is None
 
 
+def test_skipped_line_is_counted_and_other_metrics_unchanged():
+    # A truncated write leaves a line that contains "usage" but does not parse
+    # as JSON. Before this fix that line vanished with no trace; now it must
+    # be counted, and the two good records on either side of it must still
+    # add up exactly as if the bad line were never there.
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        with open(fp, "w") as f:
+            f.write(_rec(10, 100, 0, 0, 5, model="model-a") + "\n")
+            f.write('{"message": {"usage": {"input_tokens": truncated\n')
+            f.write(_rec(2, 0, 200, 1000, 9, model="model-a") + "\n")
+        sessions = mt.collect(d, days=9999)
+        sm = mt.summarize(sessions)
+    assert sm["skipped_lines"] >= 1, sm["skipped_lines"]
+    assert sm["skipped_files"] == 0
+    assert sm["total_calls"] == 2
+    assert sm["output_total"] == 14
+    assert sm["input_total"] == 12
+
+
 def test_subagent_transcript_is_not_a_session():
     with tempfile.TemporaryDirectory() as d:
         parent = os.path.join(d, "p.jsonl")

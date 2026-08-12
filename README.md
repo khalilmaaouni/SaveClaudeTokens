@@ -20,12 +20,15 @@ claude plugin install token-shield@token-shield
 
 That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
 
-Then run one command:
+Then run one of these six commands:
 
 ```bash
-python3 scripts/cli.py            # quick honest summary
-python3 scripts/cli.py dashboard  # open the GUI
-python3 scripts/cli.py experiment start "shrink-claude-md"   # prove a change, before and after
+python3 scripts/cli.py stats                 # /token-shield:stats
+python3 scripts/cli.py dashboard             # open the GUI
+python3 scripts/cli.py optimize              # /token-shield:optimize
+python3 scripts/cli.py experiment start "X"  # /token-shield:token-audit
+python3 scripts/cli.py advisor               # /token-shield:advisor
+python3 scripts/cli.py monthly               # /token-shield:monthly
 ```
 
 > Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
@@ -84,6 +87,14 @@ showed a 0.865 median cache hit ratio, which ruled out cache discipline as the
 main problem; an 85,021 token median first request with a 0.360 median share,
 which put the headroom squarely in the always-loaded set; and 41 percent of all
 output tokens coming from subagents, which is a different lever again.
+
+## The Advisor
+
+The advisor profiles your session history and ranks the one best next move to cut tokens. It reads your transcript history and finds patterns: which sessions rebuilt their cache (model switch, effort change), where the startup floor is costing you the most, how much a model downgrade would save versus hurt quality, whether your hook setup is still valid. It offers one ranked action with full drawback disclosure, or do-nothing if the marginal gain is too small. Do-nothing is a valid answer. The advisor remembers treatments (changes you tried and their results) and learns which patterns respond to which fixes on your machine, not on a general baseline.
+
+Every recommendation is backed by experiment-verified savings on your own data, or marked ESTIMATED when it comes from your historic pattern alone. The deterministic profiler costs zero tokens (it is a grep and a sum); the advisor subagent cost is printed so you can decide whether the time is worth the insight.
+
+Run `/token-shield:advisor` (no args) for the next best move, or `/token-shield:start` once to opt into the session-end telemetry hook that feeds the advisor.
 
 ## Optional tools, all opt in
 
@@ -200,6 +211,27 @@ carries the same caveat: it was taken on one machine, so run the tools on yours.
 - caveman (terse narration) and ponytail (minimal generated code) for the output side.
 - token-saver (command output compression) for the input side.
 - Any note system (Obsidian, plain markdown) for the memory side.
+
+## Uninstall, no trace
+
+The plugin registers no hooks by default. Installing it costs one listing line and nothing else runs until you ask it to.
+
+Token Shield writes to three locations:
+
+- `~/.token-shield/profile.json` (your session profile)
+- `~/.token-shield/treatments.json` (advisor treatment memory)
+- `~/.token-shield/token-shield.html` (the dashboard, if you ran it)
+- `~/.claude/plugins/cache/token-shield/*/savings.jsonl` (experiment ledger, if you opted into session-end telemetry)
+- `~/.claude/settings.json`: one optional `SessionEnd` hook line (only if you ran `/token-shield:start`)
+
+To uninstall with full cleanup:
+
+```bash
+claude plugin uninstall token-shield
+python3 ~/.claude/plugins/cache/token-shield/*/scripts/cli.py uninstall
+```
+
+The uninstall script will print what exists on your machine, ask before removing each item, and print a short exit summary of any verified savings to keep. Removal deletes your local measurement history and is irreversible.
 
 ## License
 

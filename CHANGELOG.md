@@ -3,6 +3,33 @@
 All notable changes to this project are recorded here. The format follows
 Keep a Changelog. Entries are newest first.
 
+## 1.7.0
+
+- Deterministic profiler (profile.py): MEASURED signals (cache rebuilds,
+  startup floor, model switches) split from INFERRED patterns (advisor
+  recommendations). Every signal is now labeled with its confidence.
+- Experiment Mode v2: message-timestamp cohorts and config fingerprints for
+  tighter before/after matching. NOT_PROVEN downgrade when data is thin.
+  Dashboard no longer sums across confidence labels.
+- Quick Advisor (advisor.py + data/strategies.json): ranked action cards with
+  full drawback disclosure, treatment memory for learned patterns on your
+  machine, and do-nothing as a valid answer. Subagent cost printed per run.
+- Companion registry (data/companions.json): curated verified sources for
+  tools that pair well with Token Shield (caveman, ponytail, token-saver)
+  plus a mentions list.
+- Dashboard: Next Best Move card, Observed Pattern section, queue capped at
+  3 items, companions panel, experiment history timeline.
+- Monthly report (/token-shield:monthly, scripts/report.py): compare your
+  pattern to the prior month in one page.
+- Onboarding (/token-shield:start, opt-in only): users explicitly opt into
+  session-end telemetry hook. No hooks by default.
+- Uninstall cleanup (python3 scripts/cli.py uninstall): prints what exists,
+  asks before removing, reports verified savings to keep. No trace after.
+- Meter honesty: skipped files and lines now counted and reported in meter
+  output so you see what the meter actually saw.
+- Verification sweep (docs/CLAIMS.md section D): one claim refuted and
+  removed (fast-mode transcript observability). Remaining claims re-checked.
+
 ## 1.6.0
 
 - Safe, reversible CLAUDE.md optimizer (scripts/optimize.py and the

@@ -87,6 +87,18 @@ CACHE_WRITE_5M = 1.25
 CACHE_WRITE_1H = 2.0
 CACHE_READ = 0.1
 
+# Files the walk could not open and lines that failed to decode as JSON (a
+# truncated write, a corrupt record). Both were silently skipped before; now
+# they are counted so a low session count can be told apart from a real
+# absence of data. Reset at the start of each collect() call, so the counts
+# summarize() reports describe that one walk, not a running total across calls.
+SKIP_COUNTS = {"files": 0, "lines": 0}
+
+
+def skip_counts():
+    """A copy of the current skip counters, valid after the most recent collect()."""
+    return dict(SKIP_COUNTS)
+
 
 def net_saving(read, write_5m, write_1h):
     """Net caching saving in base-input units, for a bucket of counters.
@@ -113,6 +125,7 @@ def iter_session_files(root, cutoff):
                 if os.path.getmtime(fp) < cutoff:
                     continue
             except OSError:
+                SKIP_COUNTS["files"] += 1
                 continue
             yield fp
 
@@ -151,13 +164,20 @@ def read_session(fp):
     sub_output = 0
     models = set()
 
-    with open(fp, "r", errors="ignore") as f:
+    try:
+        f = open(fp, "r", errors="ignore")
+    except OSError:
+        SKIP_COUNTS["files"] += 1
+        return None
+
+    with f:
         for line in f:
             if '"usage"' not in line:
                 continue
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                SKIP_COUNTS["lines"] += 1
                 continue
             msg = rec.get("message") or {}
             usage = msg.get("usage") or rec.get("usage")
@@ -229,6 +249,8 @@ def read_session(fp):
 
 def collect(root, days):
     cutoff = time.time() - days * 86400
+    SKIP_COUNTS["files"] = 0
+    SKIP_COUNTS["lines"] = 0
     out = []
     for fp in iter_session_files(root, cutoff):
         s = read_session(fp)
@@ -280,6 +302,8 @@ def summarize(sessions):
         "subagent_output_total": sub_out,
         "subagent_output_share": (sub_out / out_total) if out_total else None,
         "subagent_calls": sum(s["sub_calls"] for s in sessions),
+        "skipped_files": SKIP_COUNTS["files"],
+        "skipped_lines": SKIP_COUNTS["lines"],
     }
 
 
@@ -342,6 +366,8 @@ def print_summary(sm, label):
     print(f"output from subagents      {fmt(sm['subagent_output_total'])} "
           f"({fmt(sm['subagent_output_share'])} share, "
           f"{fmt(sm['subagent_calls'])} calls)")
+    print(f"skipped (unreadable)       {fmt(sm.get('skipped_files', 0))} files, "
+          f"{fmt(sm.get('skipped_lines', 0))} lines")
 
 
 # Baseline keys renamed in schema 2. Older snapshots stay readable, but the
