@@ -46,6 +46,7 @@ Sequencing, bent to the ratified gate (unchanged: no v1.8 implementation file be
 - **v1.8 wave 2: judge the stack.** Machine-readable compatibility matrix (data/compatibility.json), hook ownership table, overlap detection with suppression of Token Shield's own duplicate advice when an active companion owns the capability, suppression memory and cooldowns for rejected or failed treatments.
 - **v1.9: work the treatments.** Companion adapter layer (scripts/companions/, one adapter per verified companion), mode guidance phrased as intent (conservative, balanced, aggressive), guided install and rollback recipes from the curated registry only, marginal attribution waterfall on the dashboard.
 - **Later: the open contract.** An optional token-shield.integration.json any optimization plugin can ship to declare capabilities, modes, state and health commands; Token Shield keeps supporting companions that never adopt it.
+- **Later: MCP as a distribution channel (founder direction, 2026-08-12 night).** A separate, opt-in Token Shield MCP server exposing the deterministic surface (profile, advise, experiment, report) to any MCP client: Claude Desktop, editors, other agents. Shipped as its own package, never bundled into the plugin, because an always-loaded MCP server would tax the very startup floor this tool exists to shrink and would break the plugin's cache-safe, zero-hook posture. Same gate as the rest of this section.
 
 Cautions recorded at adoption, so they are not rediscovered the hard way:
 
