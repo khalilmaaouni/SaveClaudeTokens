@@ -1,11 +1,11 @@
 ---
-name: save-claude-tokens
+name: token-shield
 description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /rewind, /compact, /clear and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
-version: 1.3.1
+version: 1.4.0
 license: MIT
 ---
 
-# Save Claude Tokens
+# Token Shield
 
 A playbook for running Claude Code cheaply. The core insight: you pay for the same context over and over. Every API call resends everything the session has accumulated, so the levers are (1) make the resend cheap via caching, (2) make the context small, (3) make the model match the job, and (4) make the output short. In that order of impact.
 

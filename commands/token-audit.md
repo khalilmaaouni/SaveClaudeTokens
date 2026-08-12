@@ -53,5 +53,5 @@ absent, say NO DATA and why; never fill a gap with a plausible figure. Never
 present a ratio as a share of money: this script deliberately carries no model
 price table, so it reports relative input units, not dollars.
 
-Load the `save-claude-tokens` skill for the playbook behind whichever lever
+Load the `token-shield` skill for the playbook behind whichever lever
 the numbers point at.

@@ -120,7 +120,7 @@ def render(mt, sm, sessions, days, include_sessions):
                        f"`{os.path.basename(s['file'])}` |")
         out += ["", "More than one model in a session means it switched mid-flight, "
                     "which rebuilds that session's cache from zero.", ""]
-    out += ["---", "", "Written by obsidian_export.py from SaveClaudeTokens. "
+    out += ["---", "", "Written by obsidian_export.py from Token Shield. "
             "Aggregates only: no conversation text, file contents, or tool output "
             "is read into this note."]
     return "\n".join(out) + "\n"

@@ -9,3 +9,6 @@ GANTT.html
 # python bytecode from running the self-check
 __pycache__/
 *.pyc
+
+# Rendered dashboards / local build output (carry your own numbers, never publish)
+.local-out/
