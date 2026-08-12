@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Calibrated checks for optimize.py. The load-bearing one: a hard rule is
 never classified movable, even when it also looks like history."""
+import os
+import tempfile
+
 import optimize as opt
 
 
@@ -50,6 +53,24 @@ def test_propose_keeps_every_hard_section_verbatim():
           "Moved to" in new_text and "ratified the plan" not in new_text)
     check("proposed file is not larger than the original", after <= before)
     check("at least the history section moved", any("Curation" in m[0] for m in moved))
+
+
+def test_cmd_propose_never_writes_the_source_claude_md():
+    # The never-lose-work contract: propose is backup-first and propose-only,
+    # never a mutation of the file it read. This exercises the real CLI entry
+    # point, cmd_propose, the one that actually opens the source path, not the
+    # pure propose() function above, which never touches a filesystem path at
+    # all and so cannot prove this claim.
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "CLAUDE.md")
+        original = HARD + "\n" + HISTORY + "\n" + SHORT
+        with open(src, "w") as f:
+            f.write(original)
+        before = open(src, "rb").read()
+        rc = opt.cmd_propose(src)
+        check("cmd_propose returns success", rc == 0)
+        after = open(src, "rb").read()
+        check("cmd_propose never writes to the source CLAUDE.md path", before == after)
 
 
 def _split(section_text):

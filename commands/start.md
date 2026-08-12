@@ -29,7 +29,7 @@ Steps:
 
 5. **Offer the three opt-ins, one choice window each.** Ask each of these as its own separate yes/no question; take none of them without a clear yes.
 
-   - **Wire the SessionEnd telemetry hook**, so usage accumulates automatically between sessions without paying a model to measure it. If yes, hand them this exact snippet to add to `~/.claude/settings.json` yourself (or add it only after they confirm you should edit that file directly):
+   - **Wire the SessionEnd telemetry hook**, so usage accumulates automatically between sessions without paying a model to measure it. If yes, ask separately whether you should edit `~/.claude/settings.json` directly; if they say yes to that too, add the snippet yourself, otherwise hand it to them to add:
 
      ```json
      {

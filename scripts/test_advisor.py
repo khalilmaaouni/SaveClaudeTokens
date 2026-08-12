@@ -204,10 +204,16 @@ def test_card_source_is_a_citable_pointer_not_a_bare_code():
     assert adv.format_source(url) == url
     assert adv.format_source("measured on this machine") == "measured on this machine"
 
-    # Every shipped strategy ends up citable: a CLAIMS row or a URL.
+    # Every shipped strategy ends up citable: a CLAIMS row, a URL, or a real
+    # file in this repo (checked on disk, not just shaped like a path, so a
+    # typo'd pointer fails this test the same way a bare code used to).
     for s in real:
         rendered = adv.format_source(s["source"])
-        assert rendered.startswith("docs/CLAIMS.md row") or "://" in rendered, (s["id"], rendered)
+        is_claims_row = rendered.startswith("docs/CLAIMS.md row")
+        is_url = "://" in rendered
+        is_repo_doc = rendered.startswith("docs/") and os.path.exists(
+            os.path.join(HERE, "..", rendered))
+        assert is_claims_row or is_url or is_repo_doc, (s["id"], rendered)
 
 
 def test_token_saver_entry_can_never_be_best():
