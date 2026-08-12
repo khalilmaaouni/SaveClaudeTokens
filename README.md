@@ -1,6 +1,34 @@
 # Token Shield
 
-Run Claude Code cheaply without losing quality. This plugin ships one skill, `token-shield`, a playbook Claude loads on demand when the work touches token cost: prompt caching, compaction decisions, model routing, config pruning, or output verbosity.
+Save Claude Code tokens. Prove every saving.
+
+[![tests](https://github.com/khalilmaaouni/token-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/khalilmaaouni/token-shield/actions/workflows/ci.yml)
+
+Token Shield measures what Claude Code actually consumed, finds the biggest waste, and proves what you cut with a real before and after. It reads the API usage counters Claude Code already writes to your disk, so the numbers are measured, not guessed. It runs locally and sends nothing anywhere.
+
+- Measures real usage from your own transcripts.
+- Keeps three numbers apart and never merges them: what Anthropic's caching already saved (native), what you can still cut (estimated), and what you proved (a verified before and after).
+- Shows tokens and API-equivalent dollars, priced per model, or NO PRICE DATA instead of a wrong price.
+- Local only. No account, no cloud. No prompt or file content leaves your machine.
+
+## Install
+
+```bash
+claude plugin marketplace add khalilmaaouni/token-shield
+claude plugin install token-shield@token-shield
+```
+
+That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
+
+Then run one command:
+
+```bash
+python3 scripts/cli.py            # quick honest summary
+python3 scripts/cli.py dashboard  # open the GUI
+python3 scripts/cli.py experiment start "shrink-claude-md"   # prove a change, before and after
+```
+
+> Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
 
 ## Why this exists
 
@@ -14,17 +42,6 @@ Every API call in a Claude Code session resends the whole accumulated context. M
 The skill turns each of these into a short set of rules Claude applies automatically, plus a monthly audit ritual and a decision table for `/rewind` versus `/recap` versus `/compact` versus a fresh session.
 
 Every behavioral claim in the skill is sourced to first-party documentation and dated, because this area changes. Several rules that circulate as folklore are wrong: editing CLAUDE.md mid-session is cache-safe (it just does not apply until you reload), while changing effort level rebuilds the whole prefix exactly like a model switch.
-
-## Install
-
-```bash
-claude plugin marketplace add khalilmaaouni/token-shield
-claude plugin install token-shield@token-shield
-```
-
-That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
-
-> Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add under the new name: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
 
 ## What is inside
 
