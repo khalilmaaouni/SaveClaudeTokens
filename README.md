@@ -68,9 +68,10 @@ output tokens coming from subagents, which is a different lever again.
 
 ## Optional tools, all opt in
 
-The plugin registers no hooks and runs nothing on its own. Installing it still
-costs one skill listing line and nothing else. These three scripts exist for
-when you want them, and each does nothing until you run it.
+The plugin registers no hooks and runs nothing on its own. Installing it costs
+one skill listing line and one command listing line, and nothing else runs.
+These three scripts exist for when you want them, and each does nothing until
+you run it.
 
 **`context_lint.py`** measures what you pay at every session start and reports
 where the rent is going. It never edits a file.
@@ -82,7 +83,9 @@ python3 scripts/context_lint.py
 It reads your CLAUDE.md files and this project's auto-memory index, then flags
 duplicated rules, multi-step procedures that belong in a skill, rules that name
 a path and could be scoped to load only when a matching file is read, and stale
-dated entries. For the memory index it applies the documented load limit (the
+dated entries. It is advisory and exits 0 by default so it never breaks a shell
+chain; pass `--strict` to exit nonzero on a finding if you want to gate CI on
+it. For the memory index it applies the documented load limit (the
 first 200 lines or 25KB, whichever comes first) to the content that actually
 loads, with frontmatter and HTML comments stripped the way Claude Code strips
 them, and tells you exactly which lines are falling off the end unread.

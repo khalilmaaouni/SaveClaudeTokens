@@ -10,13 +10,16 @@ one-line skill listing. Wiring instructions are in the README.
 WHAT IT DOES
 Claude Code sends hook input as JSON on stdin, including transcript_path.
 This reads that transcript, computes the same measured counters the audit
-uses, and appends one JSON object to a local ledger. Then you have a history
-without paying a model anything to produce it: measuring token spend by asking
-a language model to measure it is the joke this script refuses to be.
+uses, and appends one JSON object to a local ledger: counters, a distinct-model
+count, and the transcript basename, never any conversation content. Then you
+have a history without paying a model anything to produce it: measuring token
+spend by asking a language model to measure it is the joke this script refuses
+to be.
 
 WHAT IT DOES NOT DO
 - It never writes conversation text, file contents, prompts, or tool output to
-  the ledger. Only counters, a model list, and the transcript's own path.
+  the ledger. Only counters, a distinct-model count, and the transcript's
+  basename (never its full path, which could name a private project).
 - It never sends anything anywhere. The ledger is a local file.
 - It never prints to stdout, so it cannot inject anything into a session.
 - It never fails your session: any error exits 0 silently, because a telemetry

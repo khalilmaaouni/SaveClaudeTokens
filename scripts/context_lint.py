@@ -40,7 +40,10 @@ MEMORY_MAX_LINES = 200            # documented hard load limit
 MEMORY_MAX_BYTES = 25 * 1024      # documented hard load limit
 
 FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n---\r?\n", re.DOTALL)
-HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# Block-level only: a comment starting a line and running to its close, the
+# whole line removed. Claude Code strips these, not a comment sitting inline in
+# a line of prose, so matching inline ones too would under-report loaded bytes.
+HTML_COMMENT = re.compile(r"(?ms)^[ \t]*<!--.*?-->[ \t]*\r?\n?")
 IMPORT = re.compile(r"(?<![`\w])@([~./][^\s`]*)")
 DATE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 BULLET = re.compile(r"^\s*[-*+]\s+(.*\S)\s*$")
@@ -63,6 +66,9 @@ def normalize(line):
 def truncation_report(text, max_lines, max_bytes):
     """Where a hard-limited index gets cut, measured on the loaded content."""
     body = loaded_content(text)
+    # keepends so each line carries its own terminator (1 byte for \n, 2 for
+    # \r\n), which keeps the byte cut honest on CRLF files.
+    raw_lines = body.splitlines(keepends=True)
     lines = body.splitlines()
     by_line = len(lines) > max_lines
     encoded = body.encode("utf-8")
@@ -73,8 +79,8 @@ def truncation_report(text, max_lines, max_bytes):
     cut_line = max_lines if by_line else len(lines)
     if by_bytes:
         kept, used = 0, 0
-        for ln in lines:
-            size = len(ln.encode("utf-8")) + 1
+        for ln in raw_lines:
+            size = len(ln.encode("utf-8"))
             if used + size > max_bytes:
                 break
             used += size
@@ -197,12 +203,15 @@ def project_memory_index(cwd=None):
     """The auto-memory index for THIS project only.
 
     Auto memory lives at ~/.claude/projects/<project>/memory/, where <project>
-    is the working directory path with separators replaced by dashes. Scanning
-    every project's memory instead would read other projects' notes to answer a
-    question about this one, which is both noisy and nobody's business here.
+    is the working directory path with every non-alphanumeric character
+    replaced by a dash (not only the separator: a username with a dot in it,
+    like jane.doe, would be missed by separator-only slugging).
+    Scanning every project's memory instead would read other projects' notes to
+    answer a question about this one, which is both noisy and nobody's business
+    here.
     """
     cwd = os.path.abspath(cwd or os.getcwd())
-    slug = cwd.replace(os.sep, "-")
+    slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
     path = os.path.expanduser(os.path.join("~/.claude/projects", slug, "memory", "MEMORY.md"))
     return path if os.path.isfile(path) else None
 
@@ -229,10 +238,14 @@ def default_targets(all_memory=False):
     if all_memory:
         out += [(p, True) for p in all_memory_indexes()]
     else:
-        mem = project_memory_index()
-        if mem:
-            out.append((mem, True))
+        out.append((project_memory_index(), True))  # None means "looked, found none"
     return out
+
+
+def expected_memory_index_path(cwd=None):
+    cwd = os.path.abspath(cwd or os.getcwd())
+    slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    return os.path.expanduser(os.path.join("~/.claude/projects", slug, "memory", "MEMORY.md"))
 
 
 def main():
@@ -242,6 +255,9 @@ def main():
                     help="treat this path as an auto-memory MEMORY.md index")
     ap.add_argument("--all-memory", action="store_true",
                     help="check every project's memory index, not just this project's")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit nonzero if any HIGH or MEDIUM finding (for CI gating); "
+                         "by default this is an advisory report and always exits 0")
     a = ap.parse_args()
 
     targets = [(os.path.abspath(f), False) for f in a.files]
@@ -254,6 +270,12 @@ def main():
 
     worst = 0
     for path, is_mem in targets:
+        if path is None:  # project memory index looked for but not found
+            print(f"\n=== auto-memory index ===")
+            print(f"  [INFO] no index at {expected_memory_index_path()} "
+                  f"(this project has none yet, or its slug differs). "
+                  f"Use --all-memory to check every project, or --memory-index PATH.")
+            continue
         findings, stats = check(path, is_mem)
         kind = "auto-memory index" if is_mem else "always-loaded instructions"
         print(f"\n=== {path}  ({kind}) ===")
@@ -270,7 +292,9 @@ def main():
     print("\nNothing above was changed. Every finding is a question about whether a "
           "line earns what it costs on every call of every session; HEURISTIC ones "
           "are prompts to look, not verdicts.")
-    return worst
+    # Advisory by default: a report should not break a shell chain. --strict is
+    # for anyone who wants to fail CI on a finding.
+    return worst if a.strict else 0
 
 
 if __name__ == "__main__":
