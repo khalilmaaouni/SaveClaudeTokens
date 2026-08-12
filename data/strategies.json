@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated": "2026-08-12",
+  "updated": "2026-08-13",
   "strategies": [
     {
       "id": "cache.fixed-parent-model",
@@ -231,7 +231,7 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "https://code.claude.com/docs/en/hooks",
+      "source": "https://code.claude.com/docs/en/costs#reduce-token-usage",
       "how": [
         {"text": "Before reading a large file in full, grep or search for the symbol you actually need."},
         {"text": "Use Read with an offset and limit on large files instead of reading them whole."},
@@ -261,7 +261,7 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "D5",
+      "source": "https://code.claude.com/docs/en/costs#reduce-token-usage",
       "how": [
         {"text": "Identify build, test, or log commands that produce mostly noise."},
         {"text": "Route that output through a filter or a file instead of letting it land raw in the transcript."},
@@ -313,7 +313,7 @@
       "what_it_changes": "Turn on the ponytail skill, which enforces a build-the-minimum ladder (reuse before writing, stdlib before a dependency, one line before ten) on every response.",
       "expected_benefit": "Less generated code and config to load and re-read later; smaller diffs, fewer new files.",
       "evidence": "ESTIMATED",
-      "drawback": "It is a behavioral bias, not a check: on a task that genuinely needs the fuller version, a lazy first pass can undershoot and need a second pass, which costs more than building it properly once.",
+      "drawback": "It is a behavioral bias, not a check: on a task that genuinely needs the fuller version, a lazy first pass can undershoot and need a second pass, which costs more than building it properly once. Also, most of this benefit is achievable with a one-line instruction such as write the minimal working solution, no unrequested abstractions, so the plugin's own session-start and subagent hooks are infrastructure on top of what a plain instruction already gets you; its own docs carry no stated always-on token cost for those hooks, so that overhead is unmeasured, not zero.",
       "quality_risk": "LOW",
       "reversibility": "Fully reversible, disable it any time.",
       "how_measured": "instruction.claude_md_project_bytes from the profile; a heavier project instruction file correlates with more built-up scope in general, a loose proxy rather than a direct measurement of code volume.",
@@ -321,7 +321,7 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A10",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
       "how": [
         {"text": "Check whether ponytail is already installed and enabled.", "command": "claude plugin list"},
         {"text": "Enable it if it is installed but off.", "command": "claude plugin enable ponytail"},
@@ -341,7 +341,7 @@
       "what_it_changes": "Turn on the caveman skill to compress narration and status lines into ultra-terse output.",
       "expected_benefit": "Cuts output tokens spent on narration and status commentary.",
       "evidence": "ESTIMATED",
-      "drawback": "Net-negative risk: a compressed instruction can be misread, causing a corrective turn; if corrective turns rise after enabling it, the extra back-and-forth can cost more than the compression saved. Worth checking, not assuming.",
+      "drawback": "Net-negative risk: a compressed instruction can be misread, causing a corrective turn; if corrective turns rise after enabling it, the extra back-and-forth can cost more than the compression saved. Worth checking, not assuming. Also, terse narration is largely achievable with a one-line instruction such as answer in compressed, no-fluff prose, without a plugin running a hook on every session start and every prompt; the plugin's own measured 65 percent cut is scoped to its full mode only and is not benchmarked against that simpler one-line baseline.",
       "quality_risk": "MED",
       "reversibility": "Fully reversible, turn it off any time.",
       "how_measured": "usage.output_tokens_total from the profile; more output volume is where compression has more to work with, a loose proxy rather than a direct narration measurement.",
@@ -349,7 +349,7 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A10",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
       "how": [
         {"text": "Check whether caveman is already installed and enabled.", "command": "claude plugin list"},
         {"text": "Enable it if it is installed but off.", "command": "claude plugin enable caveman"},
@@ -377,7 +377,7 @@
       "alternatives": [],
       "companion": null,
       "requires_confirmation": false,
-      "source": "D5",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
       "how": [
         {"text": "Check whether token-saver is already installed.", "command": "claude plugin list"},
         {"text": "This card is detect-only: it never turns anything on, so there is nothing further to apply."},

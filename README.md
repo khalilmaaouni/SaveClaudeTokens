@@ -20,7 +20,9 @@ claude plugin install token-shield@token-shield
 
 That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
 
-Then run one of these six commands:
+Then run `/token-shield:start` once: it measures your usage, names the one thing most worth fixing, and asks before it touches anything.
+
+Or skip the walkthrough and run any command directly:
 
 ```bash
 python3 scripts/cli.py summary               # /token-shield:stats
@@ -220,6 +222,22 @@ The headline numbers are re-derived by a second, independent code path and
 checked for zero drift before they are published, and every measured figure
 carries the same caveat: it was taken on one machine, so run the tools on yours.
 
+## For skeptics: reproduce our numbers
+
+Do not take a number on this page on faith.
+
+- **Run the measurement on your own machine.** Every measured figure here came from one machine's transcripts, stated as such throughout. `python3 scripts/measure_tokens.py --days 30 --sessions` reads your own usage counters and prints your own numbers, not ours.
+- **Check the reproducible benchmark.** A scripted comparison across configurations lives in `bench/`, see bench/README.md for how to run it and how it is scored.
+- **Prove your own before and after.** Experiment Mode is the only path to a VERIFIED number in this tool: pin a baseline, make one change, close the window, and it either produces a real verified figure from your data or refuses with NOT_PROVEN rather than guess.
+
+```bash
+python3 scripts/cli.py experiment start "my-first-change"
+# make one change, then:
+python3 scripts/cli.py experiment end "my-first-change"
+```
+
+See [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) for what makes a comparison count and why it sometimes refuses.
+
 ## Pairs well with
 
 - caveman (terse narration) and ponytail (minimal generated code) for the output side.
@@ -235,7 +253,7 @@ Token Shield writes to three locations:
 - `~/.token-shield/profile.json` (your session profile)
 - `~/.token-shield/treatments.json` (advisor treatment memory)
 - `~/.token-shield/token-shield.html` (the dashboard, if you ran it)
-- `~/.claude/plugins/cache/token-shield/*/savings.jsonl` (experiment ledger, if you opted into session-end telemetry)
+- `~/.claude/token-shield/savings.jsonl` (experiment ledger, once you start one)
 - `~/.claude/settings.json`: one optional `SessionEnd` hook line (only if you ran `/token-shield:start`)
 
 To uninstall with full cleanup:
