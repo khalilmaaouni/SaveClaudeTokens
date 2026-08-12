@@ -27,6 +27,7 @@ def _load(name):
 lint = _load("context_lint")
 telem = _load("session_end_telemetry")
 export = _load("obsidian_export")
+shield = _load("token_shield")
 mt = _load("measure_tokens")
 
 
@@ -198,26 +199,80 @@ def test_telemetry_never_breaks_the_session():
 
 
 def test_lever_naming_follows_the_measurement():
+    # Both renderers map the shared mt.dominant_lever key to their own wording.
     shrink = {"first_request_share_median": 0.36, "hit_ratio_median": 0.95,
               "subagent_output_share": 0.1}
-    assert export.lever(shrink)[0] == "Shrink the always-loaded context"
+    assert export.lever(shrink, mt)[0] == "Shrink the always-loaded context"
+    assert shield.lever(shrink, mt)[0] == "Shrink the always-loaded context"
 
     cache = {"first_request_share_median": 0.05, "hit_ratio_median": 0.4,
              "subagent_output_share": 0.1}
-    assert export.lever(cache)[0] == "Keep the cache hot"
+    assert export.lever(cache, mt)[0] == "Keep the cache hot"
+    assert shield.lever(cache, mt)[0] == "Keep the cache hot"
 
     routing = {"first_request_share_median": 0.05, "hit_ratio_median": 0.95,
                "subagent_output_share": 0.5}
-    assert export.lever(routing)[0] == "Route work deliberately"
+    assert export.lever(routing, mt)[0] == "Route work deliberately"
 
     healthy = {"first_request_share_median": 0.05, "hit_ratio_median": 0.95,
                "subagent_output_share": 0.1}
-    assert export.lever(healthy)[0] == "No single dominant lever"
+    assert export.lever(healthy, mt)[0] == "No single dominant lever"
 
     # Nothing measured must never produce a confident recommendation.
-    assert export.lever({"first_request_share_median": None,
-                         "hit_ratio_median": None,
-                         "subagent_output_share": None})[0] == "NO DATA"
+    nodata = {"first_request_share_median": None, "hit_ratio_median": None,
+              "subagent_output_share": None}
+    assert export.lever(nodata, mt)[0] == "NO DATA"
+    assert shield.lever(nodata, mt)[0].startswith("Not enough")
+
+
+def test_shield_saving_is_ninety_percent_of_cache_reads():
+    # The hero number is the honest one: a cached token bills at 0.1x, so the
+    # saving against the uncached price is 0.9x per read token.
+    assert shield.CACHE_READ == 0.1
+    assert shield.human(1_500_000) == "1.5M"
+    assert shield.human(76_300_000_000) == "76.3B"
+    assert shield.human(None) == "NO DATA"
+
+
+def test_shield_saving_is_net_of_the_write_premium():
+    # The headline must be NET: the gross read saving minus the cache-write
+    # premium (0.25x on 5m writes, 1.0x on 1h writes). Reporting the gross as
+    # the net was the exact overstatement an audit flagged.
+    sm = {"read_total": 100.0, "write_5m_total": 40.0, "write_1h_total": 10.0,
+          "input_total": 5.0}
+    sv = shield.savings_breakdown(sm)
+    assert sv["gross"] == 90.0                      # 0.9 * 100
+    assert sv["write_premium"] == 0.25 * 40 + 1.0 * 10   # 20.0
+    assert sv["saved"] == 90.0 - 20.0               # 70.0 net, not 90 gross
+
+
+def test_prescriptions_are_adaptive_and_carry_the_math():
+    mt2 = mt
+
+    def sess(first, calls, models=1, rewrite=0.0, read=0):
+        return {"first_request": first, "calls": calls, "models": models,
+                "rewrite_ratio": rewrite, "read": read}
+
+    # A profile with model switching and a heavy floor.
+    sessions = ([sess(90000, 300, models=2) for _ in range(6)]
+                + [sess(90000, 300, models=1) for _ in range(4)])
+    sm = {"first_request_median": 90000, "first_request_share_median": 0.36,
+          "read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0}
+    rx = shield.prescriptions(sm, sessions)
+    titles = [r["title"] for r in rx]
+    assert "Switching model mid-session" in titles
+    assert "The always-loaded startup floor" in titles
+    # The switch card carries its own measured count and a real saving figure.
+    sw = next(r for r in rx if r["title"].startswith("Switching"))
+    assert "6 of 10" in sw["measure"] and sw["saving"] > 0
+    assert sw["tag"] == "PROVEN"
+
+    # A clean profile gets no prescriptions: the dashboard is adaptive, not
+    # a fixed lecture.
+    clean = [sess(9000, 50, models=1) for _ in range(5)]
+    sm_clean = {"first_request_median": 9000, "first_request_share_median": 0.10,
+                "read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0}
+    assert shield.prescriptions(sm_clean, clean) == []
 
 
 if __name__ == "__main__":
