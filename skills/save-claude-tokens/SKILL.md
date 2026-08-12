@@ -1,7 +1,7 @@
 ---
 name: save-claude-tokens
-description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /compact and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
-version: 1.0.0
+description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /rewind, /compact, /clear and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
+version: 1.1.0
 license: MIT
 ---
 
@@ -9,123 +9,159 @@ license: MIT
 
 A playbook for running Claude Code cheaply. The core insight: you pay for the same context over and over. Every API call resends everything the session has accumulated, so the levers are (1) make the resend cheap via caching, (2) make the context small, (3) make the model match the job, and (4) make the output short. In that order of impact.
 
-## The cost model in four facts
+Rule zero: measure, then act. Every claim below is either sourced to first-party documentation or marked as a habit. Where this playbook cannot verify something, it says so instead of guessing.
 
-Verified against the Anthropic prompt caching docs (platform.claude.com/docs/en/build-with-claude/prompt-caching), 2026-08-12:
+## The cost model
 
-1. Caching is a prefix match. Any byte change anywhere in the prefix invalidates everything after it. Render order is tools, then system prompt, then messages.
-2. Cache writes cost 1.25x base input (5 minute TTL) or 2x (1 hour TTL). Cache reads cost 0.1x. So a cache-friendly session pays roughly a tenth for everything it does not disturb.
-3. The TTL refreshes free on every use. A session that keeps moving stays cached. A session that idles past the TTL re-pays the full write on its next turn.
-4. Claude Code places cache breakpoints automatically. You cannot place them yourself, but you control the two things that matter: whether the prefix stays stable, and how big it is.
+Verified against code.claude.com/docs/en/prompt-caching and platform.claude.com/docs/en/build-with-claude/prompt-caching, read 2026-08-12.
+
+1. Caching is a prefix match. The match is exact, so a change anywhere in the prefix recomputes everything after it. There is no per-file or per-segment caching.
+2. Requests are ordered so the stable content comes first: system prompt (core instructions, tool definitions, output style), then project context (CLAUDE.md, auto memory, unscoped rules), then the conversation. A change to the conversation layer leaves the two layers above it cached. A change to the system prompt invalidates everything.
+3. Cache writes bill at 1.25x base input for the 5 minute TTL and 2x for the 1 hour TTL. Cache reads bill at 0.1x. A session that does not disturb its prefix pays roughly a tenth for everything it re-reads.
+4. The TTL resets on every cache hit, so the cache stays warm as long as you keep working. Which TTL you get depends on how you authenticate: on a Claude subscription Claude Code requests the 1 hour TTL automatically, and on an API key or a third-party provider it stays at 5 minutes unless you set `ENABLE_PROMPT_CACHING_1H=1`. A subscription that has gone over its plan limit and is drawing on usage credits drops back to 5 minutes automatically, because 1 hour writes cost more. Subagents use the 5 minute TTL even on a subscription.
+5. Two things outside the prompt text are still part of the cache key: the model, and the effort level. Each has its own cache.
+6. The cache is effectively scoped to one machine and one directory, because the system prompt embeds the working directory. Two sessions in different directories miss each other's cache, and that includes two worktrees of the same repository. Parallel sessions in the same directory do share it.
 
 ## Measure before you optimize
 
-Do not reason about which lever matters most. Measure it, then act. Run
-`/token-audit`, or the script directly:
+Do not reason about which lever matters most. Measure it. Run `/token-audit`, or the script directly:
 
 ```bash
 python3 <plugin>/scripts/measure_tokens.py --days 30 --sessions
 ```
 
-It reads the `usage` counters the API returned on every assistant message in
-the local session transcripts, which are the counters billing is computed
-from, so its output is measurement rather than estimation. It reports the
-preamble cost (what every call pays before any work happens), the cache hit
-ratio, a per-session rewrite ratio that isolates cache busting, and the output
-share. Anything it cannot measure it prints as NO DATA.
+It reads the `usage` counters the API returned on every assistant message in the local transcripts, which are the counters billing is computed from, so its output is measurement rather than estimation. Anything it cannot measure it prints as NO DATA.
 
-Read it this way: a high preamble means Lever 2 dominates and nothing else is
-worth doing first; a hit ratio below roughly 0.7 on long sessions means Lever
-1 has real headroom; a high output share means Lever 5 does. Snapshot a
-baseline with `--baseline`, change one thing, then `--compare`. One variable
-at a time, or the result attributes to nothing.
+Read it this way: a high first request share means Lever 2 dominates and nothing else is worth doing first; a hit ratio below roughly 0.7 on long sessions means Lever 1 has real headroom; a high subagent share means Lever 4 does. Snapshot with `--baseline`, change one thing, then `--compare`. One variable at a time, or the result attributes to nothing.
 
-A worked case: on one machine the audit returned a 0.95 median hit ratio with
-rewrite ratios of 0.01 to 0.07, which killed the assumption that cache
-discipline was the problem, and a 62,860 token median preamble, which showed
-the entire headroom was in the always-loaded set. The measurement redirected
-the work; the intuition would have sent it the wrong way.
+Two traps the script now guards, both of which produced a confident wrong number before it did:
 
-## Lever 1: keep the cache hot (habits, not settings)
+- Compare like windows. A 1 day window against a 90 day baseline is not a measurement of your change, it is a measurement of which sessions fell inside each window.
+- Do not compare a number across a change to how it is computed. When the metric's population changes, the delta measures your edit to the meter, not your spend.
 
-- Never edit CLAUDE.md, settings.json, hooks, or MCP config mid-session. Each edit changes the prefix for every later request and re-bills the whole preamble. Config changes happen at session end, then the next session starts clean.
-- Never switch models mid-task. Caches are model-scoped; a switch rebuilds from zero. Need a cheaper model for a subtask? Spawn a subagent on that model and keep the main loop where it is.
+## Lever 1: keep the cache hot
+
+Most cache folklore is wrong in both directions: people fear edits that are free and make switches that cost a full rebuild. The documented list, from the source above.
+
+These rebuild the whole prefix on the next turn:
+
+| Action | Why |
+|---|---|
+| Switching model with `/model` | Each model has its own cache. Content identical, zero hits. |
+| Changing effort with `/effort` | The cache is keyed by effort as well as model. Claude Code confirms first. |
+| Turning on fast mode | Adds a request header that is part of the cache key. Costs once per conversation, so turn it on early or not at all. |
+| Connecting or disconnecting an MCP server whose tools load into the prefix | Tool definitions sit in the system prompt layer. |
+| Enabling or disabling a plugin that provides an MCP server | Same reason. Other plugin components do not do this. |
+| Adding or removing a whole-tool deny rule (`Bash`, `WebFetch`, `"*"`) | Removes the tool definition from the system prompt layer. |
+| `/compact` | Replaces history with a summary, so the conversation layer no longer shares a prefix. |
+| Upgrading Claude Code, and resuming a long session afterwards | New system prompt or tools. Resuming a long old session after an upgrade can be the most expensive request you send. |
+
+These are free, and several are free precisely because they do not apply until a reload:
+
+| Action | Note |
+|---|---|
+| Editing CLAUDE.md mid-session | Does not invalidate the cache, and does not apply either. The version loaded at session start stays in force until `/clear`, `/compact`, or restart. The exception: nested CLAUDE.md files in subdirectories, and rules with `paths:` frontmatter, load later when Claude first reads a matching file, so editing one of those before it loads does take effect. |
+| Editing your MCP config | Does not by itself change the cache. It takes effect on restart, which is when a server connects or disconnects. |
+| Enabling or disabling a plugin that ships skills, commands, agents, hooks, LSP servers, monitors or themes | Appended, not prefixed. The next request pays for the new content and still reads everything before it from cache. |
+| Changing output style | Cache-safe, and also does not apply until reload. |
+| Changing permission mode | Cache-safe, unless the `opusplan` setting makes the toggle a model switch. |
+| Invoking a skill or command | Injected as a user message at the point of invocation. |
+| Editing a file Claude already read | File contents enter context on read. The edit appends a change notice; it does not rewrite history. |
+| `/recap` | Appends a summary as command output rather than replacing history. |
+| `/rewind` | Truncates back to a prefix the cache was already built from. |
+| Spawning a subagent | It builds its own cache. From the parent's side, the call and result just append. |
+
+So the habits that actually pay:
+
+- Pick model and effort at the top of a session and leave them. Need a cheaper model for a subtask? Spawn a subagent, do not switch the main loop.
+- Do config work between sessions, not because an edit costs you (mostly it does not) but because an edit that does not apply is worse than useless: you will believe a rule is active when it is not.
 - Batch independent tool calls into one message. Five parallel calls in one request cost one cache read; five sequential requests cost five.
-- For long waits (builds, CI, downloads) use background execution that re-invokes the session when finished. Do not idle past the TTL and then poke the session repeatedly; every poke after expiry is a fresh cache write.
-- Keep one task per session. Unrelated context dragged along is pure cost: you pay 0.1x on all of it, every single call.
+- For long waits use background execution that re-invokes the session when it finishes. Idling past the TTL and then poking the session repeatedly pays a fresh write each time.
+- Keep one task per session. Unrelated context is pure rent: you pay 0.1x on all of it, on every call.
+- Prefer a fork over a subagent when the work genuinely needs the parent's history, since a fork inherits the parent's prefix and reads its cache.
 
-## Lever 2: shrink the always-loaded context (the biggest win)
+## Lever 2: shrink the always-loaded context
 
-Everything loaded at session start (CLAUDE.md, plugin skill listings, MCP tool schemas and instructions, session-start hook output) is paid on every call of every session. Budget it like rent.
+Everything loaded at session start is paid on every call of every session. Budget it like rent, and measure it as first request tokens rather than counting installed things.
 
-- CLAUDE.md carries hard rules only, in terse lines. Details, rationale, history, and playbooks live in skills or notes that load on demand. A rule of thumb: if a paragraph is read once a month, it does not belong in a file read on every call.
-- Prune plugins. Each installed plugin adds skill listing lines, and plugins with MCP servers add tool schemas and instruction blocks. Disable anything unused: `claude plugin disable <name>`. Fully reversible with `claude plugin enable <name>`.
-- Prune standalone MCP servers the same way. Back up your `~/.claude.json` before removing one so the config is recoverable.
-- Keep session-start hooks quiet. Hook stdout enters the context. A hook that prints ten lines when one would do taxes every session it fires in.
+- CLAUDE.md carries hard rules only, in terse lines. Details, rationale, history and playbooks live in skills or notes that load on demand. If a paragraph is read once a month, it does not belong in a file read on every call.
+- Prune plugins. Each installed plugin adds listing lines. Disable what you do not use with `claude plugin disable <name>`, reversible with `claude plugin enable <name>`.
+- MCP servers need measurement, not a reflex. On supported models Claude Code defers MCP tool definitions behind tool search by default, so only names load upfront and the per-server schema cost largely disappears. Deferral is unavailable or disabled in named cases, including a custom `ANTHROPIC_BASE_URL` gateway, some third-party hosting, and servers or tools marked `alwaysLoad`. Deferral shrinks the schema cost, not the whole cost: observed on one machine, the tool name list and each server's instruction block still arrive at session start. So: check your own first request number before and after, and prune what is expensive, unstable, or unused rather than pruning by server count.
+- Keep session-start hooks quiet. Hook stdout enters the context. A hook printing ten lines where one would do taxes every session it fires in.
 - Do not run two skill frameworks that overlap. Pick one, disable the other.
-- Audit ritual (monthly, five minutes):
+- Skill listings have their own budget, and you can spend it deliberately. A skill you want available but not advertised takes `disable-model-invocation: true` in its frontmatter. Skills whose SKILL.md you would rather not edit, such as one checked into a shared repo, can be turned down from settings with `skillOverrides`, whose states are `on`, `name-only`, `user-invocable-only` and `off`; `name-only` lists the skill without its description and frees budget for the rest. Plugin skills are not affected by `skillOverrides`, so manage those through `/plugin`. Each listing entry is capped at 1,536 characters, so a long description is wasted on top of being expensive: put the key use case first.
+- Audit ritual, monthly, five minutes:
 
 ```bash
-wc -c ~/.claude/CLAUDE.md                      # bytes / 4 is a rough token estimate
-claude plugin list | grep -c '❯'               # installed plugin count
-claude mcp list                                 # servers; "Needs authentication" means never used
+python3 <plugin>/scripts/measure_tokens.py --days 30   # the number that matters
+wc -c ~/.claude/CLAUDE.md                              # bytes over 4 is a rough token estimate
+claude plugin list                                     # what is installed
+claude mcp list                                        # servers; "Needs authentication" means never used
 ```
 
 Anything with zero recent use and no planned use gets disabled, and the decision gets one line in your notes so it is not re-litigated.
 
-## Lever 3: compact versus fresh session (the decision rule)
+## Lever 3: choose the right session boundary
 
-Compaction summarizes history into the context; it costs a large generation, loses detail, and the rewritten context busts the cache anyway. A fresh session costs one prefix write and drops all dead history from every later call. So:
+There are four boundaries and they are not interchangeable. Pick by intent.
 
-- CHECKPOINT FIRST, ALWAYS: at every good stopping point, write state to disk (a STATE.md, a handover note, a session log): what is finished with its proof, what is in flight, what is not started, open questions.
-- FRESH SESSION (the default): when the next chunk of work can be stated from that disk state. Start new, point it at the checkpoint file. Cheaper and cleaner than dragging a summary.
-- /compact (the exception): only when you are mid-task and the conversational nuance is not yet on disk, for example deep in a debugging thread whose dead ends matter. Compact once, with focus instructions, then plan the next fresh start.
-- /clear: always, between unrelated tasks in the same session.
-- Never let auto-compact surprise you. When context passes roughly 70 percent, checkpoint proactively and choose, rather than letting the harness summarize mid-thought.
+- `/rewind` when you went down a path you want to abandon. It truncates to a prefix that is already cached, which is the cheapest way out of a bad thread.
+- `/recap` when you only need orientation. It appends a summary and leaves history intact.
+- `/compact` at a natural break, when the task continues but the old history is dead weight. While the cache is warm the summarization request reads your prefix from cache, so a mid-session compact costs a fraction of what the context size suggests, and most of its cost is generating the summary. It is most expensive when you resume an old session cold, because then there is no cache to read.
+- A fresh session when the next task is unrelated or can be restated from disk. It drops all dead history from every later call.
+
+Checkpoint first, always. At every good stopping point write state to disk (a STATE.md, a handover note, a session log): what is finished with its proof, what is in flight, what is not started, open questions. A checkpoint makes every one of the four boundaries cheap, and makes an unplanned auto-compact survivable.
+
+Run the boundary you chose at a break you chose. Letting auto-compaction fire mid-task hands the timing to the harness.
 
 ## Lever 4: route the model to the job
 
-Input and output prices scale steeply with model tier, so a mechanical loop on a frontier model costs several times the same loop on a small one. The routing table:
+Input and output prices scale steeply with model tier, so a mechanical loop on a frontier model costs several times the same loop on a small one.
 
 | Job | Tier |
 |---|---|
-| Orchestration, architecture, judging, adversarial review, final synthesis, anything user-critical | Strongest available (SOTA) |
+| Orchestration, architecture, judging, adversarial review, final synthesis, anything user-critical | Strongest available |
 | Scoped implementation and search from a precise spec, drafting | Middle tier |
 | Mechanical bulk: renames, format sweeps, extraction, inventory greps | Cheapest tier |
 
 - Declare the tier in every subagent brief, with the reason. An unstated tier is a mistake, not a default.
 - Never run mechanical loops on the strongest tier, and never let the cheapest tier verify its own work or judge anything. Verification runs on the strong lane.
-- Match reasoning effort the same way: low for mechanical stages, medium as the default, high only for the hardest verify and judge stages.
+- Effort is a real lever but it is not a free one: changing it mid-session rebuilds the cache exactly like a model switch. Choose it at the top of the session, or carry the rebuild deliberately.
+- Route by spawning, not switching. A subagent gets its own model and its own context and leaves the parent's cache intact.
 - One deterministic script beats a subagent for one deterministic job. An agent dispatch costs a whole fresh context; a bash or python script costs nothing. Delegate judgment, not loops.
+- Subagents are not free and not automatically wasteful. They are worth it when they keep a flood of exploration out of the parent context, when the result comes back small, or when parallelism is real. They are waste when dispatched for a task a script would have done. Measure the share: `/token-audit` reports what fraction of your output tokens subagents produced.
 
 ## Lever 5: output discipline
 
 Output tokens cost several times input tokens, and everything you output is re-read as input on every later call. Twice taxed.
 
-- Use a terse output mode for narration and status if one is installed (community examples: caveman compresses working commentary, ponytail makes generated code minimal). Keep full prose only for deliverables a human will reuse.
-- Never dump raw logs. Quote the one decisive line. Read files with offset and limit, grep with head limits, tail the build output.
-- Cap subagent reports. A subagent that returns its whole transcript re-bills that transcript into the parent forever. A few hundred tokens of findings is the contract.
+- Use a terse output mode for narration and status if one is installed. Keep full prose for deliverables a human will reuse.
+- Never dump raw logs. Send noisy commands to a file, then read back the exit status, the error lines, and a summary, keeping the full log on disk for exact inspection. That preserves the evidence while keeping it out of context.
+- Read files with offset and limit, grep with head limits, tail the build output.
+- Cap subagent reports. A subagent that returns its whole transcript re-bills that transcript into the parent forever. A few hundred tokens of findings, evidence and file pointers is the contract.
 - Prefer text checks over screenshots when both would answer the question. Images are token-heavy.
-- Command-output compressors (for example the token-saver plugin) are a pure win for reading, but never let compressed output stand as evidence where exact text matters. Re-run that one command raw.
+- Command-output compressors are a pure win for reading, but never let compressed output stand as evidence where exact text matters. Re-run that one command raw.
 
 ## Lever 6: durable memory beats re-derivation
 
 The most expensive token is the one spent re-discovering something a past session already knew.
 
-- Keep decisions, learnings, and project state in on-disk notes (an Obsidian vault, a docs folder, STATE.md files). Sessions read them on demand instead of re-exploring the repo.
-- Keep a token-waste ledger: when a session burns tokens on something avoidable (a runaway fleet, a re-read of a huge file, a re-derived decision), append one line: date, what it cost, the rule that prevents it. Review monthly; promote repeat offenders into your CLAUDE.md hard rules.
+- Keep decisions, learnings and project state in on-disk notes. Sessions read them on demand instead of re-exploring the repo.
 - Pointer, not payload: the always-loaded file carries one line pointing at the note, never the note itself.
+- Keep a token-waste ledger: when a session burns tokens on something avoidable, append one line with the date, what it cost, and the rule that prevents it.
+- Promote a ledger line into an always-loaded rule only after the same waste happens twice, the lesson is stable, and it is short enough to state in one line. A rule in CLAUDE.md pays rent on every call of every session, so it has to be worth more than that. Demote in the other direction: rules that apply to one subtree, or that a linter or hook could enforce, do not belong there.
 
-## Anti-pattern ledger (seed entries, all from real incidents)
+## Anti-pattern ledger
 
-1. Unbounded subagent fleets. One machine's postmortem found subagents were 74 percent of output tokens in a runaway day. Fix: a per-session token ceiling enforced by a hook, a declared ceiling before any unattended run, and no new dispatches past 80 percent of it.
+1. Unbounded subagent fleets. One machine's postmortem found subagents were 74 percent of output tokens in a runaway day; a later measurement over 90 days on the same machine put them at 41 percent of all output tokens. Fix: a per-session token ceiling, a declared ceiling before any unattended run, and no new dispatches past 80 percent of it.
 2. Polling sleeps. A loop that wakes every 30 seconds to check a build pays a full context resend per wake. Fix: background execution with completion callbacks.
-3. Cross-project enumeration. Listing every repo, artifact, or resource on the machine to find one project's link. Fix: each project keeps its own PROJECT.md with its links; read that.
-4. Sessions started in the home directory. They accumulate a catch-all history no project needs. Fix: one project, one canonical path, sessions start there.
+3. Cross-project enumeration. Listing every repo, artifact or resource on the machine to find one project's link. Fix: each project keeps its own PROJECT.md with its links; read that.
+4. Sessions started in the home directory. They accumulate a catch-all history no project needs, and because the cache is scoped to the working directory they also miss the cache the project's own directory built. Fix: one project, one canonical path.
 5. Duplicate frameworks. Two skill packs injecting near-identical manifests at every session start. Fix: keep one.
-6. Config edits mid-session. Every subsequent call re-paid the preamble. Fix: Lever 1.
+6. Believing a mid-session config edit took effect. A root or user CLAUDE.md edit is cache-safe and inert until reload, which is worse than costly: you act as though a rule is live when it is not. Nested and path-scoped rules that have not loaded yet behave the opposite way, which makes guessing unreliable. Fix: change config between sessions.
 7. The verbose hook. A session-start hook printing kilobytes of digest into every session. Fix: Lever 2, keep hooks quiet.
+8. Optimizing tokens without a denominator. A change that cuts tokens 30 percent and doubles rework is not an optimization. The number worth improving is tokens per accepted result, so record whether the work landed first time, not just what it cost.
 
 ## Machine-local overlay
 
-This skill is generic. Wire it to your machine with a short section in your global CLAUDE.md that states only the hard rules (no config edits mid-session, checkpoint before compact, tier table, prune ritual cadence) and points here for the reasoning. That split is itself the method: rules always loaded, playbook on demand.
+This skill is generic. Wire it to your machine with a short section in your global CLAUDE.md that states only the hard rules (pick model and effort at session start, checkpoint before any boundary, the tier table, the prune cadence) and points here for the reasoning. That split is itself the method: rules always loaded, playbook on demand.

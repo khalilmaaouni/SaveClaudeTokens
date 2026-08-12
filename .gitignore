@@ -5,3 +5,7 @@ node_modules/
 # not the distributable plugin.
 PROJECT.md
 GANTT.html
+
+# python bytecode from running the self-check
+__pycache__/
+*.pyc

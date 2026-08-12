@@ -1,7 +1,7 @@
 {
   "name": "save-claude-tokens",
-  "version": "1.0.0",
-  "description": "A playbook skill that cuts Claude Code token spend: prompt cache discipline, compact versus fresh session rules, model tier routing, plugin and MCP pruning, output discipline, and a durable-memory pattern.",
+  "version": "1.1.0",
+  "description": "A playbook skill that cuts Claude Code token spend: sourced prompt cache rules, session boundary decisions, model tier routing, plugin and MCP pruning, output discipline, and a durable-memory pattern. Ships a measurement script that reads the API usage counters from local transcripts.",
   "author": {
     "name": "Khalil Maaouni"
   },

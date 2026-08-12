@@ -7,47 +7,65 @@ WHY THIS IS EVIDENCE AND NOT AN ESTIMATE
 ----------------------------------------
 Claude Code writes one JSONL file per session under ~/.claude/projects/.
 Every assistant message in it carries the `usage` object the API returned:
-input_tokens, cache_creation_input_tokens, cache_read_input_tokens and
-output_tokens. Those are the counters billing is computed from. This script
-reads them and does arithmetic. It does not model, guess, or extrapolate.
+input_tokens, cache_creation (5 minute and 1 hour write classes),
+cache_read_input_tokens and output_tokens. Those are the counters billing is
+computed from. This script reads them and does arithmetic. It does not model,
+guess, or extrapolate.
 
-Anything this script cannot measure is reported as NO DATA rather than
-filled in with a plausible number.
+Anything this script cannot measure is reported as NO DATA rather than filled
+in with a plausible number. That rule is the whole point: a meter that
+invents a number is worse than no meter.
 
 THE METRICS, AND WHAT EACH ONE ANSWERS
 --------------------------------------
-1. PREAMBLE COST (the startup weight)
-   The first assistant message of a session has read exactly one thing: the
-   always-loaded context (system prompt, CLAUDE.md, plugin and MCP listings,
-   session-start hook output) plus the user's opening message. So
-   input + cache_creation + cache_read on that first message is a direct
-   measurement of what every later call in that session also pays for.
-   This is the number that moves when you prune plugins or diet CLAUDE.md.
+1. FIRST REQUEST CONTEXT (the startup weight)
+   The first assistant message of a session has read the always-loaded
+   context (system prompt, CLAUDE.md, plugin and skill listings, MCP tool
+   listings and instructions, session-start hook output) plus the user's
+   opening message. So input + cache_creation + cache_read on that message
+   measures the floor every later call in that session also pays.
 
-2. CACHE HIT RATIO
-   cache_read / (cache_read + cache_creation + input), over the session.
-   High is good: it means the prefix stayed stable and was re-read cheaply.
-   A low ratio on a long session means something kept busting the prefix.
+   It is NOT a pure measurement of the always-loaded set alone, because the
+   opening user message and any attachments ride along inside it. It is an
+   upper bound on the always-loaded set and a direct measurement of what the
+   session's first call actually cost. This is the number that moves when you
+   prune plugins, prune MCP servers, quiet a hook, or diet CLAUDE.md.
 
-3. EFFECTIVE INPUT COST
-   Cache reads bill at 0.1x base input and 5-minute cache writes at 1.25x
-   (published Anthropic prompt-caching multipliers). Weighting the raw
-   counters by those multipliers gives a single comparable number:
-       effective = input + 1.25*cache_creation + 0.1*cache_read
-   Use it to compare two sessions honestly, since raw token totals flatter
-   a session that happened to re-read a lot of cache.
+2. FIRST REQUEST SHARE
+   first_request * calls / total raw tokens. The share of everything the
+   session read that was the startup floor being paid again on every call.
+   High means pruning the always-loaded set beats every other lever.
 
-4. WASTE SIGNALS
-   Reported per session, each one a ratio a human can act on:
-   - rewrite_ratio: cache_creation / cache_read. Above ~0.5 on a long
-     session means the prefix was being rebuilt repeatedly. Usual causes:
-     config edited mid-session, model switched, or long idle gaps past the
-     cache TTL.
-   - output_share: output tokens as a share of effective cost. High means
-     verbosity is the problem, not context size.
-   - preamble_share: preamble cost times number of calls, over total.
-     High means the always-loaded context dominates and pruning pays more
-     than any other lever.
+3. CACHE HIT RATIO
+   cache_read / (cache_read + cache_write + input), over the session. High is
+   good: the prefix stayed stable and was re-read at the cheap rate.
+
+4. NORMALIZED INPUT COST
+   Cache writes bill at 1.25x base input for the 5 minute TTL and 2x for the
+   1 hour TTL; cache reads bill at 0.1x (published Anthropic prompt caching
+   multipliers). So:
+       normalized = input + 1.25*write_5m + 2.0*write_1h + 0.1*read
+   This is a relative input-cost measure in base-input units, not a dollar
+   figure: it carries no model price table, because a hardcoded price goes
+   stale and a stale price silently corrupts every later comparison.
+
+   Transcripts that do not carry the split write classes get NO DATA here
+   rather than an assumed 5 minute price.
+
+5. WASTE SIGNALS, per session
+   - rewrite_ratio: cache_write / cache_read. A SIGNAL, not proof. Ordinary
+     conversation growth also writes cache, so a high ratio means "look
+     here", not "the prefix was rebuilt". Measured causes worth checking:
+     a model switch during the session (this script counts distinct models),
+     a long idle gap past the cache TTL, or a change to the toolset or system
+     prompt (settings, hooks, MCP config) mid-session.
+   - output_to_input: output tokens over normalized input units. A ratio for
+     comparing sessions, NOT a share of spend: output bills at its own
+     per-model rate, which this script deliberately does not know.
+   - subagent share: subagents run their own conversation with their own
+     cache. Isolating exploration in a subagent can be cheaper than letting
+     it flood the parent context, and can also be pure overhead for a task a
+     script should have done. The number tells you which case you are in.
 
 USAGE
   python3 measure_tokens.py                  # summary across all sessions
@@ -66,6 +84,7 @@ import time
 
 # Published Anthropic prompt caching multipliers, relative to base input price.
 CACHE_WRITE_5M = 1.25
+CACHE_WRITE_1H = 2.0
 CACHE_READ = 0.1
 
 
@@ -83,12 +102,40 @@ def iter_session_files(root, cutoff):
             yield fp
 
 
+def split_writes(usage):
+    """Return (write_5m, write_1h, write_unsplit).
+
+    The nested cache_creation object carries the two TTL classes. Where it is
+    absent the flat counter still gives a total, but the TTL split is unknown,
+    so the tokens land in write_unsplit and normalized cost becomes NO DATA.
+
+    Measured on one machine: the nested object was present on 11,760 of 11,760
+    records, and on 8 of them the flat counter read 0 while the nested fields
+    summed to 2,001. So the nested object is preferred where both exist.
+    """
+    cc = usage.get("cache_creation")
+    if isinstance(cc, dict):
+        w5 = cc.get("ephemeral_5m_input_tokens") or 0
+        w1 = cc.get("ephemeral_1h_input_tokens") or 0
+        if w5 or w1:
+            return w5, w1, 0
+    # No nested object, or a nested object accounting for nothing. The flat
+    # counter is all there is: zero stays a measured zero, and anything else
+    # has an unknown TTL class, so it must not be priced.
+    return 0, 0, usage.get("cache_creation_input_tokens") or 0
+
+
 def read_session(fp):
     """Return per-session totals, or None when the file carries no usage data."""
     first = None
-    tot = {"input": 0, "write": 0, "read": 0, "output": 0}
-    calls = 0
     started = None
+    tot = {"input": 0, "write_5m": 0, "write_1h": 0, "write_unsplit": 0,
+           "read": 0, "output": 0}
+    calls = 0
+    sub_calls = 0
+    sub_output = 0
+    models = set()
+
     with open(fp, "r", errors="ignore") as f:
         for line in f:
             if '"usage"' not in line:
@@ -102,33 +149,65 @@ def read_session(fp):
             if not isinstance(usage, dict):
                 continue
             inp = usage.get("input_tokens") or 0
-            wr = usage.get("cache_creation_input_tokens") or 0
             rd = usage.get("cache_read_input_tokens") or 0
             out = usage.get("output_tokens") or 0
-            if inp == 0 and wr == 0 and rd == 0:
+            w5, w1, wu = split_writes(usage)
+            if inp == 0 and rd == 0 and w5 == 0 and w1 == 0 and wu == 0:
                 continue
+
             calls += 1
             tot["input"] += inp
-            tot["write"] += wr
+            tot["write_5m"] += w5
+            tot["write_1h"] += w1
+            tot["write_unsplit"] += wu
             tot["read"] += rd
             tot["output"] += out
-            if first is None:
-                first = inp + wr + rd
-                started = rec.get("timestamp")
+
+            is_sub = bool(rec.get("isSidechain"))
+            if is_sub:
+                sub_calls += 1
+                sub_output += out
+            else:
+                model = msg.get("model")
+                if model and not str(model).startswith("<"):
+                    models.add(model)
+                # The startup floor is the parent's first call. A subagent
+                # starts its own context, so it never measures this session's.
+                if first is None:
+                    first = inp + w5 + w1 + wu + rd
+                    started = rec.get("timestamp")
+
     if calls == 0:
         return None
-    eff = tot["input"] + CACHE_WRITE_5M * tot["write"] + CACHE_READ * tot["read"]
-    denom = tot["read"] + tot["write"] + tot["input"]
+
+    write_total = tot["write_5m"] + tot["write_1h"] + tot["write_unsplit"]
+    raw_input = tot["input"] + write_total + tot["read"]
+
+    # NO DATA rather than an assumed price when the TTL split is unavailable.
+    if tot["write_unsplit"]:
+        normalized = None
+    else:
+        normalized = (tot["input"]
+                      + CACHE_WRITE_5M * tot["write_5m"]
+                      + CACHE_WRITE_1H * tot["write_1h"]
+                      + CACHE_READ * tot["read"])
+
+    first = first or 0
     return {
         "file": fp,
         "calls": calls,
-        "preamble": first or 0,
+        "first_request": first,
         "started": started,
-        "hit_ratio": (tot["read"] / denom) if denom else 0.0,
-        "rewrite_ratio": (tot["write"] / tot["read"]) if tot["read"] else None,
-        "effective_input": eff,
-        "output": tot["output"],
-        "output_share": (tot["output"] / eff) if eff else None,
+        "first_request_share": (first * calls / raw_input) if raw_input else None,
+        "hit_ratio": (tot["read"] / raw_input) if raw_input else 0.0,
+        "rewrite_ratio": (write_total / tot["read"]) if tot["read"] else None,
+        "write_total": write_total,
+        "raw_input": raw_input,
+        "normalized_input": normalized,
+        "output_to_input": (tot["output"] / normalized) if normalized else None,
+        "models": len(models),
+        "sub_calls": sub_calls,
+        "sub_output": sub_output,
         **tot,
     }
 
@@ -146,18 +225,46 @@ def collect(root, days):
 def summarize(sessions):
     if not sessions:
         return None
-    pre = sorted(s["preamble"] for s in sessions if s["preamble"] > 0)
+    # A transcript with no parent-agent call is a subagent's own conversation,
+    # not a session. Its tokens are real and stay in the totals, but it has no
+    # startup floor of its own to measure, so it is excluded from those stats.
+    parent = [s for s in sessions if s["first_request"] > 0]
+    firsts = sorted(s["first_request"] for s in parent)
     hits = [s["hit_ratio"] for s in sessions if s["calls"] >= 3]
+    shares = [s["first_request_share"] for s in parent
+              if s["first_request_share"] is not None and s["calls"] >= 3]
+
+    w5 = sum(s["write_5m"] for s in sessions)
+    w1 = sum(s["write_1h"] for s in sessions)
+    wu = sum(s["write_unsplit"] for s in sessions)
+    out_total = sum(s["output"] for s in sessions)
+    sub_out = sum(s["sub_output"] for s in sessions)
+
+    priced = [s for s in sessions if s["normalized_input"] is not None]
     return {
         "sessions": len(sessions),
+        "parent_sessions": len(parent),
+        "subagent_transcripts": len(sessions) - len(parent),
         "total_calls": sum(s["calls"] for s in sessions),
-        "preamble_median": statistics.median(pre) if pre else None,
-        "preamble_mean": statistics.mean(pre) if pre else None,
-        "preamble_p90": pre[int(len(pre) * 0.9)] if len(pre) >= 10 else None,
-        "preamble_n": len(pre),
+        "first_request_median": statistics.median(firsts) if firsts else None,
+        "first_request_mean": statistics.mean(firsts) if firsts else None,
+        "first_request_p90": firsts[int(len(firsts) * 0.9)] if len(firsts) >= 10 else None,
+        "first_request_n": len(firsts),
+        "first_request_share_median": statistics.median(shares) if shares else None,
         "hit_ratio_median": statistics.median(hits) if hits else None,
-        "effective_input_total": sum(s["effective_input"] for s in sessions),
-        "output_total": sum(s["output"] for s in sessions),
+        "input_total": sum(s["input"] for s in sessions),
+        "read_total": sum(s["read"] for s in sessions),
+        "write_5m_total": w5,
+        "write_1h_total": w1,
+        "write_unsplit_total": wu,
+        "write_1h_share": (w1 / (w5 + w1)) if (w5 + w1) else None,
+        "normalized_input_total": (sum(s["normalized_input"] for s in priced)
+                                   if priced else None),
+        "normalized_sessions": len(priced),
+        "output_total": out_total,
+        "subagent_output_total": sub_out,
+        "subagent_output_share": (sub_out / out_total) if out_total else None,
+        "subagent_calls": sum(s["sub_calls"] for s in sessions),
     }
 
 
@@ -174,14 +281,74 @@ def print_summary(sm, label):
     if not sm:
         print("NO DATA: no session transcripts carried usage counters.")
         return
-    print(f"sessions measured        {fmt(sm['sessions'])}")
-    print(f"assistant calls          {fmt(sm['total_calls'])}")
-    print(f"preamble median          {fmt(sm['preamble_median'])} tokens per call")
-    print(f"preamble mean            {fmt(sm['preamble_mean'])}")
-    print(f"preamble p90             {fmt(sm['preamble_p90'])}")
-    print(f"cache hit ratio median   {fmt(sm['hit_ratio_median'])}")
-    print(f"effective input total    {fmt(sm['effective_input_total'])}")
-    print(f"output total             {fmt(sm['output_total'])}")
+    print(f"transcripts measured       {fmt(sm['sessions'])} "
+          f"({fmt(sm['parent_sessions'])} sessions, "
+          f"{fmt(sm['subagent_transcripts'])} subagent transcripts)")
+    print(f"assistant calls            {fmt(sm['total_calls'])}")
+    print(f"first request median       {fmt(sm['first_request_median'])} tokens")
+    print(f"first request mean         {fmt(sm['first_request_mean'])}")
+    print(f"first request p90          {fmt(sm['first_request_p90'])}")
+    print(f"first request share median {fmt(sm['first_request_share_median'])}")
+    print(f"cache hit ratio median     {fmt(sm['hit_ratio_median'])}")
+    print(f"cache read total           {fmt(sm['read_total'])}")
+    print(f"cache write 5m total       {fmt(sm['write_5m_total'])}")
+    print(f"cache write 1h total       {fmt(sm['write_1h_total'])}")
+    print(f"cache write 1h share       {fmt(sm['write_1h_share'])}")
+    if sm["write_unsplit_total"]:
+        print(f"cache write unsplit        {fmt(sm['write_unsplit_total'])} "
+              f"(TTL class absent, excluded from normalized cost)")
+    if sm["normalized_input_total"] is None:
+        print("normalized input total     NO DATA (no session carried the TTL split)")
+    else:
+        print(f"normalized input total     {fmt(sm['normalized_input_total'])} "
+              f"base-input units, over {fmt(sm['normalized_sessions'])} transcripts")
+    print(f"output total               {fmt(sm['output_total'])}")
+    print(f"output from subagents      {fmt(sm['subagent_output_total'])} "
+          f"({fmt(sm['subagent_output_share'])} share, "
+          f"{fmt(sm['subagent_calls'])} calls)")
+
+
+# Baseline keys renamed in schema 2. Older snapshots stay readable, but the
+# first_request family is NOT comparable across that boundary and the code
+# refuses to print a delta for it rather than print a misleading one.
+#
+# Why: schema 1 took the first usage record of every transcript, including
+# transcripts that are a subagent's own conversation. A subagent starts a
+# smaller context, so those files dragged the median down. Measured on one
+# machine over the same 90 day window: schema 1 saw 6,249 transcripts with a
+# 41,898 token median, schema 2 saw the 229 actual sessions among them with an
+# 85,021 token median. Same machine, same window, same counters. The metric
+# changed, not the spend. Take a fresh baseline after upgrading.
+SCHEMA = 2
+LEGACY_KEYS = {
+    "first_request_median": "preamble_median",
+    "first_request_mean": "preamble_mean",
+    "first_request_p90": "preamble_p90",
+}
+INCOMPARABLE_ACROSS_SCHEMA = set(LEGACY_KEYS)
+
+
+def fmt_delta(a_v, b_v):
+    """Format a change for the scale of the numbers being compared.
+
+    Token counts and ratios share this table, and a ratio formatted as an
+    integer prints every real move as +0. A percent against a zero baseline is
+    undefined, so it prints NO DATA instead of a fabricated 0.0.
+    """
+    d = b_v - a_v
+    small = abs(a_v) < 2 and abs(b_v) < 2
+    ds = f"{d:+.3f}" if small else f"{d:+,.0f}"
+    ps = "NO DATA" if a_v == 0 else f"{(d / a_v * 100):+.1f}%"
+    return ds, ps
+
+
+def baseline_get(old_summary, key):
+    if key in old_summary:
+        return old_summary[key], False
+    legacy = LEGACY_KEYS.get(key)
+    if legacy and legacy in old_summary:
+        return old_summary[legacy], True
+    return None, False
 
 
 def main():
@@ -200,21 +367,29 @@ def main():
 
     sessions = collect(a.root, a.days)
     sm = summarize(sessions)
-    print_summary(sm, f"MEASURED, last {a.days:g} days")
+    # The window selects transcripts by file modification time, so a resumed
+    # old session contributes its whole history. Say that rather than implying
+    # every counted token was spent inside the window.
+    print_summary(sm, f"MEASURED, transcripts touched in the last {a.days:g} days")
 
     if a.sessions and sessions:
-        print("\n=== waste signals, highest preamble first ===")
-        print(f"{'preamble':>10} {'calls':>6} {'hit':>6} {'rewrite':>8}  session")
-        for s in sorted(sessions, key=lambda x: -x["preamble"])[: a.worst]:
+        print("\n=== waste signals, highest first request first ===")
+        print(f"{'first_req':>10} {'share':>6} {'calls':>6} {'hit':>6} "
+              f"{'rewrite':>8} {'models':>7}  session")
+        for s in sorted(sessions, key=lambda x: -x["first_request"])[: a.worst]:
             rw = "NO DATA" if s["rewrite_ratio"] is None else f"{s['rewrite_ratio']:.2f}"
+            sh = "  n/a" if s["first_request_share"] is None else f"{s['first_request_share']:.3f}"
             print(
-                f"{s['preamble']:>10,} {s['calls']:>6} "
-                f"{s['hit_ratio']:>6.3f} {rw:>8}  {os.path.basename(s['file'])[:28]}"
+                f"{s['first_request']:>10,} {sh:>6} {s['calls']:>6} "
+                f"{s['hit_ratio']:>6.3f} {rw:>8} {s['models']:>7}  "
+                f"{os.path.basename(s['file'])[:24]}"
             )
+        print("\nmodels above 1 means the session switched model mid-flight. "
+              "Each model has its own cache, so that rebuilds from zero.")
 
     if a.baseline and sm:
-        snap = {"measured_at": time.strftime("%Y-%m-%d %H:%M:%S"), "window_days": a.days,
-                "summary": sm}
+        snap = {"measured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "window_days": a.days, "schema": SCHEMA, "summary": sm}
         with open(a.baseline, "w") as f:
             json.dump(snap, f, indent=2)
         print(f"\nbaseline written: {a.baseline}")
@@ -223,21 +398,58 @@ def main():
         try:
             with open(a.compare) as f:
                 old = json.load(f)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             print(f"NO DATA: cannot read baseline ({e})", file=sys.stderr)
             return 2
-        o = old["summary"]
-        print(f"\n=== CHANGE vs baseline taken {old['measured_at']} ===")
-        for k, unit in (("preamble_median", "tokens per call"),
-                        ("preamble_mean", "tokens per call"),
-                        ("hit_ratio_median", "ratio")):
-            a_v, b_v = o.get(k), sm.get(k)
-            if a_v is None or b_v is None:
-                print(f"{k:<22} NO DATA")
+        if not isinstance(old, dict):
+            print("NO DATA: baseline is not an object written by --baseline.",
+                  file=sys.stderr)
+            return 2
+        o = old.get("summary")
+        if not isinstance(o, dict):
+            print("NO DATA: baseline carries no summary object.", file=sys.stderr)
+            return 2
+        print(f"\n=== CHANGE vs baseline taken {old.get('measured_at', 'NO DATA')} ===")
+        try:
+            old_days = float(old.get("window_days"))
+        except (TypeError, ValueError):
+            old_days = None
+        if old_days is None:
+            print("WARNING: baseline does not record its window length, so this "
+                  "comparison may not be like-for-like.")
+        elif old_days != float(a.days):
+            print(f"WARNING: baseline covers {old_days:g} days, this run covers "
+                  f"{a.days:g}. Different windows hold different sessions, so the "
+                  f"deltas below are not a like-for-like comparison. Re-run with "
+                  f"--days {old_days:g} to compare honestly.")
+        old_schema = old.get("schema", 1)
+        schema_mismatch = old_schema != SCHEMA
+        if schema_mismatch:
+            print(f"WARNING: baseline is schema {old_schema}, this script writes "
+                  f"schema {SCHEMA}. The first_request family counted a different "
+                  f"population before schema 2 (subagent transcripts were included), "
+                  f"so those rows print NO DATA instead of a false delta. The cache "
+                  f"and ratio rows below are unaffected. Take a fresh baseline.")
+        used_legacy = False
+        for k, unit in (("first_request_median", "tokens"),
+                        ("first_request_mean", "tokens"),
+                        ("first_request_share_median", "share"),
+                        ("hit_ratio_median", "ratio"),
+                        ("write_1h_share", "share")):
+            if schema_mismatch and k in INCOMPARABLE_ACROSS_SCHEMA:
+                print(f"{k:<28} NO DATA (not comparable across schema change)")
                 continue
-            d = b_v - a_v
-            pct = (d / a_v * 100) if a_v else 0
-            print(f"{k:<22} {fmt(a_v)} -> {fmt(b_v)}  ({d:+,.0f}, {pct:+.1f}%) {unit}")
+            a_v, legacy = baseline_get(o, k)
+            used_legacy = used_legacy or legacy
+            b_v = sm.get(k) if sm else None
+            if not isinstance(a_v, (int, float)) or not isinstance(b_v, (int, float)):
+                print(f"{k:<28} NO DATA")
+                continue
+            ds, ps = fmt_delta(a_v, b_v)
+            print(f"{k:<28} {fmt(a_v)} -> {fmt(b_v)}  ({ds}, {ps}) {unit}")
+        if used_legacy:
+            print("\nnote: this baseline predates the first_request rename and was "
+                  "read from its preamble_* keys. The two measure the same counters.")
     return 0
 
 
