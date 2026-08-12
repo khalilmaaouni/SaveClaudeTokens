@@ -1,0 +1,33 @@
+# Token Shield: working rules for Claude sessions in this repo
+
+## What this is
+A Claude Code plugin that measures where tokens go and proves its own numbers. The repo doubles as its own plugin marketplace. Public at github.com/khalilmaaouni/token-shield. Sole credited author: Khalil Maaouni.
+
+## Commands (documented, never guessed)
+- Full test suite (the exact line CI runs, from repo root):
+  `python3 scripts/check_py311.py && cd scripts && python3 test_measure_tokens.py && python3 test_tools.py && python3 test_pricing.py && python3 test_experiment.py && python3 test_optimize.py && python3 test_profile.py && python3 test_advisor.py && python3 test_report.py`
+- Dashboard: `python3 scripts/cli.py dashboard` (writes ~/.token-shield/token-shield.html)
+- Profiler: `python3 scripts/cli.py profile`; advisor: `python3 scripts/cli.py advise`
+- Experiments: `python3 scripts/cli.py experiment start|end "<label>"`
+
+## Gates, all of them
+- Branch plus pull request, never a direct commit to main.
+- Before any push, over the WHOLE pushed range, fail closed: secret scan, em and en dash scan, attribution scan. Any hit stops the push.
+- No AI vendor attribution anywhere: no Co-Authored-By trailer, no generated-with footer, in commits, PRs, docs, or code.
+- No em or en dashes anywhere. Test needles that must contain a dash character build it from the codepoint (a Python unicode escape for U+2013 or U+2014 inside a normal string literal), never the literal byte in source.
+- Python 3.11 floor: scripts/check_py311.py must pass; CI runs it before the tests.
+- Every fix ships with a test calibrated by reinjecting the defect (red) before the fix (green). A test born green proves nothing.
+- Nothing is "done" without the verifying command run after the last edit and its output quoted.
+
+## Invariants that never merge
+- Confidence labels stay separate: VERIFIED (a closed experiment proved it), MEASURED (counted on this machine), ESTIMATED (a projection), NATIVE (Anthropic's own behavior, notably caching: attributed, never claimed, never in dollars on the dashboard), RECOMMENDED (a rank, never evidence).
+- Savings report per label; the latest record per label wins; regressions show negative; no cross-label totals anywhere.
+- NO DATA beats a guess, always.
+- The plugin registers zero hooks by default; everything is opt-in.
+- Command surface is capped at 6 command files.
+
+## The ratified gate
+Version 1.8 (deep advisor subagent, semantic optimizer, ecosystem waves in docs/ROADMAP.md) does not start until one real experiment reaches VERIFIED or an honest NOT_PROVEN in the proof ledger. Do not create v1.8 files before that record exists.
+
+## Machine-local files
+STATE.md, GANTT.html, PROJECT.md are gitignored working files for the founder's machine; they never ship in the plugin.

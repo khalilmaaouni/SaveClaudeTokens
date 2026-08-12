@@ -127,6 +127,52 @@ def test_strategies_json_loads_validates_and_carries_no_dashes():
     assert "\u2013" not in raw and "\u2014" not in raw, "em or en dash found in strategies.json"
 
 
+def test_load_strategies_rejects_a_strategy_missing_how():
+    # Calibrated: dropping "how" from REQUIRED_FIELDS (or the _validate_how
+    # call) lets a strategy without concrete steps load silently and this
+    # test goes red; restored, load_strategies raises and names the field.
+    import tempfile
+    real = adv.load_strategies(STRATEGIES_PATH)
+    broken = json.loads(json.dumps({"schema": 2, "strategies": [
+        {k: v for k, v in s.items() if k != "how"} for s in real[:1]
+    ]}))
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump(broken, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for the missing how field"
+        except ValueError as e:
+            assert "how" in str(e), str(e)
+
+    # Also reject a "how" that is too short, and one whose step text carries
+    # a dash.
+    with tempfile.TemporaryDirectory() as d:
+        s = json.loads(json.dumps(real[0]))
+        s["how"] = [{"text": "one step only"}]
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump({"schema": 2, "strategies": [s]}, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a too-short how list"
+        except ValueError as e:
+            assert "how" in str(e), str(e)
+
+    with tempfile.TemporaryDirectory() as d:
+        s = json.loads(json.dumps(real[0]))
+        s["how"] = [{"text": "step one"}, {"text": "a step with an em dash " + "\u2014" + " here"}]
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump({"schema": 2, "strategies": [s]}, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a dash in a how step"
+        except ValueError as e:
+            assert "dash" in str(e), str(e)
+
+
 def test_card_source_is_a_citable_pointer_not_a_bare_code():
     # Calibrated: reverting _card to `"source": strategy["source"]` leaves the
     # bare code A6 on the card and this test goes red; with format_source, green.
@@ -226,6 +272,46 @@ def test_record_decision_round_trips_and_expires_correctly():
         loaded2 = adv.load_treatments(path)
         assert loaded2["cache.s2"]["lineage"].startswith("cache.s2-")
         assert "until" not in loaded2["cache.s2"]
+
+
+def test_decide_flag_round_trips_into_treatment_memory_and_the_queue():
+    # Calibrated: dropping the `--decide` branch from main() (or having
+    # cmd_decide write through record_decision's own stale default path
+    # instead of the live TREATMENTS_PATH global) makes this go red because
+    # nothing lands in the temp file; restored, the decision round-trips and
+    # the suppressed strategy is gone from the very next queue.
+    import tempfile
+    real_path = adv.TREATMENTS_PATH
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "treatments.json")
+        adv.TREATMENTS_PATH = path
+        try:
+            rc = adv.main(["--decide", "cache.fixed-parent-model", "not-now"])
+            loaded = adv.load_treatments(path)
+            assert rc == 0
+            assert loaded["cache.fixed-parent-model"]["decision"] == "suppressed"
+            assert loaded["cache.fixed-parent-model"]["until"] > time.strftime("%Y-%m-%dT%H:%M:%S")
+
+            strategies = adv.load_strategies()
+            profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+            result = adv.advise(profile, loaded, strategies)
+            ids = [c["id"] for c in result["queue"]]
+            assert "cache.fixed-parent-model" not in ids, ids
+
+            # "never" maps onto the same "rejected" decision, just far out, and
+            # "done" onto "accepted"; no new decision string is ever invented.
+            rc2 = adv.main(["--decide", "startup.floor-ladder", "never"])
+            rc3 = adv.main(["--decide", "companion.ponytail", "done"])
+            assert rc2 == 0 and rc3 == 0
+            loaded2 = adv.load_treatments(path)
+            assert loaded2["startup.floor-ladder"]["decision"] == "rejected"
+            assert loaded2["companion.ponytail"]["decision"] == "accepted"
+            assert "lineage" in loaded2["companion.ponytail"]
+
+            rc4 = adv.main(["--decide", "cache.fixed-parent-model", "bogus-choice"])
+            assert rc4 == 2
+        finally:
+            adv.TREATMENTS_PATH = real_path
 
 
 def test_trigger_descends_into_a_composite_leaf_value():

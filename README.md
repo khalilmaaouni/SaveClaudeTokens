@@ -94,7 +94,17 @@ The advisor profiles your session history and ranks the one best next move to cu
 
 Every recommendation is backed by experiment-verified savings on your own data, or marked ESTIMATED when it comes from your historic pattern alone. The deterministic profiler costs zero tokens (it is a grep and a sum); the advisor subagent cost is printed so you can decide whether the time is worth the insight.
 
-Run `/token-shield:advisor` (no args) for the next best move, or `/token-shield:start` once to opt into the session-end telemetry hook that feeds the advisor.
+Every card names concrete "how" steps, 2 to 5 of them, a real copy-paste command where one applies, so drawback disclosure is never the end of the story. Decide what to do with a card in one command:
+
+```bash
+python3 scripts/cli.py advise --decide <strategy-id> done       # accepted
+python3 scripts/cli.py advise --decide <strategy-id> not-now    # quiet for 90 days
+python3 scripts/cli.py advise --decide <strategy-id> never      # does not resurface
+```
+
+The dashboard is static HTML, so each card's decision row is that same ready-to-copy command, never a button; each row also names `/token-shield:advisor` for anyone who would rather be walked through it step by step.
+
+Run `/token-shield:advisor` (no args) for the next best move, guided: it shows one card in plain words, asks what to do through the question UI, and walks accepted steps one at a time. Run `/token-shield:start` once for the full onboarding journey, or to opt into the session-end telemetry hook that feeds the advisor.
 
 ## Optional tools, all opt in
 
@@ -164,11 +174,15 @@ dependency.
 
 **`token_shield.py`** renders a Token Shield dashboard as a self-contained HTML
 file. The visual language is Brave's shields panel, a shield and a few big
-numbers, but every figure is measured: how much prompt caching saved you (reads
-bill at 0.1x, so cached tokens are a real 0.9x saving), what reprocessing that
-blocked, where the saving comes from, and the ranked pain points costing you
-tokens (model switching, the startup floor, mid-session rebuilds), each with the
-fix. NO DATA where a number cannot be measured.
+numbers, but the page shows only what you can act on: a deterministic alerts
+band up top when a real threshold fires, the VERIFIED number Token Shield
+itself proved, and the ranked pain points costing you tokens (model
+switching, the startup floor, mid-session rebuilds), each with a "How,
+exactly" block and a ready-to-copy decision command. Native caching, the
+part Anthropic's own engine does underneath, gets one pointer sentence to
+`docs/METHODOLOGY.md`, no numbers, no bars, no dollars, because a page about
+what you can influence has no business headlining a mechanic you cannot
+touch. NO DATA where a number cannot be measured.
 
 ```bash
 python3 scripts/token_shield.py --out ~/token-shield.html --days 30

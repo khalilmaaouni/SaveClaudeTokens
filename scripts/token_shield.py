@@ -422,6 +422,45 @@ def _companion_plausible(name, profile):
     return v is not None and v >= 1_000_000
 
 
+def _render_how(how_steps):
+    """The "How, exactly" block: numbered steps from a strategy's own "how"
+    field (data/strategies.json), commands in monospace so they are
+    copy-pasteable straight off a static page. Missing or empty renders
+    nothing, so the fixture cards in test_tools.py that predate the "how"
+    field still render cleanly.
+    """
+    if not how_steps:
+        return ''
+    items = []
+    for step in how_steps:
+        text = esc(step.get("text", ""))
+        command = step.get("command")
+        cmd_html = f'<br><code>{esc(command)}</code>' if command else ''
+        items.append(f'<li>{text}{cmd_html}</li>')
+    return f'<div class="how"><b>How, exactly.</b><ol>{"".join(items)}</ol></div>'
+
+
+def _render_chips(card_id):
+    """The decision chips row. The dashboard is static HTML, so a chip is not
+    a button, it is its own ready-to-copy command; the command IS the
+    action. Choices mirror advisor.DECIDE_CHOICES exactly (done/not-now/
+    never), never a vocabulary the treatment memory would not recognize.
+    """
+    cid = esc(card_id)
+    return (
+        '<div class="chips">'
+        f'<div class="chip"><b>Did it</b>'
+        f'<code>python3 scripts/cli.py advise --decide {cid} done</code></div>'
+        f'<div class="chip"><b>Not now (90 days quiet)</b>'
+        f'<code>python3 scripts/cli.py advise --decide {cid} not-now</code></div>'
+        f'<div class="chip"><b>Never recommend</b>'
+        f'<code>python3 scripts/cli.py advise --decide {cid} never</code></div>'
+        '</div>'
+        '<p class="n">Prefer to be walked through it? Run '
+        '<code>/token-shield:advisor</code> in any Claude session.</p>'
+    )
+
+
 def render_next_best_move(advise_result):
     parts = ['<h2>Next best move</h2>']
     if not advise_result:
@@ -447,7 +486,9 @@ def render_next_best_move(advise_result):
             # docs/CLAIMS.md row, or a URL), so the page never shows a bare
             # internal code a reader cannot look up.
             + (f'<p><b>Source:</b> {esc(best["source"])}</p>' if best.get("source") else '')
+            + _render_how(best.get("how"))
             + '</div>')
+        parts.append(_render_chips(best["id"]))
     cost = advise_result.get("advisor_cost_tokens", 0)
     parts.append(f'<p class="n">Advisor cost: {cost} tokens (deterministic)</p>')
     return "".join(parts)
@@ -491,7 +532,8 @@ def render_recommendation_queue(advise_result, suppressed_n):
                 f'<div class="pain-item"><div class="rank">{i}</div>'
                 f'<div class="t">{esc(c["title"])}'
                 f'<span class="cpill est" style="margin:0 0 0 8px">{esc(c["evidence"])}</span></div>'
-                f'<div class="fix">{esc(c["drawback"])}</div></div>')
+                f'<div class="fix">{esc(c["drawback"])}</div>'
+                f'{_render_how(c.get("how"))}{_render_chips(c["id"])}</div>')
         parts.append('<div class="pain">' + "".join(rows) + '</div>')
     if suppressed_n:
         parts.append(f'<p class="n">{suppressed_n} recommendation(s) suppressed by your '
@@ -589,28 +631,73 @@ def render_experiment_history(rows):
     return "".join(parts)
 
 
+# ALERTS BAND thresholds. MEASURED triggers: crossing one of these means
+# something is actively costing tokens right now, so they are deliberately
+# stricter than the advisor's own ranking thresholds in data/strategies.json
+# (a card can rank without alarming; an alert always means "look now").
+# Each entry names the profile leaf to read, the direction that fires, the
+# strategy card the action line points to, and when to act.
+ALERT_THRESHOLDS = {
+    "cache_hit_ratio_median": {
+        "section": "usage", "op": "below", "value": 0.5,
+        "what": "Cache hit ratio median is {v}, below the healthy range.",
+        "why": "A low hit ratio means the cached prefix keeps getting rebuilt, so most "
+               "calls pay full price instead of the 0.1x cache-read rate.",
+        "action": 'See the "Prefer a fresh session at real phase boundaries" card below.',
+        "when": "Before your next long session.",
+    },
+    "startup_floor_share": {
+        "section": "instruction", "op": "above", "value": 0.5,
+        "what": "Startup floor is {v} of everything a session reads.",
+        "why": "That floor is paid again, at cache-read price, on every call for the "
+               "life of the session.",
+        "action": 'See the "Shrink the always-loaded startup floor" card below.',
+        "when": "Next time you touch CLAUDE.md or plugin config.",
+    },
+    "model_switch_session_share": {
+        "section": "behavior", "op": "above", "value": 0.5,
+        "what": "{v} of your sessions switched model or effort mid-session.",
+        "why": "Each switch rebuilds the cached prefix from zero at full price.",
+        "action": 'See the "Fix your model and effort at session start" card below.',
+        "when": "At the start of your next session.",
+    },
+}
+
+
 def render_alerts(profile):
+    """The alerts band. Fires only on a deterministic threshold crossing from
+    ALERT_THRESHOLDS, or when the meter itself reports NO DATA (no
+    profile.json to read at all). No alert ever fires on healthy data.
+    """
     parts = ['<h2>Alerts</h2>']
     if not profile:
-        parts.append('<p class="nodata">NO DATA: no profile.json found.</p>')
+        parts.append(
+            '<div class="alert"><p class="a-what">NO DATA: no profile has been measured yet.</p>'
+            '<p class="a-why"><b>Why it matters.</b> Without a profile, nothing below can be '
+            'checked against a real threshold.</p>'
+            '<p class="a-action"><b>Action.</b> Run <code>python3 scripts/cli.py profile</code> '
+            'to generate one.</p>'
+            '<p class="a-when"><b>When.</b> Now, before relying on any section below.</p></div>')
         return "".join(parts)
-    alerts = []
-    sw = _leaf(profile, "behavior", "model_switch_session_share")
-    if sw is not None and sw >= 0.20:
-        alerts.append(f'{sw * 100:.0f}% of your sessions switched model mid-session and '
-                      f'rebuilt their cache.')
-    floor = _leaf(profile, "instruction", "startup_floor_share")
-    if floor is not None and floor >= 0.30:
-        alerts.append(f'Startup floor is {floor * 100:.0f}% of everything a session reads.')
-    hit = _leaf(profile, "usage", "cache_hit_ratio_median")
-    if hit is not None and hit < 0.5:
-        alerts.append(f'Cache hit ratio median is {hit * 100:.0f}%, below the healthy range.')
-    alerts = alerts[:3]
-    if not alerts:
+
+    fired = []
+    for key, rule in ALERT_THRESHOLDS.items():
+        v = _leaf(profile, rule["section"], key)
+        if v is None:
+            continue
+        hit = v < rule["value"] if rule["op"] == "below" else v > rule["value"]
+        if hit:
+            fired.append((rule["what"].format(v=pct(v)), rule["why"], rule["action"], rule["when"]))
+
+    if not fired:
         parts.append('<div class="wins"><span class="win ok">&#10003; no active alerts</span></div>')
     else:
-        parts.append('<div class="wins">'
-                     + "".join(f'<span class="win bad">! {a}</span>' for a in alerts) + '</div>')
+        for what, why, action, when in fired:
+            parts.append(
+                f'<div class="alert"><p class="a-what">! {esc(what)}</p>'
+                f'<p class="a-why"><b>Why it matters.</b> {esc(why)}</p>'
+                f'<p class="a-action"><b>Action.</b> {esc(action)}</p>'
+                f'<p class="a-when"><b>When.</b> {esc(when)}</p></div>')
     return "".join(parts)
 
 
@@ -679,17 +766,8 @@ table.se{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
 table.se th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:5px 7px;border-bottom:1px solid var(--line);}
 table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
 .scroll{overflow-x:auto;}
-.hero3{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin:16px 0 6px;}
-@media(max-width:640px){.hero3{grid-template-columns:1fr;}}
-.h3c{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:19px 19px 17px;}
-.h3c.lead{background:linear-gradient(135deg,var(--panel2),var(--panel));}
-.h3c .big{font-size:clamp(28px,6vw,44px);font-weight:750;line-height:1;letter-spacing:-.02em;}
-.h3c .big.g{color:var(--good);} .h3c .big.a{color:var(--accent);} .h3c .big.w{color:var(--warn);}
-.h3c .big.muted{color:var(--muted);font-size:20px;font-weight:640;}
-.h3c .u{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
 .cpill{display:inline-block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:20px;border:1px solid var(--line);margin-bottom:10px;color:var(--muted);}
 .cpill.ver{color:var(--good);border-color:var(--good);}
-.cpill.nat{color:var(--accent);border-color:var(--accent);}
 .cpill.est{color:var(--warn);border-color:var(--warn);}
 .usdline{font-size:13.5px;color:var(--muted);margin:2px 0 8px;max-width:66ch;}
 .usdline b{color:var(--ink);}
@@ -700,6 +778,18 @@ table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-num
 .pain-item .fix .lt{color:var(--warn);}
 .legend{display:flex;flex-wrap:wrap;gap:12px;margin:2px 0 10px;font-family:var(--mono);font-size:10.5px;color:var(--muted);}
 .legend b{font-weight:600;}
+.alert{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:0 13px 13px 0;padding:14px 16px;margin:10px 0;}
+.alert .a-what{margin:0 0 6px;font-size:14.5px;font-weight:640;color:var(--ink);}
+.alert p{margin:0 0 4px;font-size:13px;color:var(--muted);}
+.alert p:last-child{margin-bottom:0;}
+.how{margin-top:10px;font-size:13px;color:var(--muted);}
+.how ol{margin:5px 0 0 18px;padding:0;}
+.how li{margin:3px 0;}
+.how code{font-family:var(--mono);font-size:11.5px;color:var(--ink);background:var(--panel2);padding:1px 5px;border-radius:5px;}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.chip{font-size:11.5px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:6px 9px;}
+.chip b{display:block;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:3px;}
+.chip code{font-family:var(--mono);font-size:11px;color:var(--ink);}
 """
 
 SHIELD_SVG = (
@@ -723,14 +813,16 @@ def stat(k, v, note, is_nodata=False):
 def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
            experiment_rows=None, plugin_cache_root=None):
-    sv = savings_breakdown(sm)
+    # usd_res is accepted for signature compatibility with callers (main()
+    # still measures it for the separate `prices` command's use elsewhere)
+    # but is never rendered here: the dashboard shows only figures the user
+    # can act on, not a dollar estimate of Anthropic's own caching.
     pp = pain_points(sessions)
     rx = prescriptions(sm, sessions)
     total_rx = sum(r["saving"] for r in rx)
     share = sm["first_request_share_median"]
     hit = sm["hit_ratio_median"]
     sub = sm["subagent_output_share"]
-    usd = usd_res if (usd_res and usd_res.get("status") == "OK") else None
 
     parts = [f"<style>{CSS}</style>", '<div class="wrap">']
     parts.append(f'<div class="top">{SHIELD_SVG}<div>'
@@ -741,51 +833,29 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                  f'estimated. Measured on this machine; the method is portable, these numbers '
                  f'are not.</p>')
 
-    # THREE HONEST COLUMNS, never merged: what Token Shield PROVED (verified
-    # before/after), what Claude Code's caching did NATIVELY, and what is still
-    # OPPORTUNITY (estimated). Merging these is the exact dishonesty this exists
-    # to avoid, so they sit side by side, each with its own confidence label.
-    # `verified` is a list of per-label rows from verified_by_label(), never a
+    # ALERTS BAND, at the top on purpose: a deterministic threshold crossing
+    # is the one thing worth seeing before anything else on the page.
+    parts.append(render_alerts(profile))
+
+    # WHAT TOKEN SHIELD VERIFIED, the lead and only hero number. `verified`
+    # is a list of per-label rows from verified_by_label(), never a
     # cross-label total: the same refusal the experiment history states below.
     vbig, vu = render_verified_hero(verified)
-    nat_usd = f' &nbsp;&middot;&nbsp; about ${usd["usd"]:,.0f} API-equivalent' if usd else ''
     parts.append(
-        '<div class="hero3">'
-        '<div class="h3c lead"><span class="cpill ver">Verified &middot; Token Shield</span>'
-        f'<div>{vbig}</div><p class="u">{vu}</p></div>'
-        '<div class="h3c"><span class="cpill nat">Native &middot; Claude Code</span>'
-        f'<div><span class="big a">{human(sv["saved"])}</span></div>'
-        f'<p class="u">token-units saved by Anthropic\'s automatic caching{nat_usd}. Not this '
-        f'tool\'s doing, and it does not claim it.</p></div>'
-        '<div class="h3c"><span class="cpill est">Opportunity &middot; estimated</span>'
-        f'<div><span class="big w">{human(total_rx)}</span></div>'
-        '<p class="u">token-units still addressable in your own sessions, estimated from the '
-        'issues below.</p></div>'
-        '</div>')
+        '<div class="hero"><span class="cpill ver">Verified &middot; Token Shield</span>'
+        f'<p class="k">What Token Shield verified</p>'
+        f'<div>{vbig}</div><p class="sub">{vu}</p></div>')
 
-    # USD honesty line.
-    if usd:
-        unp = (f' {human(usd["unpriced_units"])} units ran on models not in the snapshot and '
-               f'are left unpriced.' if usd.get("unpriced_units") else '')
-        parts.append(f'<p class="usdline"><b>Dollars, honestly.</b> The native caching saving '
-                     f'is about <b>${usd["usd"]:,.0f}</b> API-equivalent at list prices '
-                     f'(snapshot {usd["snapshot"]}), priced at each model\'s own rate.{unp} On '
-                     f'a subscription your bill did not drop by this; it is what the same '
-                     f'tokens would cost at API prices.</p>')
-    elif usd_res and usd_res.get("status") == "NO_PRICE_DATA":
-        parts.append('<p class="usdline"><b>Dollars: NO PRICE DATA.</b> The pricing snapshot '
-                     'is stale, so no dollar figure is shown. The token saving still stands.</p>')
-
-    # v1.7 advisor surfaces. Each degrades to its own NO DATA state, never a
-    # crash, when its source (profile.json, the experiment ledger, or
-    # data/companions.json) is missing.
+    # v1.7 advisor surfaces, grouped under one banner: everything from here
+    # down is something the user can move by acting (a habit, a config edit,
+    # a card decision), never a cache mechanic they cannot touch.
+    parts.append('<h2>What you can still influence</h2>')
     cache_root = plugin_cache_root or os.path.expanduser("~/.claude/plugins/cache")
     parts.append(render_next_best_move(advise_result))
     parts.append(render_observed_pattern(profile))
     parts.append(render_recommendation_queue(advise_result, suppressed_n))
     parts.append(render_companions(companions_data, profile, cache_root))
     parts.append(render_experiment_history(experiment_rows or []))
-    parts.append(render_alerts(profile))
 
     # WINS AND ISSUES at a glance, Brave-style reassurance.
     wins = []
@@ -806,6 +876,8 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
 
     # ISSUE CARDS, ranked. OPPORTUNITY, so labeled ESTIMATED: measured waste plus
     # an estimated saving from fixing it. Only Experiment Mode makes it VERIFIED.
+    # Every card here is a behavior the user can change (a switch, a floor, a
+    # rebuild pattern), never a cache mechanic they cannot act on.
     parts.append('<h2>Your top issues, ranked</h2>')
     if not rx:
         parts.append('<div class="pain"><div class="pain-item"><div class="rank">&#10003;</div>'
@@ -821,7 +893,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
             pain.append(
                 f'<div class="pain-item"><div class="rank">{i}</div>'
                 f'<div class="t">{r["title"]}<span class="tag">{impact} impact</span>'
-                f'<span class="cpill est" style="margin:0 0 0 8px">Estimated</span></div>'
+                f'<span class="cpill est" style="margin:0 0 0 8px">Opportunity, estimated</span></div>'
                 f'<div class="m">{r["measure"]}</div>'
                 f'<div class="fix"><b style="color:var(--good)">Painkiller.</b> '
                 f'{r["painkiller"]}<br><b style="color:var(--accent)">Medicine.</b> '
@@ -835,28 +907,6 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                      f'native caching. To turn an estimate into a VERIFIED number, run '
                      f'<code>experiment start</code>, apply one fix, then '
                      f'<code>experiment end</code>.</p>')
-
-    # NATIVE DETAIL, secondary: where the native saving comes from, so the hero
-    # number is checkable rather than asserted.
-    parts.append('<h2>Where the native saving comes from</h2>')
-    umax = sv["unblocked"] or 1
-    parts.append('<div class="compare">'
-                 '<div class="col"><div class="barc"><div class="fill" '
-                 f'style="width:100%;background:var(--shield)"></div></div>'
-                 f'<div class="amt">{human(sv["unblocked"])}</div>'
-                 '<div class="lbl">reads, uncached price</div></div>'
-                 '<div class="col"><div class="barc"><div class="fill" '
-                 f'style="width:{sv["paid"] / umax * 100:.1f}%;background:var(--good)"></div></div>'
-                 f'<div class="amt">{human(sv["paid"])}</div>'
-                 '<div class="lbl">reads, actually paid (0.1x)</div></div>'
-                 '<div class="col"><div class="barc"><div class="fill" '
-                 f'style="width:{sv["write_cost"] / umax * 100:.1f}%;background:var(--accent)"></div></div>'
-                 f'<div class="amt">{human(sv["write_cost"])}</div>'
-                 '<div class="lbl">cache writes (1.25x / 2x)</div></div></div>'
-                 '<p class="n" style="margin-top:10px">Almost all of the saving is the gap '
-                 'between the first two bars: history re-read from cache instead of '
-                 'reprocessed. This is Anthropic\'s caching, shown so the hero number is '
-                 'checkable, not so the tool can claim it.</p>')
 
     if include_sessions and sessions:
         top = sorted((s for s in sessions if s["first_request"] > 0),
@@ -874,6 +924,27 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                      '<th>First request</th><th>Share</th><th>Calls</th>'
                      '<th>Hit</th><th>Models</th></tr></thead><tbody>'
                      + rows + '</tbody></table></div>')
+
+    # YOUR ROUTINE, static: no new machinery, just naming what already runs
+    # by itself and what to run by hand after a real change.
+    parts.append('<h2>Your routine</h2>')
+    parts.append(
+        '<p class="n">Monthly, the <code>com.tokenshield.monthly-audit</code> launchd job '
+        're-renders this page by itself, and <code>/token-shield:monthly</code> compares it '
+        'against the prior month. After any config change, run '
+        '<code>python3 scripts/cli.py profile</code> to re-measure. Before and after an '
+        'experiment, run <code>python3 scripts/cli.py experiment start &lt;label&gt;</code> '
+        'and <code>python3 scripts/cli.py experiment end &lt;label&gt;</code>.</p>')
+
+    # METHODOLOGY POINTER, the only mention of native caching left on this
+    # page: one sentence, no numbers, no bars, no dollars. The full accounting
+    # (0.1x reads, 1.25x/2x write premiums) lives in docs/METHODOLOGY.md, not
+    # here, because every number on this page is one the user can move by
+    # acting; the native saving is not this tool's, and it does not claim it.
+    parts.append(
+        '<p class="usdline">Anthropic\'s own caching also works underneath every session; '
+        'that saving is not this tool\'s, and it does not claim it. The accounting lives in '
+        '<code>docs/METHODOLOGY.md</code>, not on this page.</p>')
 
     parts.append('<h2>What the labels mean</h2>')
     parts.append('<div class="legend">'

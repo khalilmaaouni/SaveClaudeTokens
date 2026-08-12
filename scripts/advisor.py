@@ -31,11 +31,13 @@ later experiment can cite the card that caused it.
 
 USAGE
   python3 advisor.py
+  python3 advisor.py --decide <strategy-id> <done|not-now|never>
 """
 
 import json
 import os
 import shutil
+import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +51,16 @@ BANDS = {"HIGH": 3, "MED": 2, "LOW": 1}
 OPS = {">=", "<=", "=="}
 DECISIONS = {"accepted", "rejected", "suppressed"}
 
+# The plain-word choices offered on a dashboard chip or in the /advisor
+# command, mapped onto the decision vocabulary treatment memory already
+# understands. No new decision strings are ever invented past DECISIONS.
+DECIDE_CHOICES = {"done": "accepted", "not-now": "suppressed", "never": "rejected"}
+# "not-now" quiets a card for 90 days; "never" uses the same "rejected"
+# decision but far out, so it does not resurface on its own.
+DECIDE_DAYS = {"not-now": 90, "never": 36500}
+
+DASHES = ("\u2013", "\u2014")  # en dash, em dash: never allowed in any strategy text
+
 # Ratified priority order: cache rebuilds > startup floor > output >
 # redundancy > boundaries > routing > memory > verbosity > overbuild >
 # companion. An unlisted category (should never happen once strategies.json
@@ -59,8 +71,30 @@ CATEGORY_PRIORITY = ["cache", "startup", "output", "redundancy", "boundaries",
 REQUIRED_FIELDS = ["id", "category", "title", "trigger", "what_it_changes",
                    "expected_benefit", "evidence", "drawback", "quality_risk",
                    "reversibility", "how_measured", "if_you_say_no",
-                   "alternatives", "companion", "requires_confirmation", "source"]
+                   "alternatives", "companion", "requires_confirmation", "source",
+                   "how"]
 REQUIRED_TRIGGER_FIELDS = ["metric", "op", "value", "band"]
+
+
+def _has_dash(text):
+    return any(d in text for d in DASHES)
+
+
+def _validate_how(sid, how):
+    """A strategy's "how" is a concrete, copy-pasteable action list: 2 to 5
+    steps, each carrying non-empty text and an optional command. Never a
+    literal em or en dash, same rule as every other user-facing field.
+    """
+    if not isinstance(how, list) or not (2 <= len(how) <= 5):
+        raise ValueError(f"strategy {sid}: how must be a list of 2 to 5 steps")
+    for j, step in enumerate(how):
+        if not isinstance(step, dict) or not step.get("text"):
+            raise ValueError(f"strategy {sid}: how step {j} missing non-empty text")
+        if _has_dash(step["text"]):
+            raise ValueError(f"strategy {sid}: how step {j} text carries an em or en dash")
+        command = step.get("command")
+        if command is not None and _has_dash(command):
+            raise ValueError(f"strategy {sid}: how step {j} command carries an em or en dash")
 
 
 def load_strategies(path=DEFAULT_STRATEGIES):
@@ -101,6 +135,7 @@ def load_strategies(path=DEFAULT_STRATEGIES):
             raise ValueError(f"strategy {sid}: evidence {s['evidence']!r} not in {sorted(EVIDENCE_LABELS)}")
         if not s.get("source"):
             raise ValueError(f"strategy {sid}: source must be non-empty")
+        _validate_how(sid, s["how"])
     return strategies
 
 
@@ -218,6 +253,7 @@ def _card(strategy, rank, profile):
         # so no consumer has to know that A6 is a docs/CLAIMS.md row id.
         "source": format_source(strategy["source"]),
         "requires_confirmation": strategy["requires_confirmation"],
+        "how": strategy.get("how", []),
     }
 
 
@@ -366,7 +402,35 @@ def _print_card(card):
     print()
 
 
-def main():
+def cmd_decide(strategy_id, choice):
+    """Handle `advisor.py --decide <strategy-id> <done|not-now|never>`. Maps
+    the plain-word dashboard/CLI choice onto the existing accepted/rejected/
+    suppressed vocabulary; no new decision string is ever invented.
+    """
+    if choice not in DECIDE_CHOICES:
+        print(f"unknown decision {choice!r}; use one of {sorted(DECIDE_CHOICES)}")
+        return 2
+    decision = DECIDE_CHOICES[choice]
+    days = DECIDE_DAYS.get(choice, 90)
+    # TREATMENTS_PATH read live (not via record_decision's own default
+    # argument, bound once at definition time) so a test can point it at a
+    # temp file the same way it already does for PROFILE_PATH in main().
+    rec = record_decision(strategy_id, decision, days=days, path=TREATMENTS_PATH)
+    until = rec.get("until")
+    tail = f"quiet until {until}" if until else f"lineage {rec.get('lineage')}"
+    print(f"recorded: {strategy_id} -> {decision} ({tail})")
+    return 0
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "--decide":
+        if len(argv) != 3:
+            print("usage: advisor.py --decide <strategy-id> <done|not-now|never>")
+            return 2
+        return cmd_decide(argv[1], argv[2])
+
     if not os.path.exists(PROFILE_PATH):
         print("NO DATA: run profile.py first")
         return 2
@@ -399,5 +463,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(main())
