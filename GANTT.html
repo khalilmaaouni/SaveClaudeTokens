@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SaveClaudeTokens: token economy program</title>
+<style>
+  :root{
+    --paper:#F7F8F6; --ink:#141B22; --accent:#0E7A6F; --muted:#5B6770;
+    --line:#DCE1DE; --card:#FFFFFF; --hatch:#B9CFC9; --faint:#EEF2F0;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:Seravek,"Avenir Next",Avenir,"Segoe UI",system-ui,sans-serif;
+    --mono:"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--paper:#141B22;--ink:#EDF1EF;--accent:#3AA893;--muted:#9AA7AE;
+          --line:#2A343C;--card:#1B242C;--hatch:#2E4A46;--faint:#1F2932;}
+  }
+  :root[data-theme="dark"]{--paper:#141B22;--ink:#EDF1EF;--accent:#3AA893;--muted:#9AA7AE;
+          --line:#2A343C;--card:#1B242C;--hatch:#2E4A46;--faint:#1F2932;}
+  :root[data-theme="light"]{--paper:#F7F8F6;--ink:#141B22;--accent:#0E7A6F;--muted:#5B6770;
+          --line:#DCE1DE;--card:#FFFFFF;--hatch:#B9CFC9;--faint:#EEF2F0;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 22px 80px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);}
+  h1{font-family:var(--serif);font-size:clamp(30px,5vw,50px);line-height:1.08;margin:.2em 0 .1em;font-weight:600;}
+  .stamp{font-family:var(--mono);font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px;margin-top:14px;}
+  h2{font-family:var(--serif);font-size:24px;margin:44px 0 14px;font-weight:600;}
+  .northstar{background:var(--card);border-left:4px solid var(--accent);border-radius:0 8px 8px 0;padding:18px 22px;margin:26px 0;}
+  .northstar b{font-family:var(--serif);font-size:19px;display:block;margin-bottom:6px;}
+  .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:14px;margin:20px 0;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:15px 17px;}
+  .card h3{margin:0 0 8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);}
+  .card p{margin:0 0 6px;font-size:14px;}
+  .scroller{overflow-x:auto;}
+  table.g{border-collapse:collapse;width:100%;min-width:640px;font-size:13px;}
+  table.g th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line);}
+  table.g td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  .lab{width:36%;}
+  .cnt{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .bar{position:relative;height:15px;background:var(--faint);border-radius:3px;overflow:hidden;}
+  .done{position:absolute;top:0;left:0;height:100%;background:var(--accent);}
+  .sched{position:absolute;top:0;height:100%;background:repeating-linear-gradient(45deg,var(--hatch),var(--hatch) 4px,transparent 4px,transparent 8px);}
+  .est{position:absolute;top:0;height:100%;background:var(--faint);opacity:.75;}
+  .chip{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--faint);border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin-left:8px;color:var(--muted);}
+  ul.led{list-style:none;padding:0;margin:8px 0 0;}
+  ul.led li{padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;}
+  ul.led li .ev{display:block;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-word;}
+  .tick{color:var(--accent);font-weight:700;}
+  .open{color:var(--muted);}
+  footer{margin-top:52px;border-top:1px solid var(--line);padding-top:16px;font-family:var(--mono);font-size:11.5px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">SaveClaudeTokens / delivery view</div>
+  <h1>Token economy: laws, plugin, and machine cleanup</h1>
+  <div class="stamp">Refreshed 2026-08-12 by session 43d8991e (Fable 5). Tick contract: a box ticks only when its done-check ran after the last edit and that output is quoted beside it.</div>
+
+  <div class="northstar">
+    <b>North star</b>
+    Every Claude session on this machine costs the least it can while losing no quality, and the method is portable enough that other people can install it as a plugin.
+  </div>
+
+  <h2>At a glance</h2>
+  <div class="strip">
+    <div class="card"><h3>Now</h3><p>Plugin built and installed locally; machine rules landed in CLAUDE.md; vault hook slimmed.</p><p class="cnt">Next: push repo to GitHub.</p></div>
+    <div class="card"><h3>Waiting on Khalil</h3><p>Pick the plugin disable bundles (A to D). Switch output style to default in app settings.</p><p class="cnt">Bundles hold ~52k tokens per session.</p></div>
+    <div class="card"><h3>Risk watch</h3><p>Both skill frameworks kept, so ~6.2k tokens per session stay. CLAUDE.md still 46KB.</p><p class="cnt">Diet is a dedicated next session.</p></div>
+    <div class="card"><h3>Forecast</h3><p>Landed today: hook slimming (6.4KB) and ponytail. Available on approval: ~52k tokens per session.</p><p class="cnt">Estimates are the CLI's own figures.</p></div>
+  </div>
+
+  <h2>Short range: this session, by hour block</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Track</th><th>Advance</th><th>H1</th><th>H2</th><th>H3</th></tr>
+    <tr><td class="lab">Facts and audit</td><td class="cnt">4/4</td><td colspan="3"><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Plugin build and review</td><td class="cnt">5/5</td><td colspan="3"><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Founder decisions applied</td><td class="cnt">3/4</td><td colspan="3"><div class="bar"><div class="done" style="width:74%"></div><div class="sched" style="left:74%;width:26%"></div></div></td></tr>
+    <tr><td class="lab">Ship: push and publish</td><td class="cnt">0/3</td><td colspan="3"><div class="bar"><div class="sched" style="left:0;width:56%"></div><div class="est" style="left:56%;width:44%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Long range: the program</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Phase</th><th>Advance</th><th>Aug 12</th><th>Aug 13-19</th><th>Aug 20+</th></tr>
+    <tr><td class="lab">1. Laws in CLAUDE.md</td><td class="cnt">2/2</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">2. SaveClaudeTokens plugin</td><td class="cnt">6/8</td><td><div class="bar"><div class="done" style="width:78%"></div><div class="sched" style="left:78%;width:22%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">3. Machine prune</td><td class="cnt">1/5</td><td><div class="bar"><div class="done" style="width:20%"></div></div></td><td><div class="bar"><div class="sched" style="left:0;width:80%"></div></div></td><td></td></tr>
+    <tr><td class="lab">4. CLAUDE.md diet under 20KB</td><td class="cnt">0/3</td><td></td><td><div class="bar"><div class="sched" style="left:0;width:70%"></div><div class="est" style="left:70%;width:30%"></div></div></td><td></td></tr>
+    <tr><td class="lab">5. Measure and iterate</td><td class="cnt">0/3</td><td></td><td></td><td><div class="bar"><div class="est" style="left:0;width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Decisions waiting on Khalil</h2>
+  <div class="strip">
+    <div class="card"><h3>Plugin bundles</h3><p>Bundles A to D were proposed with per-bundle token figures and left unapproved (answer was no preference). Nothing was disabled.</p><p class="cnt">Value on the table: ~52,000 tokens per session.</p></div>
+    <div class="card"><h3>Output style</h3><p>The explanatory style adds an insight block to every turn. The style picker is in app settings, so this one is your hand.</p><p class="cnt">Approved, awaiting your click.</p></div>
+  </div>
+
+  <h2>Risk management, insights and alerts</h2>
+  <div class="strip">
+    <div class="card"><h3>Alert: both frameworks kept</h3><p>superpowers and ultrapowers inject overlapping manifestos at every session start. You chose to keep both, which is a deliberate cost, not an oversight. What to do: if a session ever feels slow to start, revisit this first, since it is the single largest remaining always-on block after CLAUDE.md.</p></div>
+    <div class="card"><h3>Risk: usage zeros are soft evidence</h3><p>The transcript scan proves a plugin was never invoked by name, but two plugins register under a hashed prefix, so their zeros are unreliable. What to do: treat zeros as a shortlist to review, never as an automatic delete, and keep every disable reversible.</p></div>
+    <div class="card"><h3>Insight: the audit is repeatable</h3><p>The scan script and the per-plugin token query are both one-liners in the skill. What to do: re-run them monthly, before adding any new plugin, so the startup weight never drifts back up unnoticed.</p></div>
+    <div class="card"><h3>Watch: ponytail is third-party</h3><p>Version 4.9.0 ships three hooks that run outside model context. Network calls exist only in its tests and benchmark scripts, not in the hooks. What to do: re-check that on any version bump, since a hook is code that runs on your machine at every session start.</p></div>
+  </div>
+
+  <h2>The ledger</h2>
+
+  <h3>Phase 1: laws in CLAUDE.md <span class="chip">2/2</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Token economy section added (cache, compaction, routing, waits, prune ritual, verbosity)
+      <span class="ev">grep -c "SaveClaudeTokens: token economy v2" ~/.claude/CLAUDE.md returned 1</span></li>
+    <li><span class="tick">[x]</span> Curation decisions updated with the 2026-08-12 round, including what was NOT approved
+      <span class="ev">grep -c "2026-08-12 token economy round" ~/.claude/CLAUDE.md returned 1</span></li>
+  </ul>
+
+  <h3>Phase 2: SaveClaudeTokens plugin <span class="chip">6/8</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Repo scaffolded at ~/SaveClaudeTokens with manifest, marketplace, skill, README, LICENSE, PROJECT.md
+      <span class="ev">claude plugin details save-claude-tokens: "Skills (1) save-claude-tokens", "Always-on: ~184 tok"</span></li>
+    <li><span class="tick">[x]</span> Caching multipliers verified against the Anthropic docs page, not memory
+      <span class="ev">platform.claude.com prompt-caching: writes 1.25x (5m) / 2x (1h), reads 0.1x, TTL refreshes free on use</span></li>
+    <li><span class="tick">[x]</span> Dash scan clean
+      <span class="ev">grep -rnP '[\x{2013}\x{2014}]' ~/SaveClaudeTokens returned nothing, exit 1</span></li>
+    <li><span class="tick">[x]</span> Attribution and secret scans clean
+      <span class="ev">attribution scan: only the PROJECT.md line describing the scan itself, since rewritten; secret scan exit 1 (no match)</span></li>
+    <li><span class="tick">[x]</span> Installed locally from its own marketplace
+      <span class="ev">"Successfully added marketplace: saveclaudetokens" then "Successfully installed plugin: save-claude-tokens@saveclaudetokens (scope: user)"</span></li>
+    <li><span class="tick">[x]</span> Independent skill review passed
+      <span class="ev">reviewer subagent (sonnet, read-only): "VERDICT: SHIP", 2 IMPROVE findings applied (third-person description, community skills reframed as illustrative)</span></li>
+    <li><span class="open">[ ]</span> Pushed to GitHub under the founder's sole authorship
+      <span class="ev">check: git rev-parse HEAD equals git ls-remote origin main</span></li>
+    <li><span class="open">[ ]</span> Progress page published to one stable artifact link
+      <span class="ev">check: PROJECT.md records the published URL</span></li>
+  </ul>
+
+  <h3>Phase 3: machine prune <span class="chip">1/5</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Vault session-start hook slimmed (line cap, fewer logs)
+      <span class="ev">session-start.sh output: 8218 bytes, down from 14671 measured this morning</span></li>
+    <li><span class="open">[ ]</span> Bundle A analytics disabled
+      <span class="ev">awaiting founder pick; measured cost ~28,800 tok/session</span></li>
+    <li><span class="open">[ ]</span> Bundle B SaaS connectors disabled
+      <span class="ev">awaiting founder pick; measured cost ~17,800 tok/session</span></li>
+    <li><span class="open">[ ]</span> Bundle C dev extras disabled
+      <span class="ev">awaiting founder pick; measured cost ~5,500 tok/session</span></li>
+    <li><span class="open">[ ]</span> Bundle D dead MCP servers removed after backup
+      <span class="ev">awaiting founder pick; voicebox dead, fromto cert error, five unauthenticated</span></li>
+  </ul>
+
+  <h3>Phase 4: CLAUDE.md diet <span class="chip">0/3</span></h3>
+  <ul class="led">
+    <li><span class="open">[ ]</span> History and rationale moved into the vault, every rule kept
+      <span class="ev">check: wc -c ~/.claude/CLAUDE.md under 20480</span></li>
+    <li><span class="open">[ ]</span> Each moved block leaves a one-line pointer
+      <span class="ev">check: every removed section has a vault note it names</span></li>
+    <li><span class="open">[ ]</span> Founder reads the diff before it lands
+      <span class="ev">check: founder approval recorded in the session log</span></li>
+  </ul>
+
+  <h3>Phase 5: measure and iterate <span class="chip">0/3</span></h3>
+  <ul class="led">
+    <li><span class="open">[ ]</span> Baseline week of spend after the prune
+      <span class="ev">check: spend digest line compared week over week</span></li>
+    <li><span class="open">[ ]</span> Token-waste ledger started in the vault
+      <span class="ev">check: the note exists and carries at least one dated entry</span></li>
+    <li><span class="open">[ ]</span> Plugin published and installable by others
+      <span class="ev">check: claude plugin marketplace add khalilmaaouni/SaveClaudeTokens succeeds from a clean machine</span></li>
+  </ul>
+
+  <h2>Decisions recorded</h2>
+  <div class="strip">
+    <div class="card"><h3>Keep both frameworks</h3><p>superpowers and ultrapowers both stay, founder's call, against the recommendation to keep one. Alternative was ~5,475 tokens per session saved. What would change it: a session-start slowdown, or a month with zero ultrapowers invocations.</p></div>
+    <div class="card"><h3>Install ponytail</h3><p>Third-party skill installed for leaner generated code. Alternative was to skip and rely on caveman alone. What would change it: a hook doing anything but local text injection on a version bump.</p></div>
+    <div class="card"><h3>Audit inline, not by subagent</h3><p>The 90-day transcript scan ran as one python script rather than a dispatched agent: it is deterministic, so an agent would have added cost and no judgment. Recorded because choosing not to delegate is itself a decision.</p></div>
+    <div class="card"><h3>Bundles proposed, not applied</h3><p>The disable bundles were left untouched because the answer was no preference, not approval. Recorded so a later session does not read silence as consent.</p></div>
+  </div>
+
+  <footer>
+    Tick contract: a box ticks only when its done-check ran after the last edit and the output is quoted in the evidence line beside it. Percentages are counts of records, never impressions.<br>
+    Refreshed 2026-08-12 by session 43d8991e. Author: Khalil Maaouni.
+  </footer>
+</div>
+</body>
+</html>

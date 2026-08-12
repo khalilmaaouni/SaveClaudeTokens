@@ -1,0 +1,17 @@
+{
+  "name": "saveclaudetokens",
+  "owner": {
+    "name": "Khalil Maaouni",
+    "url": "https://github.com/khalilmaaouni"
+  },
+  "description": "SaveClaudeTokens: run Claude Code cheaply without losing quality.",
+  "plugins": [
+    {
+      "name": "save-claude-tokens",
+      "source": "./",
+      "description": "Token economy playbook: cache discipline, compact versus fresh session, model tier routing, plugin and MCP pruning, output discipline, durable memory.",
+      "category": "productivity",
+      "keywords": ["tokens", "cost", "prompt-caching", "compaction", "model-routing"]
+    }
+  ]
+}
