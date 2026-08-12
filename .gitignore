@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+
+# Machine-local, never published: these track this machine's own rollout,
+# not the distributable plugin.
+PROJECT.md
+GANTT.html
