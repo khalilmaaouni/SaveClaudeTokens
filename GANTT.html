@@ -65,7 +65,7 @@
 
   <h2>At a glance</h2>
   <div class="strip">
-    <div class="card"><h3>Now</h3><p>Plugin built and installed locally; machine rules landed in CLAUDE.md; vault hook slimmed.</p><p class="cnt">Next: push repo to GitHub.</p></div>
+    <div class="card"><h3>Now</h3><p>Repo live and public, plugin installed, review verdict SHIP, PR 1 open, vault memory written.</p><p class="cnt">Next: your bundle picks.</p></div>
     <div class="card"><h3>Waiting on Khalil</h3><p>Pick the plugin disable bundles (A to D). Switch output style to default in app settings.</p><p class="cnt">Bundles hold ~52k tokens per session.</p></div>
     <div class="card"><h3>Risk watch</h3><p>Both skill frameworks kept, so ~6.2k tokens per session stay. CLAUDE.md still 46KB.</p><p class="cnt">Diet is a dedicated next session.</p></div>
     <div class="card"><h3>Forecast</h3><p>Landed today: hook slimming (6.4KB) and ponytail. Available on approval: ~52k tokens per session.</p><p class="cnt">Estimates are the CLI's own figures.</p></div>
@@ -78,7 +78,7 @@
     <tr><td class="lab">Facts and audit</td><td class="cnt">4/4</td><td colspan="3"><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
     <tr><td class="lab">Plugin build and review</td><td class="cnt">5/5</td><td colspan="3"><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
     <tr><td class="lab">Founder decisions applied</td><td class="cnt">3/4</td><td colspan="3"><div class="bar"><div class="done" style="width:74%"></div><div class="sched" style="left:74%;width:26%"></div></div></td></tr>
-    <tr><td class="lab">Ship: push and publish</td><td class="cnt">0/3</td><td colspan="3"><div class="bar"><div class="sched" style="left:0;width:56%"></div><div class="est" style="left:56%;width:44%"></div></div></td></tr>
+    <tr><td class="lab">Ship: push and publish</td><td class="cnt">3/3</td><td colspan="3"><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
   </table>
   </div>
 
@@ -87,7 +87,7 @@
   <table class="g">
     <tr><th class="lab">Phase</th><th>Advance</th><th>Aug 12</th><th>Aug 13-19</th><th>Aug 20+</th></tr>
     <tr><td class="lab">1. Laws in CLAUDE.md</td><td class="cnt">2/2</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
-    <tr><td class="lab">2. SaveClaudeTokens plugin</td><td class="cnt">6/8</td><td><div class="bar"><div class="done" style="width:78%"></div><div class="sched" style="left:78%;width:22%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">2. SaveClaudeTokens plugin</td><td class="cnt">8/8</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
     <tr><td class="lab">3. Machine prune</td><td class="cnt">1/5</td><td><div class="bar"><div class="done" style="width:20%"></div></div></td><td><div class="bar"><div class="sched" style="left:0;width:80%"></div></div></td><td></td></tr>
     <tr><td class="lab">4. CLAUDE.md diet under 20KB</td><td class="cnt">0/3</td><td></td><td><div class="bar"><div class="sched" style="left:0;width:70%"></div><div class="est" style="left:70%;width:30%"></div></div></td><td></td></tr>
     <tr><td class="lab">5. Measure and iterate</td><td class="cnt">0/3</td><td></td><td></td><td><div class="bar"><div class="est" style="left:0;width:100%"></div></div></td></tr>
@@ -118,7 +118,7 @@
       <span class="ev">grep -c "2026-08-12 token economy round" ~/.claude/CLAUDE.md returned 1</span></li>
   </ul>
 
-  <h3>Phase 2: SaveClaudeTokens plugin <span class="chip">6/8</span></h3>
+  <h3>Phase 2: SaveClaudeTokens plugin <span class="chip">8/8</span></h3>
   <ul class="led">
     <li><span class="tick">[x]</span> Repo scaffolded at ~/SaveClaudeTokens with manifest, marketplace, skill, README, LICENSE, PROJECT.md
       <span class="ev">claude plugin details save-claude-tokens: "Skills (1) save-claude-tokens", "Always-on: ~184 tok"</span></li>
@@ -132,10 +132,10 @@
       <span class="ev">"Successfully added marketplace: saveclaudetokens" then "Successfully installed plugin: save-claude-tokens@saveclaudetokens (scope: user)"</span></li>
     <li><span class="tick">[x]</span> Independent skill review passed
       <span class="ev">reviewer subagent (sonnet, read-only): "VERDICT: SHIP", 2 IMPROVE findings applied (third-person description, community skills reframed as illustrative)</span></li>
-    <li><span class="open">[ ]</span> Pushed to GitHub under the founder's sole authorship
-      <span class="ev">check: git rev-parse HEAD equals git ls-remote origin main</span></li>
-    <li><span class="open">[ ]</span> Progress page published to one stable artifact link
-      <span class="ev">check: PROJECT.md records the published URL</span></li>
+    <li><span class="tick">[x]</span> Pushed to GitHub under the founder's sole authorship
+      <span class="ev">HEAD, @{u} and ls-remote all printed 33a306be0b3a931b50981725e4c0519a35ccae98; author "Khalil Maaouni"; banned-attribution grep exit 1 (no match)</span></li>
+    <li><span class="tick">[x]</span> Progress page published to one stable artifact link
+      <span class="ev">published; PROJECT.md line 7 records the URL; PR 1 OPEN at github.com/khalilmaaouni/SaveClaudeTokens/pull/1</span></li>
   </ul>
 
   <h3>Phase 3: machine prune <span class="chip">1/5</span></h3>
