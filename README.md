@@ -66,6 +66,75 @@ main problem; an 85,021 token median first request with a 0.360 median share,
 which put the headroom squarely in the always-loaded set; and 41 percent of all
 output tokens coming from subagents, which is a different lever again.
 
+## Optional tools, all opt in
+
+The plugin registers no hooks and runs nothing on its own. Installing it still
+costs one skill listing line and nothing else. These three scripts exist for
+when you want them, and each does nothing until you run it.
+
+**`context_lint.py`** measures what you pay at every session start and reports
+where the rent is going. It never edits a file.
+
+```bash
+python3 scripts/context_lint.py
+```
+
+It reads your CLAUDE.md files and this project's auto-memory index, then flags
+duplicated rules, multi-step procedures that belong in a skill, rules that name
+a path and could be scoped to load only when a matching file is read, and stale
+dated entries. For the memory index it applies the documented load limit (the
+first 200 lines or 25KB, whichever comes first) to the content that actually
+loads, with frontmatter and HTML comments stripped the way Claude Code strips
+them, and tells you exactly which lines are falling off the end unread.
+
+**`session_end_telemetry.py`** appends one line of counters per session to a
+local JSONL ledger, so you accumulate history without paying a model to
+measure. It writes no conversation text, no file contents, and no prompts:
+only counters, a model count, and the transcript's basename. It sends nothing
+anywhere, prints nothing to stdout, and exits 0 even on failure so it can never
+break the session it is measuring.
+
+Wire it up yourself in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.claude/plugins/<install-path>/scripts/session_end_telemetry.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Set `TOKEN_LEDGER` to change where it writes. Default is
+`~/.claude/token-ledger.jsonl`.
+
+**`obsidian_export.py`** writes the numbers as a markdown note you can keep in
+an Obsidian vault, a docs folder, or anywhere else.
+
+```bash
+python3 scripts/obsidian_export.py --out ~/Vault/AI/Claude/TOKEN_DASHBOARD.md --days 30
+```
+
+Aggregates only. Per-session rows are off unless you pass `--include-sessions`,
+because transcript names identify sessions and a synced vault is a different
+privacy boundary from a local disk. Obsidian is a viewer here, never a
+dependency.
+
+Both test files run without a framework:
+
+```bash
+python3 scripts/test_measure_tokens.py && python3 scripts/test_tools.py
+```
+
 ## Pairs well with
 
 - caveman (terse narration) and ponytail (minimal generated code) for the output side.

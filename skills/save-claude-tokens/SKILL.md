@@ -1,7 +1,7 @@
 ---
 name: save-claude-tokens
 description: Cut Claude Code token spend without cutting quality. This skill should be used when the work involves prompt caching (cache writes, cache hits, TTL, refreshes), deciding between /rewind, /compact, /clear and a fresh session, routing work to the right model tier, pruning plugins and MCP servers that clog the context window, reducing verbose output, or auditing what a session costs. Triggers include tokens, cost, cache, caching, compact, compaction, context full, expensive, spend, budget, token economy, prune plugins.
-version: 1.1.0
+version: 1.2.0
 license: MIT
 ---
 
@@ -94,10 +94,19 @@ Everything loaded at session start is paid on every call of every session. Budge
 
 ```bash
 python3 <plugin>/scripts/measure_tokens.py --days 30   # the number that matters
-wc -c ~/.claude/CLAUDE.md                              # bytes over 4 is a rough token estimate
+python3 <plugin>/scripts/context_lint.py               # where the startup rent goes
 claude plugin list                                     # what is installed
 claude mcp list                                        # servers; "Needs authentication" means never used
 ```
+
+`context_lint.py` reports and never edits: duplicated rules, procedures that
+belong in a skill, rules that could be path-scoped, and, for an auto-memory
+index, exactly which lines fall past the documented load limit (first 200 lines
+or 25KB, whichever comes first) and therefore never reach a session at all.
+Two things it will tell you that are easy to get backwards: `@path` imports are
+expanded at launch, so splitting a file into imports organizes it without
+saving a single token, and block-level HTML comments are stripped before
+loading, so they are the free place to keep maintainer notes.
 
 Anything with zero recent use and no planned use gets disabled, and the decision gets one line in your notes so it is not re-litigated.
 
@@ -148,7 +157,7 @@ The most expensive token is the one spent re-discovering something a past sessio
 
 - Keep decisions, learnings and project state in on-disk notes. Sessions read them on demand instead of re-exploring the repo.
 - Pointer, not payload: the always-loaded file carries one line pointing at the note, never the note itself.
-- Keep a token-waste ledger: when a session burns tokens on something avoidable, append one line with the date, what it cost, and the rule that prevents it.
+- Keep a token-waste ledger: when a session burns tokens on something avoidable, append one line with the date, what it cost, and the rule that prevents it. If you want the numeric half of that ledger kept for you, wire the plugin's opt-in `session_end_telemetry.py` into a SessionEnd hook: it appends counters per session and never spends a model token to do it. Measuring token spend by asking a language model to measure it is a joke that bills.
 - Promote a ledger line into an always-loaded rule only after the same waste happens twice, the lesson is stable, and it is short enough to state in one line. A rule in CLAUDE.md pays rent on every call of every session, so it has to be worth more than that. Demote in the other direction: rules that apply to one subtree, or that a linter or hook could enforce, do not belong there.
 
 ## Anti-pattern ledger
