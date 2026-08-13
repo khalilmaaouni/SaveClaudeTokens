@@ -1,6 +1,6 @@
 {
   "name": "token-shield",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "A playbook skill that cuts Claude Code token spend: sourced prompt cache rules, session boundary decisions, model tier routing, plugin and MCP pruning, output discipline, and a durable-memory pattern. Ships opt-in tools that read the API usage counters from local transcripts: a measurement script, a context linter, a session telemetry hook, a deterministic advisor that ranks your next best move, and a Token Shield dashboard. Every claim is documented with the check that backs it.",
   "author": {
     "name": "Khalil Maaouni"

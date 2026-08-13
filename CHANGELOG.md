@@ -3,6 +3,40 @@
 All notable changes to this project are recorded here. The format follows
 Keep a Changelog. Entries are newest first.
 
+## 1.8.0 (staged 2026-08-14, tag awaiting the founder's confirmation)
+
+The release boundary opened on 2026-08-14: the claude-md-diet experiment was
+closed early on the founder's explicit decision and returned an honest
+NOT_PROVEN (window changed, config changed during the window, model mix not
+comparable). Nothing is claimed from it; the successor experiment
+claude-md-diet-v2 runs untouched. NOT_PROVEN opening a release is the product
+working: no evidence, no claim.
+
+- Pressure signals in the profiler (PRO2): tool output share by tool, exact
+  duplicate reads and commands, output verbosity, structured input share,
+  measured from this machine's own transcripts, labeled MEASURED, NO DATA
+  where a field is absent.
+- Advice cards wired to the truth registry (FACTS2): a card citing a fact
+  past its review interval tells the user the fact is stale instead of
+  presenting it as current.
+- Intent modes and guided recipes (H2): conservative, balanced, aggressive;
+  install and rollback commands printed verbatim from the curated registry;
+  an unvetted plugin is refused with the reason.
+- Treatment tournament (TOUR1): for one problem, every candidate ranked,
+  one winner with the deciding criterion, losers listed one level deeper,
+  native before companion at equal fit, NO DATA reasons where a signal is
+  unreadable.
+- Per-treatment target metrics (METR1): an experiment can declare the metric
+  it targets and is judged on that metric; legacy records and the open
+  experiment are byte-identical, proven by hash.
+- Ten second dashboard top strip (DASH1) and HISTORICAL rendering for
+  evidence recorded under a moved environment (HIST1).
+- The leadership roadmap: short, mid, long term; free core forever; Codex CLI
+  and Cursor adapters as the long-term expansion.
+- Design specs queued for the next cycle: Token Shield Fleet (enterprise,
+  self-hosted, zero cloud) and Token Shield Signals (opt-in anonymized waste
+  intelligence under a frozen public schema).
+
 ## Unreleased
 
 - Fact review interval lowered from 90 days to 30 (founder decision): a
