@@ -51,7 +51,12 @@ FACTS_PATH = os.path.join(HERE, "..", "data", "facts.json")
 
 STATE_FRESHNESS_SECONDS = 24 * 60 * 60  # 1 day, plan Step 5's freshness window
 STALENESS_DAYS = 180  # founder-reviewable threshold, plan ambiguity 3, 2026-08-13
-DEFAULT_FACT_REVIEW_DAYS = 90  # fallback only; every fact in data/facts.json states its own
+# 30 days, not a quarter. A platform fact (a documented default, a cache rule,
+# a price) can change in any given week, and this tool's whole claim is that it
+# does not hand out stale advice. 30 also matches the monthly report rhythm, so
+# a fact that went stale surfaces within one reporting cycle rather than three.
+# Fallback only; every fact in data/facts.json states its own.
+DEFAULT_FACT_REVIEW_DAYS = 30
 
 
 def _load_state(path=None):

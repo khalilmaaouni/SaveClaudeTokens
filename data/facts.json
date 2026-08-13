@@ -7,196 +7,196 @@
       "statement": "Caching is an exact prefix match; a change anywhere in the prefix recomputes everything after it.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A2",
       "statement": "Requests are layered system prompt, then project context, then conversation, so a conversation change leaves the two above it cached.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A3",
       "statement": "Cache writes bill at 1.25x base input for the 5 minute TTL and 2x for the 1 hour TTL; reads at 0.1x.",
       "source": "platform.claude.com/docs/en/build-with-claude/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A4",
       "statement": "On a Claude subscription the 1 hour TTL is requested automatically; an API key stays at 5 minutes; subagents use 5 minutes either way.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A5",
       "statement": "A subscription over its plan limit, drawing on usage credits, drops back to the 5 minute TTL.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A6",
       "statement": "Both model and effort level are part of the cache key; changing effort mid-session rebuilds the whole prefix.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A7",
       "statement": "Editing a root or user CLAUDE.md mid-session does not invalidate the cache and does not apply until reload.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A8",
       "statement": "Nested CLAUDE.md and rules with `paths:` frontmatter load later and an edit before they load does take effect.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A9",
       "statement": "Editing MCP config does not itself change the cache; it applies on restart.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A10",
       "statement": "Enabling or disabling a plugin that ships only skills, commands, agents or hooks is cache-safe; only one providing an MCP server invalidates.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A11",
       "statement": "MCP tool definitions are deferred behind tool search by default on supported models; deferral is unavailable in named cases.",
       "source": "code.claude.com/docs/en/mcp, code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A12",
       "statement": "A whole-tool deny rule invalidates the cache.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A13",
       "statement": "`/rewind` returns to an already-cached prefix; `/recap` appends without replacing history.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A14",
       "statement": "A warm mid-session `/compact` costs a fraction of what the context size suggests.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A15",
       "statement": "The cache is scoped per machine and per working directory; two worktrees of one repo miss each other's cache.",
       "source": "code.claude.com/docs/en/prompt-caching",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A16",
       "statement": "The auto-memory index loads the first 200 lines or 25KB, whichever comes first; content past that is dropped.",
       "source": "code.claude.com/docs/en/memory",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A17",
       "statement": "CLAUDE.md targets under 200 lines and loads in full regardless of length.",
       "source": "code.claude.com/docs/en/memory",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A18",
       "statement": "Block-level HTML comments are stripped before the index is loaded; `@path` imports expand at launch.",
       "source": "code.claude.com/docs/en/memory",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A19",
       "statement": "`disable-model-invocation: true` stops a skill loading until invoked; `skillOverrides` has four states and does not affect plugin skills.",
       "source": "code.claude.com/docs/en/skills",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "A20",
       "statement": "A SessionEnd hook event exists and its input includes the transcript path.",
       "source": "code.claude.com/docs/en/hooks",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D1",
       "statement": "An `InstructionsLoaded` hook event fires at session start and when instruction files load lazily.",
       "source": "code.claude.com/docs/en/hooks",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D2",
       "statement": "`includeGitInstructions: false` removes the built-in commit and PR workflow instructions.",
       "source": "code.claude.com/docs/en/settings",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D3",
       "statement": "`claudeMdExcludes` skips named CLAUDE.md files when loading memory.",
       "source": "code.claude.com/docs/en/settings",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D4",
       "statement": "`skillOverrides` can hide or collapse a skill per name.",
       "source": "code.claude.com/docs/en/settings",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D5",
       "statement": "`MAX_MCP_OUTPUT_TOKENS` caps MCP tool output size.",
       "source": "code.claude.com/docs/en/mcp",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D6",
       "statement": "Tool search is on by default and `ENABLE_TOOL_SEARCH` controls it.",
       "source": "code.claude.com/docs/en/mcp",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D7",
       "statement": "`/btw` asks a question without adding to conversation history.",
       "source": "code.claude.com/docs/en/interactive-mode",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     },
     {
       "id": "D9",
       "statement": "Agent frontmatter supports `model`, `effort`, and `maxTurns`.",
       "source": "code.claude.com/docs/en/sub-agents",
       "verified": "2026-08-12",
-      "review_interval_days": 90
+      "review_interval_days": 30
     }
   ]
 }
