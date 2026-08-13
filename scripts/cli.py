@@ -13,6 +13,8 @@ cli.py: one entry point for Token Shield.
   python3 cli.py advise --decide <strategy-id> <done|not-now|never>
                                       record a card decision (treatment memory)
   python3 cli.py report              monthly report; --month YYYY-MM --out PATH
+  python3 cli.py doctor              read-only ecosystem doctor: health,
+                                      staleness, shared-hook facts (doctor.py)
   python3 cli.py uninstall           remove local Token Shield data: prints
                                       what exists, requires typing YES, deletes
 
@@ -232,6 +234,11 @@ def main(argv):
         here = os.path.dirname(os.path.abspath(__file__))
         return subprocess.run(
             [sys.executable, os.path.join(here, "report.py")] + argv[1:]).returncode
+    if cmd == "doctor":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "doctor.py")] + argv[1:]).returncode
     if cmd == "uninstall":
         return uninstall()
     if cmd == "experiment":
