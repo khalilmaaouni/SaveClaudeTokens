@@ -35,6 +35,23 @@ python3 scripts/cli.py report                # /token-shield:monthly
 
 > Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
 
+## MCP server (optional)
+
+One config line installs a read-only MCP server over the same data, for any client that speaks MCP (Claude Desktop, Cursor, Codex-style agents):
+
+```json
+{
+  "mcpServers": {
+    "token-shield": {
+      "command": "python3",
+      "args": ["/path/to/token-shield/mcp-server/src/token_shield_mcp/server.py"]
+    }
+  }
+}
+```
+
+It adds nine tools (`get_profile`, `get_summary`, `get_advice`, `get_monthly_report`, `list_strategies`, `record_decision`, `experiment_start`, `experiment_end`, `get_detailed_report`) and three resources (the dashboard HTML, `docs/METHODOLOGY.md`, `docs/CLAIMS.md`), each a thin wrapper over the same scripts the CLI runs. It is a separate opt-in install: the plugin gains zero dependencies, zero hooks, and zero always-on cost from it, and it never touches anything outside Token Shield's own local store.
+
 ## Why this exists
 
 Every API call in a Claude Code session resends the whole accumulated context. Most token waste comes from four places:
