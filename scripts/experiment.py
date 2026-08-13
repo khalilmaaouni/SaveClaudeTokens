@@ -314,8 +314,11 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
         mover was not the file named at start's --treats;
-      - the set of models used changed between the before and after cohort,
-        when both sides carry a model list at all.
+      - the DOMINANT main-thread model (the one used in the most sessions,
+        ties broken lexically) differs between the before and after cohort,
+        when both sides carry main-thread model tracking at all; exactly one
+        side missing it (a baseline pinned before this field existed) is
+        itself a downgrade, never a silent skip, since NO DATA beats a guess.
     Non-overlap between the before and after cohort windows is a harder
     refusal, enforced by check_cohort_order before this function is ever
     called, so no ledger record gets written for it at all.
@@ -343,17 +346,36 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
 
     # Model mix is a confound the same way the config fingerprint is: a floor
     # change might come from a model switch mid-experiment, not the named
-    # treatment. Only compared when both sides actually carry a model list
-    # (a legacy or hand-built summary carries neither, and None vs None is
-    # not a difference), same guard style as the fingerprint check above.
+    # treatment. The trigger is the DOMINANT model per cohort (the one used
+    # in the most sessions, ties broken lexically), not full-set equality:
+    # a routine minor-version bump touching one session out of many would
+    # otherwise downgrade every experiment. The full sets still ride along
+    # on the record as models_before/models_after for transparency.
+    #
+    # "Neither side tracked" (both None, e.g. a legacy baseline compared
+    # against another legacy-shaped summary) is not a difference and stays
+    # silent. But EXACTLY ONE side missing _models is not "no data on
+    # either side": it means the comparison itself cannot be trusted, and a
+    # silent skip there would let a live baseline pinned before this field
+    # existed sail through to VERIFIED with the guard never having run.
+    # NO DATA beats a guess, so that case downgrades with a named reason.
     models_before = b.get("_models")
     models_after = after_sm.get("_models")
-    if models_before is not None and models_after is not None:
-        set_before, set_after = set(models_before), set(models_after)
-        if set_before != set_after:
+    if models_before is None and models_after is None:
+        pass
+    elif (models_before is None) != (models_after is None):
+        thin_side = "before" if models_before is None else "after"
+        reasons.append(
+            f"model mix cannot be compared: the {thin_side} cohort predates "
+            f"model tracking (no _models recorded)")
+    else:
+        dominant_before = b.get("_dominant_model")
+        dominant_after = after_sm.get("_dominant_model")
+        if (dominant_before is not None and dominant_after is not None
+                and dominant_before != dominant_after):
             reasons.append(
-                f"model mix changed during experiment window "
-                f"(before {sorted(set_before)}, after {sorted(set_after)})")
+                f"dominant model changed during experiment window "
+                f"(before {dominant_before!r}, after {dominant_after!r})")
 
     fr_before = b.get("first_request_median")
     fr_after = after_sm.get("first_request_median")
@@ -398,8 +420,8 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         "direction": direction,
         "sessions_before": b.get("parent_sessions"),
         "sessions_after": after_sm.get("parent_sessions"),
-        "dispersion_before": p90_before if p90_before is not None else "NO DATA",
-        "dispersion_after": p90_after if p90_after is not None else "NO DATA",
+        "dispersion_before": p90_before,
+        "dispersion_after": p90_after,
         "normalized_input_before": b.get("normalized_input_total"),
         "normalized_input_after": after_sm.get("normalized_input_total"),
         "models_before": models_before,
@@ -437,13 +459,25 @@ def _measure_cohort(root, start_ts, end_ts, days):
     sm["_window_days"] = days
     sm["_cohort_start_ts"] = start_ts
     sm["_cohort_end_ts"] = end_ts
-    # The distinct model names actually used in this cohort, so build_record
-    # can catch a model switch between the before and after cohort: a floor
-    # change might come from the new model, not the named treatment.
+    # The main-thread model names actually used in this cohort (model_names
+    # is collected only from non-subagent records, see _read_session_cohort),
+    # so build_record can catch a model switch between the before and after
+    # cohort: a floor change might come from the new model, not the named
+    # treatment. _models is the full set, kept for transparency on the
+    # record; _dominant_model is the one used in the most sessions (ties
+    # broken lexically) and is what the downgrade guard actually compares,
+    # so a minor-version bump touching one session out of many does not by
+    # itself flag every experiment.
     models = set()
+    session_counts = {}
     for s in sessions:
-        models |= s.get("model_names") or set()
+        names = s.get("model_names") or set()
+        models |= names
+        for name in names:
+            session_counts[name] = session_counts.get(name, 0) + 1
     sm["_models"] = sorted(models)
+    sm["_dominant_model"] = (min(session_counts, key=lambda m: (-session_counts[m], m))
+                             if session_counts else None)
     return sm
 
 

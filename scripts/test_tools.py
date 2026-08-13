@@ -561,11 +561,10 @@ def test_verified_headline_is_per_label_and_never_a_cross_label_total():
     verified = shield.verified_by_label(rows)
     assert [r["label"] for r in verified] == ["diet-claude-md", "prune-mcp"], verified
     assert [r["floor_reduction"] for r in verified] == [5000, -8000], verified
-    # M3/m1. A regression's own record must never carry the same shape as a
-    # saving: -8000 must say direction "regression" on the raw row itself,
-    # not just print negative in a rendered string somewhere downstream.
-    assert rows[2]["direction"] == "regression", rows[2]
-    assert all(r["direction"] == "saving" for r in rows[:2]), rows[:2]
+    # M3/m1. A regression must never carry the same shape as a saving on the
+    # way OUT of verified_by_label, not just on the fixture going in: if the
+    # function dropped the field, the input carrying it would prove nothing.
+    assert [r["direction"] for r in verified] == ["saving", "regression"], verified
 
     big, under = shield.render_verified_hero(verified)
     hero = big + under

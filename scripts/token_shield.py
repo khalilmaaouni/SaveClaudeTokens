@@ -324,7 +324,8 @@ def verified_by_label(rows):
             continue
         newest[label] = (ts, i)
         by_label[label] = {"label": label, "floor_reduction": delta,
-                           "timestamp": r.get("timestamp")}
+                           "timestamp": r.get("timestamp"),
+                           "direction": r.get("direction")}
     return [by_label[k] for k in sorted(by_label)]
 
 

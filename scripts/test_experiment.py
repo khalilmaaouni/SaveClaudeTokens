@@ -320,23 +320,25 @@ def test_record_carries_per_cohort_evidence_scale():
     # M1. A VERIFIED record used to show a floor delta with no sense of how
     # much evidence sits behind it. The record now names the session count on
     # each side (the same parent_sessions counts the thin-data gate already
-    # computes) and a dispersion figure per cohort, or NO DATA when the
-    # cohort is too small for summarize() to compute a p90 at all.
+    # computes) and a dispersion figure per cohort, None (typed the same as
+    # every other absent-numeric field) when the cohort is too small for
+    # summarize() to compute a p90 at all; NO DATA wording is a renderer's
+    # job, not the record's.
     rec = ex.build_record(_baseline(sessions=12), _after(sessions=15),
                           "2026-08-30T00:00:00")
     check("sessions_before reflects the baseline cohort size",
           rec["sessions_before"] == 12)
     check("sessions_after reflects the after cohort size",
           rec["sessions_after"] == 15)
-    check("no p90 in the fixtures reads NO DATA, never a guess",
-          rec["dispersion_before"] == "NO DATA" and rec["dispersion_after"] == "NO DATA")
+    check("no p90 in the fixtures reads None, never a guess and never a string",
+          rec["dispersion_before"] is None and rec["dispersion_after"] is None)
 
     b = _baseline(sessions=12)
     b["summary"]["first_request_p90"] = 95000
     after = _after(sessions=15)
     after["first_request_p90"] = 71000
     rec2 = ex.build_record(b, after, "2026-08-30T00:00:00")
-    check("a real p90 is carried through instead of NO DATA",
+    check("a real p90 is carried through instead of None",
           rec2["dispersion_before"] == 95000 and rec2["dispersion_after"] == 71000)
 
 
@@ -359,31 +361,124 @@ def test_direction_field_distinguishes_regression_from_saving():
     check("no change reads as flat", rec_flat["direction"] == "flat")
 
 
-def test_model_mix_confound_is_not_proven():
+def test_dominant_model_change_is_not_proven():
     # M2. A floor change measured across a model switch might come from the
-    # new model, not the named treatment. The two cohorts' model sets are
-    # compared the same way the config fingerprint is: a mismatch downgrades
-    # to NOT_PROVEN with a stated reason, and no data on either side (a
-    # legacy or hand-built summary) is not treated as a mismatch.
+    # new model, not the named treatment. The trigger is the DOMINANT model
+    # per cohort (most sessions, ties broken lexically), not full-set
+    # equality, so this fixture keeps the full _models sets identical and
+    # only moves which model is dominant.
     b = _baseline()
-    b["summary"]["_models"] = ["claude-opus-5"]
+    b["summary"]["_models"] = ["claude-opus-5", "claude-sonnet-5"]
+    b["summary"]["_dominant_model"] = "claude-opus-5"
     after_same = _after()
-    after_same["_models"] = ["claude-opus-5"]
+    after_same["_models"] = ["claude-opus-5", "claude-sonnet-5"]
+    after_same["_dominant_model"] = "claude-opus-5"
     rec_same = ex.build_record(b, after_same, "2026-08-30T00:00:00")
-    check("matching model sets add no model-mix reason",
-          not any("model mix" in r for r in rec_same["reasons"]))
-    check("matching model sets stay VERIFIED", rec_same["confidence"] == "VERIFIED")
+    check("a matching dominant model adds no reason",
+          not any("dominant model" in r for r in rec_same["reasons"]))
+    check("a matching dominant model stays VERIFIED",
+          rec_same["confidence"] == "VERIFIED")
 
     after_diff = _after()
-    after_diff["_models"] = ["claude-sonnet-5"]
+    after_diff["_models"] = ["claude-opus-5", "claude-sonnet-5"]
+    after_diff["_dominant_model"] = "claude-sonnet-5"
     rec_diff = ex.build_record(b, after_diff, "2026-08-30T00:00:00")
-    check("a model switch downgrades to NOT_PROVEN", rec_diff["confidence"] == "NOT_PROVEN")
-    check("the model-mix reason names the change",
-          any("model mix changed" in r for r in rec_diff["reasons"]))
+    check("a dominant-model switch downgrades to NOT_PROVEN",
+          rec_diff["confidence"] == "NOT_PROVEN")
+    check("the dominant-model reason names the change",
+          any("dominant model changed" in r for r in rec_diff["reasons"]))
+    check("the full model sets still ride along on the record for transparency",
+          rec_diff["models_before"] == ["claude-opus-5", "claude-sonnet-5"]
+          and rec_diff["models_after"] == ["claude-opus-5", "claude-sonnet-5"])
 
-    rec_no_data = ex.build_record(_baseline(), _after(), "2026-08-30T00:00:00")
-    check("no model data on either side is not treated as a mismatch",
-          not any("model mix" in r for r in rec_no_data["reasons"]))
+
+def test_minor_model_variation_does_not_trigger_the_confound_guard():
+    # M2. A routine minor-version bump (or an extra model touching one
+    # session out of many) moves the full _models set without moving which
+    # model is DOMINANT. That must not by itself downgrade every experiment,
+    # only a real change in which model carried most of the cohort.
+    b = _baseline()
+    b["summary"]["_models"] = ["claude-opus-5"]
+    b["summary"]["_dominant_model"] = "claude-opus-5"
+    after = _after()
+    after["_models"] = ["claude-opus-5", "claude-opus-5-preview"]
+    after["_dominant_model"] = "claude-opus-5"
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("a full-set difference with the same dominant model adds no reason",
+          not any("dominant model" in r for r in rec["reasons"]))
+    check("it stays VERIFIED", rec["confidence"] == "VERIFIED")
+
+
+def test_model_tracking_missing_on_one_side_is_not_proven():
+    # C1 (critical fix round). Both live baselines on disk predate _models,
+    # so a naive "only compare when both sides carry data" guard skips
+    # silently on every real claude-md-diet close, appending nothing and
+    # writing VERIFIED beside models_before: null. NO DATA beats a guess:
+    # exactly one side missing model tracking is itself a downgrade.
+    b_missing = _baseline()  # no "_models" key at all, like a real old baseline
+    after_populated = _after()
+    after_populated["_models"] = ["claude-opus-5"]
+    after_populated["_dominant_model"] = "claude-opus-5"
+    rec = ex.build_record(b_missing, after_populated, "2026-08-30T00:00:00")
+    check("one side missing model tracking downgrades to NOT_PROVEN",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason names it as impossible to compare, not a mismatch",
+          any("cannot be compared" in r for r in rec["reasons"]))
+    check("the reason names the before side as the one predating tracking",
+          any("before cohort predates model tracking" in r for r in rec["reasons"]))
+
+    b_populated = _baseline()
+    b_populated["summary"]["_models"] = ["claude-opus-5"]
+    b_populated["summary"]["_dominant_model"] = "claude-opus-5"
+    after_missing = _after()  # no "_models" key
+    rec2 = ex.build_record(b_populated, after_missing, "2026-08-30T00:00:00")
+    check("the reverse asymmetry also downgrades",
+          rec2["confidence"] == "NOT_PROVEN")
+    check("the reason names the after side this time",
+          any("after cohort predates model tracking" in r for r in rec2["reasons"]))
+
+
+def test_measure_cohort_dominant_model_is_by_session_count_not_call_count():
+    # M2. Dominance is defined as "used in the most SESSIONS", not "used in
+    # the most usage records": a chatty single session on model-b must not
+    # outrank model-a just because model-b logged more individual calls.
+    def line(ts, model, sub=False):
+        return json.dumps({"timestamp": ts, "isSidechain": sub,
+                           "message": {"model": model, "usage": {
+                               "input_tokens": 100, "cache_read_input_tokens": 0,
+                               "output_tokens": 5,
+                               "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                                  "ephemeral_1h_input_tokens": 0}}}}) + "\n"
+
+    with tempfile.TemporaryDirectory() as td:
+        # Two sessions on model-a (one call each).
+        with open(os.path.join(td, "s1.jsonl"), "w") as f:
+            f.write(line("2026-08-10T00:00:00+00:00", "model-a"))
+        with open(os.path.join(td, "s2.jsonl"), "w") as f:
+            f.write(line("2026-08-11T00:00:00+00:00", "model-a"))
+        # One session on model-b, but five calls in it.
+        with open(os.path.join(td, "s3.jsonl"), "w") as f:
+            for i in range(5):
+                f.write(line(f"2026-08-12T0{i}:00:00+00:00", "model-b"))
+
+        start_ts = ex._parse_ts("2026-08-01T00:00:00+00:00")
+        end_ts = ex._parse_ts("2026-08-20T00:00:00+00:00")
+        sm = ex._measure_cohort(td, start_ts, end_ts, 30)
+        check("model-a wins on session count despite fewer calls",
+              sm["_dominant_model"] == "model-a")
+        check("the full set still names both models",
+              sm["_models"] == ["model-a", "model-b"])
+
+
+def test_model_mix_neither_side_tracked_is_not_a_mismatch():
+    # Neither a legacy baseline nor a hand-built fixture carries _models at
+    # all; that is genuinely "no data on either side", not a comparison
+    # gone wrong, so it must not be flagged the way one-sided absence is.
+    rec = ex.build_record(_baseline(), _after(), "2026-08-30T00:00:00")
+    check("no model data on either side adds no model-related reason",
+          not any("model" in r for r in rec["reasons"]))
+    check("no model data on either side stays VERIFIED",
+          rec["confidence"] == "VERIFIED")
 
 
 def test_straddling_transcript_contributes_no_first_request():
