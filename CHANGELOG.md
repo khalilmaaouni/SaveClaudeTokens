@@ -5,6 +5,14 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- v1.8 wave 1, part 1: companion registry schema v2 (data/companions.json now
+  carries tested_version_range, hook_footprint, and last_reviewed per entry,
+  hand-verified against this machine's own claude plugin output), native
+  companion discovery (scripts/discover_companions.py, every row labeled
+  CLAUDE PROJECTED, state written on demand only), and the read-only
+  ecosystem doctor (python3 scripts/cli.py doctor: health, 180 day staleness
+  threshold, shared hooks reported as facts, never as CONFLICT).
+
 - Token Shield MCP server, wave 1 (`mcp-server/`): an opt-in, separately
   installed MCP server (stdio transport, official MCP Python SDK) wrapping
   the existing scripts as a library. Nine tools (`get_profile`,
