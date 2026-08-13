@@ -14,8 +14,13 @@ installs, disables, or recommends anything: prescribed, never bundled.
 Overlap is reported as a plain SHARED HOOK fact, never as CONFLICT: the
 evidence run in docs/superpowers/plans/2026-08-13-v18-wave1-plan.md:99 shows
 SessionStart shared by every curated companion on this machine, which is not
-inherently a problem. Judging which shared hook matters is wave 2 (a hook
-ownership table), not built here.
+inherently a problem. Judging which shared hook matters is the hook
+ownership table below, sourced from data/compatibility.json: for every
+SHARED HOOK fact this module also prints who owns what behavior on that
+hook and the compatibility.json verdict for the pair (known-safe,
+needs-review, or NO DATA when the pair has no evidence on file). A pair
+absent from compatibility.json is always NO DATA, never guessed at
+known-safe.
 
 USAGE
   python3 doctor.py
@@ -31,6 +36,9 @@ import time
 import discover_companions as dc
 import profile as pf
 import token_shield as ts
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+COMPATIBILITY_PATH = os.path.join(HERE, "..", "data", "compatibility.json")
 
 STATE_FRESHNESS_SECONDS = 24 * 60 * 60  # 1 day, plan Step 5's freshness window
 STALENESS_DAYS = 180  # founder-reviewable threshold, plan ambiguity 3, 2026-08-13
@@ -111,18 +119,73 @@ def _staleness_lines(companions, today=None):
     return lines
 
 
-def _overlap_lines(companions, state):
-    """Facts, not verdicts: every pair of currently-active curated companions
-    that shares a hook_footprint entry gets one SHARED HOOK line. Never the
-    word CONFLICT; wave 2 owns judging which overlap matters."""
+def _shared_hook_pairs(companions, state):
+    """Every (a_name, b_name, hook) triple among currently-active curated
+    companions that share a hook_footprint entry. Raw data shared by the
+    Overlap section and the Hook ownership section below it."""
     enabled_names = {d["name"] for d in (state or {}).get("discovered", []) if d.get("enabled")}
     active = [c for c in companions if c["name"] in enabled_names and c.get("hook_footprint")]
-    lines = []
+    pairs = []
     for i, a in enumerate(active):
         for b in active[i + 1:]:
             shared = sorted(set(a["hook_footprint"]) & set(b["hook_footprint"]))
             for hook in shared:
-                lines.append(f"  SHARED HOOK: {a['name']} and {b['name']} both register {hook}")
+                pairs.append((a["name"], b["name"], hook))
+    return pairs
+
+
+def _overlap_lines(companions, state):
+    """Facts, not verdicts: every pair of currently-active curated companions
+    that shares a hook_footprint entry gets one SHARED HOOK line. Never the
+    word CONFLICT; the Hook ownership section owns judging which overlap
+    matters."""
+    return [f"  SHARED HOOK: {a} and {b} both register {hook}"
+            for a, b, hook in _shared_hook_pairs(companions, state)]
+
+
+def _load_compatibility(path=None):
+    """data/compatibility.json: (data, error). data is None and error is
+    None when the file is simply missing (no compatibility evidence exists
+    yet, same posture as a missing companions.json). error carries the
+    parse failure reason on malformed JSON so the caller can print it;
+    never raises."""
+    path = path or COMPATIBILITY_PATH
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path) as f:
+            return json.load(f), None
+    except (OSError, ValueError) as e:
+        return None, str(e)
+
+
+def _find_compat_entry(compat_data, a, b, hook):
+    for entry in (compat_data or {}).get("pairs", []):
+        if set(entry.get("companions") or []) == {a, b} and entry.get("hook_event") == hook:
+            return entry
+    return None
+
+
+def _ownership_lines(companions, state, compat_data):
+    """For each SHARED HOOK fact, who owns what behavior on that hook and
+    compatibility.json's verdict for the pair. A pair with no entry in
+    compatibility.json is always reported NO DATA, never defaulted to
+    known-safe."""
+    lines = []
+    for a, b, hook in _shared_hook_pairs(companions, state):
+        entry = _find_compat_entry(compat_data, a, b, hook)
+        if entry is None:
+            lines.append(f"  {hook}: {a} + {b}: verdict NO DATA "
+                         f"(no data/compatibility.json entry for this pair)")
+            continue
+        verdict = entry.get("verdict", "NO DATA")
+        evidence_date = entry.get("evidence_date", "unknown")
+        lines.append(f"  {hook}: {a} + {b}: verdict {verdict} (evidence {evidence_date})")
+        ownership = entry.get("ownership", {})
+        for name in (a, b):
+            behavior = ownership.get(name)
+            if behavior:
+                lines.append(f"    {name} owns: {behavior}")
     return lines
 
 
@@ -160,8 +223,18 @@ def report():
     overlap = _overlap_lines(companions, state)
     for line in (overlap or ["  no shared hooks among currently active curated companions."]):
         print(line)
-    print("  Judging which shared hook actually matters is a wave 2 feature "
-          "(data/compatibility.json, hook ownership table), not available yet.")
+    print()
+
+    print("Hook ownership (verdicts from data/compatibility.json)")
+    compat_data, compat_error = _load_compatibility()
+    if compat_error:
+        print(f"  NO DATA: data/compatibility.json is malformed ({compat_error}); "
+              f"continuing without hook ownership data.")
+    elif not overlap:
+        print("  no shared hooks to judge.")
+    else:
+        for line in _ownership_lines(companions, state, compat_data):
+            print(line)
     return 0
 
 
