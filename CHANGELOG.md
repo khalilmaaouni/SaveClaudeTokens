@@ -5,6 +5,17 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Deep advisor (unit G3): `python3 scripts/cli.py advise --deep`. When the
+  deterministic Quick Advisor cannot decide, and only then, one pinned
+  Fable-tier call chooses a single treatment from data/strategies.json. It
+  judges, never executes: a selection naming anything outside the registry
+  is REFUSED with the reason printed, "no confident choice" produces no
+  recommendation at all, and the call's cost is printed and subtracted so
+  it can never inflate a saving. Deterministic first stays house law:
+  without --deep, nothing changes, and with --deep the model is not called
+  at all when the rules already decided. The model callable is injected, so
+  no test ever makes a live call.
+
 - Companion adapter layer (scripts/companions/): one read-only contract with
   an adapter each for ponytail, caveman and token-saver. Every fact an
   adapter reports (status, version, modes, activation command, rollback
