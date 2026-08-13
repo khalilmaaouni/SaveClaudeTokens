@@ -62,3 +62,13 @@ Cautions recorded at adoption, so they are not rediscovered the hard way:
 ## The one decision we recorded
 
 We reversed the deliberate "ship no price table" stance. It is sound only with four guards, all now in place: a dated snapshot, a staleness cutoff that degrades to NO PRICE DATA, per-model rows with an unpriced bucket, and API-equivalent wording for subscription usage. Missing any one, we keep the no-price stance.
+
+## Absolute-lead integration (founder order, 2026-08-14)
+
+The position, ratified: Token Shield measures where your tokens actually go, decides which optimizer (including none) deserves to run, and proves the result with labeled evidence. Your tool is a treatment; this is the diagnosis and the verdict. It must be best at measurement truth, at personalized diagnosis and selection, and at causal proof with revalidation. It deliberately does NOT compete on compression technique, behavioral coaching, context isolation, live dedup blocking, or behavioral injection of any kind.
+
+Full judgment, adoptions, rejections and sequencing: docs/superpowers/plans/2026-08-14-absolute-lead-integration.md. Adopted in priority order: PRO2 pressure signals, TOUR1 treatment tournament, METR1 treatment-specific metrics, FACTS1 truth registry with a stale-fact circuit breaker, HIST1 historical marking on version change, DASH1 dashboard strip, LAB1 selection benchmark (post-verdict).
+
+Eleven proposals were REJECTED, and the reasons matter as much as the adoptions: a native brevity ladder and shadow-mode dedup would put us in a straight fight with ponytail and DCP at their own techniques, both need behavioral injection or a default hook, and the blueprint's self-scored capability table would trade an honesty label for a score. The accepted-result north star stays deferred until a reliable acceptance signal exists, because a weak heuristic acceptance is a guess wearing a label.
+
+Same gate as the rest of this section: building is authorized, the release boundary waits on the experiment verdict.
