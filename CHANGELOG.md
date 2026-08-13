@@ -5,6 +5,22 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Open integration contract v1 (unit I1): any plugin may ship
+  token-shield.integration.json in its own root declaring its capabilities,
+  modes, and status, version, activation and rollback commands. Discovery
+  reads those declarations and labels every field DECLARED, which is not
+  and never becomes CURATED: curation still requires first-party human
+  verification, and a declaration can never write to data/companions.json.
+  A declaration is untrusted third-party input and is treated as such: its
+  every field is type-checked, a hostile or malformed declaration is
+  refused by name and SKIPPED so discovery of every other plugin continues,
+  oversized and deeply nested files are refused rather than raising,
+  duplicate JSON keys are refused instead of silently last-wins, and an
+  unreadable path yields a refusal row rather than a silent drop. Each row
+  carries the cache version it came from, so an uninstalled older version's
+  self-claims can never read as current. Nothing downstream consumes
+  declarations yet, and the spec says so plainly.
+
 - Companion capability suppression (unit G2): when a companion plugin you
   already run owns a capability, Token Shield stops repeating its own
   duplicate advice card for it. The guard that keeps this safe is a
