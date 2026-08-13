@@ -134,7 +134,7 @@ every point a number appears, not buried once here.
 The optimizer must not become the thing it optimizes against. So the plugin
 registers no hooks and runs nothing on its own: installing it costs one skill
 listing line and one command listing line, and no code executes until you run
-it or wire it in yourself. The three helper scripts
+it or wire it in yourself. The four helper scripts
 (`context_lint.py`, `session_end_telemetry.py`, `obsidian_export.py`,
 `token_shield.py`) are opt in, documented in the README, and each does nothing
 until invoked. A token-saving tool that quietly ran code on every session of

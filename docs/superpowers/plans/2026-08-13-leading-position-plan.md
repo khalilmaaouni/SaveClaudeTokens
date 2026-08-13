@@ -94,7 +94,7 @@ RELEASE: python3 scripts/cli.py experiment end "claude-md-diet" at the founder's
 
 ## Budget
 
-Addendum estimates (ranges, medium confidence, priced from the finish-program plan's unit costs): RS1 30k to 60k; U1 60k to 120k; I1 80k to 150k; C1 50k to 100k; WR+ inside R's range; V1 60k to 120k; A1 150k to 300k including its review; RELEASE 40k to 80k. Addendum total 0.47M to 0.93M on top of the finish-program 0.7M to 1.5M: whole program 1.2M to 2.4M output, three to six fresh sessions at standard ceilings. Every session states its ceiling up front, dispatches nothing past 80 percent, hands over on the guard's word.
+Addendum estimates (ranges, medium confidence, priced from the finish-program plan's unit costs): RS1 30k to 60k; U1 60k to 120k; I1 80k to 150k; C1 50k to 100k; WR+ inside R's range; V1 60k to 120k; A1 150k to 300k including its review; RELEASE 40k to 80k. Basis note (2026-08-13 audit): the unit costs behind these ranges were not recorded to disk; the ranges stand as estimates with an unrecorded basis until the WBS estimator ledger ships. Addendum total 0.47M to 0.93M on top of the finish-program 0.7M to 1.5M: whole program 1.2M to 2.4M output, three to six fresh sessions at standard ceilings. Every session states its ceiling up front, dispatches nothing past 80 percent, hands over on the guard's word.
 
 ## Appendix: full allocation, unit by unit (added 2026-08-13 on the founder's detailed-allocation ask)
 
