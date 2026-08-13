@@ -2,6 +2,37 @@
 
 We built the smallest honest set that delivers the mission: measure token use and prove the saving. A Fable-tier judge ranked a product blueprint for value and mathematical soundness, and we passed on the sprawl. The test for any feature is one question: does it help Token Shield prevent, measure, attribute, or communicate a real token saving? If not, we do not build it.
 
+## The leadership roadmap (2026-08-14, founder direction)
+
+North star: the best free token-efficiency product for AI coding. Find the waste. Fix the right waste. Prove the result. Core stays free and complete: we offer for free what others charge for, we win standalone in our own way (measurement truth, personalized diagnosis and selection, causal proof with revalidation), then integrate natively with every specialist to cement the position. Internal law: every optimization pays rent, every saving needs evidence, every version change can invalidate old proof, and the best next move can always be nothing.
+
+Gate status 2026-08-14: the claude-md-diet experiment was closed early on the founder's explicit word; verdict honest NOT_PROVEN (window changed, config changed during window, model mix not comparable). Under the ratified amendment either verdict opens the release boundary, so the release boundary is OPEN. A successor experiment, claude-md-diet-v2, opened the same day and runs untouched.
+
+### Short term (this weekend: 1.8.0)
+
+- Finish the remaining build units: FACTS2, PRO2, H2, TOUR1, METR1, HIST1, DASH1, R and WR+, each with calibrated tests, refute reviews on the judgment-heavy ones, and docs lines per merge.
+- Ship 1.8.0: tag, publish, plugin update on this machine, MCP client registration, live smoke test. Founder confirms the tag and the publish.
+- The Token Shield command center: one page a non-technical user reads in ten seconds. How efficient am I, what is running, what is my biggest issue, what is the next best move, and why. No knowledge of hooks, TTL, or MCP required.
+- Simplicity: a one-command start, modes phrased as intent (conservative, balanced, aggressive), guided install and rollback recipes, do-nothing as a first-class answer.
+- Website handoff: hero copy, the proof story, and this roadmap, ready for the founder's site.
+
+### Mid term (two to six weeks)
+
+- The diet-v2 verdict: the first public VERIFIED or honest NOT_PROVEN cycle, shown on the dashboard as the product working, never as an embarrassment.
+- V1 share card (VERIFIED and MEASURED rows only, label on the card face). LAB1 selection benchmark: the deliverable is "Token Shield picked the right winner", reproducible on a second machine. A1 act rung, founder-gated: zero hooks stays the default posture.
+- Rolling first-party companion vetting, one at a time, demand-driven.
+- Optimizer self-overhead on the dashboard: Token Shield reports its own cost and recommends nothing when the next treatment is not worth it.
+
+### Long term (a quarter and beyond)
+
+- Adapter layer for other agent surfaces: OpenAI Codex CLI first, then Cursor. Same meter honesty, same labels, a per-platform truth registry. Claude Code finishes first.
+- The category is Agent FinOps: one local product that measures any coding agent's spend, prescribes the cheapest high-quality stack, and proves the result.
+- Free core forever. Anything paid later (team fleet views, organization receipts) never paywalls personal token efficiency.
+
+### Rejected stays rejected
+
+Compression proxies, behavioral injection, self-scored capability tables, universal-percentage marketing. Each carries a flip condition in the absolute-lead section below; none reopens without new evidence.
+
 ## Shipped (1.5.0)
 
 - **Experiment Mode.** A real before and after over the same window is the only thing that earns VERIFIED. It refuses the comparison across a schema change, a window mismatch, or thin data, and writes one record to a local proof ledger.
@@ -71,4 +102,4 @@ Full judgment, adoptions, rejections and sequencing: docs/superpowers/plans/2026
 
 Eleven proposals were REJECTED, and the reasons matter as much as the adoptions: a native brevity ladder and shadow-mode dedup would put us in a straight fight with ponytail and DCP at their own techniques, both need behavioral injection or a default hook, and the blueprint's self-scored capability table would trade an honesty label for a score. The accepted-result north star stays deferred until a reliable acceptance signal exists, because a weak heuristic acceptance is a guess wearing a label.
 
-Same gate as the rest of this section: building is authorized, the release boundary waits on the experiment verdict.
+Gate update 2026-08-14: the experiment closed with an honest NOT_PROVEN on the founder's explicit early-close decision, which opens the release boundary under the ratified amendment. Release steps still require the founder's confirmation of the tag and the publish.
