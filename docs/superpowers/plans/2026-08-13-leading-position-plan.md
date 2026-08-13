@@ -83,3 +83,62 @@ RELEASE: python3 scripts/cli.py experiment end "claude-md-diet" at the founder's
 ## Budget
 
 Addendum estimates (ranges, medium confidence, priced from the finish-program plan's unit costs): RS1 30k to 60k; U1 60k to 120k; I1 80k to 150k; C1 50k to 100k; WR+ inside R's range; V1 60k to 120k; A1 150k to 300k including its review; RELEASE 40k to 80k. Addendum total 0.47M to 0.93M on top of the finish-program 0.7M to 1.5M: whole program 1.2M to 2.4M output, three to six fresh sessions at standard ceilings. Every session states its ceiling up front, dispatches nothing past 80 percent, hands over on the guard's word.
+
+## Appendix: full allocation, unit by unit (added 2026-08-13 on the founder's detailed-allocation ask)
+
+House laws this appendix applies, so they are not re-derived per unit: guidance and judgment stay on the strongest grade (Fable orchestrates, briefs, verifies, merges); execution routes to the cheapest profile that passes the done-check; every brief names tier and reason; two lanes maximum in parallel; one writer per fence; one suite at a time per tree; parallel writers get their own worktree and branch; every builder brief carries a freshness assertion (quote git log -1 before touching anything) and the orchestrator re-runs each done-check before merge; returns hard-capped near 1500 tokens; an executor failing its done-check twice escalates one grade with the evidence attached; a task shape that succeeded twice on a lower grade defaults there next time. Profile-to-model mapping on this machine today: fast-worker = haiku, builder and researcher = sonnet, reviewer and navigator = opus, orchestrator = Fable (the session model). Effort: builders medium, fast-worker low, reviewers medium with high reserved for the A1 and G3 judgments.
+
+Cross-family refutation law (ratified 2026-08-05): any finding that gates a release or a safety claim gets at least one refuter from a DIFFERENT model family, named in the record. In this program that binds A1 (a hook, a trust-posture change) and the RELEASE claims: one read-only non-Claude refuter (codex exec, output redirected to a file) attacks each before the founder gate.
+
+### Session A (v1.8 wave 2 start; suggested ceiling 500k soft, 800k hard)
+
+| Unit | Executor | Model, effort | Worktree and branch | Writable files (the fence) | Budget | Done-check the orchestrator re-runs |
+|---|---|---|---|---|---|---|
+| F1 scorecard pass | builder | sonnet, medium | wt-f1, build/scorecard-pass | docs/SCORECARD.md only | 30k to 60k | every scored cell's cited test name greps to a real def; every cited command re-run; history entry present; dash scan empty |
+| G1 compatibility | builder | sonnet, medium | wt-g1, build/v18-wave2-g1 | data/compatibility.json, scripts/doctor.py, scripts/test_doctor.py | 60k to 120k | test_doctor.py green with additions calibrated red to green; cli.py doctor prints the ownership section live |
+| RS1 research | researcher (read-only, cannot write files) | sonnet, medium | none | none; findings return to Fable, who writes docs/research/ | 30k to 60k | every claim carries an opened URL or NO DATA; dash scan on the written doc empty |
+| G2 suppression | builder, opens after G1 merges | sonnet, medium | wt-g2, build/v18-wave2-g2 | scripts/advisor.py, scripts/test_advisor.py | 80k to 150k | suppression, expiry, and suppression-never-hides-a-regression tests calibrated red to green |
+| U1 drift watch | builder, opens after G1 merges | sonnet, medium | wt-u1, build/update-resilience | scripts/discover_companions.py, scripts/doctor.py (VERSION DRIFT section), both test files | 60k to 120k | injected fake version change red then green; doctor live print |
+| REVIEW of G2 | reviewer, briefed to refute, never edits | opus, high | none (read-only checkout) | none | 40k to 80k | findings severity-split, each naming the falsification executed; Fable triages |
+| DOCS sweep per merge | fast-worker | haiku, low | inside the merging branch | CHANGELOG.md, README.md, docs/ROADMAP.md status lines only | 10k to 20k each | grep confirms the new lines; dash scan empty |
+
+Lane discipline: F1 and G1 open together (two lanes). RS1 is read-only and rides beside them without a lane. G2 and U1 open only as F1 and G1 close. Doctor conflict note: G1 and U1 both touch scripts/doctor.py, so they NEVER run concurrently; U1 waits for G1's merge and rebases.
+
+### Session B (deep layer plus adapters; suggested ceiling 500k soft, 800k hard)
+
+| Unit | Executor | Model, effort | Worktree and branch | Writable files | Budget | Done-check |
+|---|---|---|---|---|---|---|
+| G3 deep advisor | builder for the harness; the deep advisor RUNS on Fable pinned at runtime (ratified product decision) | sonnet, medium | wt-g3, build/deep-advisor | scripts/deep_advisor.py, scripts/test_deep_advisor.py, prompts under skills/token-shield/, scripts/cli.py (advise --deep wiring) | 120k to 250k | tests green against a fake model callable, never a live call; live smoke run only at the founder's explicit yes, cost printed and subtracted |
+| H1 adapters | builder | sonnet, medium | wt-h1, build/companion-adapters | scripts/companions/ (ponytail.py, caveman.py, token_saver.py), their test files | 80k to 150k | adapter refuses a registry entry missing evidence fields, calibrated; fixture-registry tests green |
+| I1 open contract | builder, opens after H1 merges | sonnet, medium | wt-i1, build/integration-contract | docs/superpowers/specs/integration-contract-v1.md, data/integration.schema.json, scripts/discover_companions.py, its test file | 80k to 150k | fixture missing the capabilities key refused by name; declared data labeled DECLARED |
+| C1 optimization loop | builder | sonnet, medium | wt-c1, build/continuous-optimization | scripts/report.py, scripts/test_report.py, docs/MAINTENANCE.md | 50k to 100k | test_report additions calibrated; ls commands/*.md prints 6 |
+| REVIEW of G3 | reviewer, refute brief | opus, high | none | none | 40k to 80k | severity-split findings naming the falsification executed |
+
+Lane discipline: G3 and H1 open together. I1 and C1 open as they close. The G3 reviewer runs after G3's tests land red to green.
+
+### Session C (v1.9 finish plus native reduction; suggested ceiling 500k soft, 800k hard)
+
+| Unit | Executor | Model, effort | Worktree and branch | Writable files | Budget | Done-check |
+|---|---|---|---|---|---|---|
+| R wave R guided apply, WR+ folded in | builder | sonnet, medium | wt-r, build/solid-core-waveR | per the merged wave R plan: scripts/guided_apply.py, scripts/optimize.py extensions, the three new test files, cli wiring; WR+ adds the output_discipline proposal type | 150k to 350k | step 1 experiment interlock commits FIRST (no apply while any experiment is open); every apply behind backup, diff, yes, auto-experiment; suite green |
+| H2 modes and recipes | builder | sonnet, medium | wt-h2, build/mode-guidance | advisor card rendering, cli advise recipe surface, test additions | 50k to 100k | unvetted-plugin recipe refused with the reason printed, calibrated |
+| H3 attribution waterfall | builder, opens after H2 or R closes a lane | sonnet, medium | wt-h3, build/attribution-waterfall | scripts/token_shield.py, scripts/test_tools.py additions | 80k to 150k | never-sum assertion calibrated; companion version change ends a spanning experiment, wired to the existing fingerprint |
+| REVIEW of H3 and I1 | reviewer, refute brief | opus, high | none | none | 40k to 80k | severity-split findings naming the falsification executed |
+
+### Session R (verdict day; founder present; suggested ceiling 500k)
+
+| Unit | Executor | Model, effort | Writable files | Budget | Done-check |
+|---|---|---|---|---|---|
+| RELEASE train | orchestrator only (Fable); tag and publish behind the founder's explicit confirm, per the standing release gate | Fable, session default | version stamps, CHANGELOG release heading, scorecard history entry | 40k to 80k | experiment end verdict quoted; each release step's own command output quoted; scorecard re-score appends with the tag |
+| V1 share card | builder | sonnet, medium | scripts/share_card.py, its test file | 60k to 120k | card refuses without a VERIFIED or MEASURED record, calibrated; label printed on the card face |
+| A1 act rung | plan by Fable (navigator posture); build by builder; refute by reviewer PLUS one non-Claude-family refuter; enable only at a founder gate | plan Fable; build sonnet medium; reviews opus high plus codex read-only | plan file first; then the hook, config, kill switch, rollback | 150k to 300k including reviews | plan lands before any hook code; both refuters' reports on file; founder yes before the hook ever registers |
+
+### Why each executor is the right one (the five assignment questions, answered once per class)
+
+- Builders (sonnet): every build unit above works from a merged plan that names files and done-checks, which is exactly scoped implementation from a precise spec; routing it higher is the OVERTHOUGHT failure mode. Checked by: calibrated tests re-run by Fable. Accepted by: Fable at merge, founder at the page.
+- Researcher (sonnet, read-only): RS1 is external evidence gathering with URLs; it cannot write, so Fable lands the doc, which also keeps the registry-edit boundary clean.
+- Reviewers (opus, refute briefs, never edit): G2, G3, H3, I1, A1 are the judgment-heavy or trust-sensitive units; verification never routes below the guide's grade, and an executor never verifies its own work.
+- Fast-worker (haiku): changelog and status-line sweeps are mechanical bulk with grep-checkable outcomes.
+- Orchestrator (Fable): briefs, fences, merges, gate scans, done-check re-runs, scorecard judgment, release train, and every founder conversation. Verification and judging never delegate down; mechanical loops never run on Fable.
+
+Escalation and de-escalation: a builder failing its done-check twice hands the unit one grade up (to opus) with the failure evidence; a unit class that lands twice clean on sonnet stays there; if the haiku sweeps miscount once, they move to sonnet and the ledger records why.
