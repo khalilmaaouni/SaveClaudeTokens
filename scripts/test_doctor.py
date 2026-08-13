@@ -395,6 +395,145 @@ def test_spanning_warning_does_not_fire_for_change_predating_experiment():
     assert lines == [], lines
 
 
+def _fact(fid, statement="a platform fact", source="code.claude.com/docs/en/x",
+          verified="2026-08-13", review_interval_days=90):
+    return {"id": fid, "statement": statement, "source": source,
+            "verified": verified, "review_interval_days": review_interval_days}
+
+
+def test_fact_staleness_flags_stale_fact_with_age():
+    facts = [_fact("A1", verified="2026-01-01", review_interval_days=90)]
+    lines = dr._fact_staleness_lines(facts, today="2026-08-13")
+    joined = "\n".join(lines)
+    assert "NEEDS REVIEW" in joined and "A1" in joined, lines
+    assert "2026-01-01" in joined, lines
+    # age: 2026-01-01 -> 2026-08-13 is 224 days, past the 90 day interval
+    assert "224" in joined, lines
+
+
+def test_fact_staleness_silent_for_fresh_fact():
+    facts = [_fact("A2", verified="2026-08-01", review_interval_days=90)]
+    assert dr._fact_staleness_lines(facts, today="2026-08-13") == []
+
+
+def test_load_facts_refuses_fact_missing_source():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        fact = _fact("A3")
+        del fact["source"]
+        with os.fdopen(fd, "w") as f:
+            json.dump({"schema": 1, "facts": [fact]}, f)
+        facts, refused, error = dr._load_facts(path)
+        assert error is None, error
+        assert facts == [], facts
+        assert any(fid == "A3" and "source" in reason for fid, reason in refused), refused
+    finally:
+        os.remove(path)
+
+
+def test_load_facts_refuses_fact_missing_verified_date():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        fact = _fact("A4")
+        del fact["verified"]
+        with os.fdopen(fd, "w") as f:
+            json.dump({"schema": 1, "facts": [fact]}, f)
+        facts, refused, error = dr._load_facts(path)
+        assert error is None, error
+        assert facts == [], facts
+        assert any(fid == "A4" and "verified" in reason for fid, reason in refused), refused
+    finally:
+        os.remove(path)
+
+
+def test_load_facts_malformed_json_is_no_data():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("{not valid json")
+        facts, refused, error = dr._load_facts(path)
+        assert facts == [], facts
+        assert refused == [], refused
+        assert error, "expected a parse error reason, got none"
+    finally:
+        os.remove(path)
+
+
+def test_load_facts_missing_file_is_no_data():
+    facts, refused, error = dr._load_facts("/nonexistent/path/for/sure/token-shield-facts.json")
+    assert facts == [], facts
+    assert refused == [], refused
+    assert error, "expected a not-found reason, got none"
+
+
+def test_report_prints_facts_staleness_section_live():
+    companions = []
+    state = _state([])
+
+    orig_load = dr.ts.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
+    orig_load_facts = dr._load_facts
+    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: state
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
+    dr._load_facts = lambda path=None: ([_fact("A1", verified="2026-01-01", review_interval_days=90)], [], None)
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.ts.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
+        dr._load_facts = orig_load_facts
+
+    assert rc == 0
+    assert "Facts" in out, out
+    assert "NEEDS REVIEW" in out and "A1" in out, out
+
+
+def test_report_facts_section_is_no_data_when_facts_file_malformed():
+    companions = []
+    state = _state([])
+
+    orig_load = dr.ts.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
+    orig_load_facts = dr._load_facts
+    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: state
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
+    dr._load_facts = lambda path=None: ([], [], "Expecting value: line 1 column 1 (char 0)")
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.ts.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
+        dr._load_facts = orig_load_facts
+
+    assert rc == 0
+    facts_section = out.split("Facts (staleness", 1)[1]
+    assert "NO DATA: Expecting value" in facts_section, out
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

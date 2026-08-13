@@ -16,6 +16,16 @@ Keep a Changelog. Entries are newest first.
   printed, rather than credit being split by a guess. An empty ledger renders
   NO DATA, never a zero.
 
+- Truth registry and stale-fact circuit breaker (unit FACTS1): data/facts.json
+  holds dated, sourced platform facts, and the doctor gains a section that
+  flags any fact past its own review interval as NEEDS REVIEW with its age.
+  Advice about a platform goes stale silently, and stale advice delivered
+  confidently is worse than no advice; this makes the shelf life visible. A
+  fact missing its source or its verified date is refused at load and named.
+  A missing or malformed facts file is NO DATA and never crashes the doctor.
+  The doctor stays read only: it reports staleness and never re-verifies
+  anything itself.
+
 - Open integration contract v1 (unit I1): any plugin may ship
   token-shield.integration.json in its own root declaring its capabilities,
   modes, and status, version, activation and rollback commands. Discovery

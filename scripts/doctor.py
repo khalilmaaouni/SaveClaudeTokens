@@ -22,6 +22,13 @@ needs-review, or NO DATA when the pair has no evidence on file). A pair
 absent from compatibility.json is always NO DATA, never guessed at
 known-safe.
 
+It also reports fact staleness from data/facts.json: a registry of dated,
+sourced platform facts (see docs/CLAIMS.md for their provenance). A fact
+past its own review_interval_days is printed as NEEDS REVIEW with its age;
+a fact missing a source or a verified date is refused at load and named in
+the report. This module never re-verifies a fact itself, never fetches a
+page: it only ages the date already on file.
+
 USAGE
   python3 doctor.py
 """
@@ -40,9 +47,11 @@ import token_shield as ts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMPATIBILITY_PATH = os.path.join(HERE, "..", "data", "compatibility.json")
+FACTS_PATH = os.path.join(HERE, "..", "data", "facts.json")
 
 STATE_FRESHNESS_SECONDS = 24 * 60 * 60  # 1 day, plan Step 5's freshness window
 STALENESS_DAYS = 180  # founder-reviewable threshold, plan ambiguity 3, 2026-08-13
+DEFAULT_FACT_REVIEW_DAYS = 90  # fallback only; every fact in data/facts.json states its own
 
 
 def _load_state(path=None):
@@ -187,6 +196,66 @@ def _ownership_lines(companions, state, compat_data):
             behavior = ownership.get(name)
             if behavior:
                 lines.append(f"    {name} owns: {behavior}")
+    return lines
+
+
+def _load_facts(path=None):
+    """data/facts.json: (facts, refused, error). facts is the list of valid
+    entries, each carrying at least a source and a verified date. refused is
+    a list of (id, reason) pairs for entries that fail that requirement, the
+    reason naming the offending field so the caller can report it by name. A
+    fact with no source or no date is not a fact: it never reaches the
+    facts list. error is a human-readable string when the file is missing or
+    the JSON is malformed; both a missing file and a parse failure read as
+    NO DATA to the caller, same posture as _load_compatibility. Never
+    raises."""
+    path = path or FACTS_PATH
+    if not os.path.exists(path):
+        return [], [], "data/facts.json not found"
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return [], [], str(e)
+    raw = data.get("facts", []) if isinstance(data, dict) else []
+    facts = []
+    refused = []
+    for i, fact in enumerate(raw):
+        if not isinstance(fact, dict):
+            refused.append((f"#{i}", "not an object"))
+            continue
+        fid = fact.get("id") or f"#{i}"
+        if not fact.get("source"):
+            refused.append((fid, "missing source"))
+            continue
+        if not fact.get("verified"):
+            refused.append((fid, "missing verified date"))
+            continue
+        facts.append(fact)
+    return facts, refused, None
+
+
+def _fact_staleness_lines(facts, today=None):
+    """One NEEDS REVIEW line per fact whose verified date is older than its
+    own review_interval_days (falling back to DEFAULT_FACT_REVIEW_DAYS when
+    a fact omits the field). Read only: never re-verifies, never fetches,
+    just ages the date already on file."""
+    today_date = _parse_date(today or time.strftime("%Y-%m-%d"))
+    lines = []
+    if today_date is None:
+        return lines
+    for fact in facts:
+        d = _parse_date(fact.get("verified"))
+        if d is None:
+            continue
+        try:
+            interval = int(fact.get("review_interval_days", DEFAULT_FACT_REVIEW_DAYS))
+        except (TypeError, ValueError):
+            interval = DEFAULT_FACT_REVIEW_DAYS
+        age_days = (today_date - d).days
+        if age_days > interval:
+            lines.append(f"  NEEDS REVIEW: {fact.get('id', '?')}: verified {fact.get('verified')} "
+                         f"({age_days} days ago, review interval {interval} days)")
     return lines
 
 
@@ -355,6 +424,18 @@ def report():
         if drift["drifted"]:
             for line in _spanning_warning_lines(_open_experiments(), drift["drifted"]):
                 print(line)
+    print()
+
+    print("Facts (staleness of dated, sourced platform claims)")
+    facts, refused, facts_error = _load_facts()
+    if facts_error:
+        print(f"  NO DATA: {facts_error}; continuing without fact staleness data.")
+    else:
+        for fid, reason in refused:
+            print(f"  REFUSED: {fid}: {reason}")
+        stale_facts = _fact_staleness_lines(facts)
+        for line in (stale_facts or ["  no facts past their review interval."]):
+            print(line)
     return 0
 
 
