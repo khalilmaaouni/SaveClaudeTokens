@@ -54,7 +54,7 @@ def discover():
         if not name:
             continue
         rows.append({"name": name, "enabled": bool(e.get("enabled")),
-                     "source_label": SOURCE_LABEL})
+                     "version": e.get("version"), "source_label": SOURCE_LABEL})
     return rows
 
 
@@ -103,6 +103,45 @@ def _registry_match(names, companions_path):
         else:
             match[name] = "unknown"
     return match
+
+
+def version_drift(names, live, state):
+    """Compare each of `names`' live version (from a discover() result,
+    `live`) against the version last recorded for it in a previously loaded
+    companions_state.json (`state`, or None when no state file exists yet).
+
+    Returns {"no_data": True, "drifted": [], "missing": []} when `state` or
+    `live` is None: absent state or a failed live discovery is NO DATA,
+    never "no drift". Otherwise returns {"no_data": False, "drifted": [...],
+    "missing": [...]}:
+      - "drifted": one entry per name whose live version differs from the
+        recorded one: {"name", "recorded_version", "live_version",
+        "recorded_at"} (recorded_at is state["checked_at"], the only
+        observation date the state file carries).
+      - "missing": one entry per name the state never recorded a version
+        for: {"name", "live_version"}. NO DATA for that row, never folded
+        into "no drift".
+    A name absent from `live` (not currently installed) is skipped: there
+    is nothing live to compare it against. Never raises."""
+    if state is None or live is None:
+        return {"no_data": True, "drifted": [], "missing": []}
+    live_by_name = {r["name"]: r for r in live}
+    recorded_by_name = {d["name"]: d for d in (state.get("discovered") or [])}
+    recorded_at = state.get("checked_at")
+    drifted, missing = [], []
+    for name in names:
+        live_row = live_by_name.get(name)
+        if live_row is None:
+            continue
+        live_version = live_row.get("version")
+        recorded_row = recorded_by_name.get(name)
+        recorded_version = recorded_row.get("version") if recorded_row else None
+        if recorded_version is None:
+            missing.append({"name": name, "live_version": live_version})
+        elif live_version != recorded_version:
+            drifted.append({"name": name, "recorded_version": recorded_version,
+                            "live_version": live_version, "recorded_at": recorded_at})
+    return {"no_data": False, "drifted": drifted, "missing": missing}
 
 
 def write_state(discovered, path=STATE_PATH, companions_path=ts.COMPANIONS_PATH):

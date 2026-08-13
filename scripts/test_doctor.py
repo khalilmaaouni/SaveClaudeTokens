@@ -13,6 +13,7 @@ set-intersection check, green again.
 
 import contextlib
 import io
+import json
 import os
 import tempfile
 import time
@@ -98,8 +99,14 @@ def test_report_prints_shared_hook_and_never_conflict():
 
     orig_load = dr.ts.load_companions
     orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
     dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -108,6 +115,9 @@ def test_report_prints_shared_hook_and_never_conflict():
     finally:
         dr.ts.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
 
     assert rc == 0
     assert "SHARED HOOK" in out, out
@@ -190,9 +200,15 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
     orig_load = dr.ts.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_compat = dr._load_compatibility
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
     dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_compatibility = lambda: (None, "Expecting value: line 1 column 1 (char 0)")
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -202,6 +218,9 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
         dr.ts.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_compatibility = orig_compat
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
 
     assert rc == 0
     assert "malformed" in out.lower(), out
@@ -212,8 +231,14 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
 def test_main_completes_without_traceback_with_zero_companions_active():
     orig_load = dr.ts.load_companions
     orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
     dr.ts.load_companions = lambda path: {"companions": [], "mentions": []}
     dr._ensure_fresh_state = lambda: {"schema": 1, "checked_at": "x", "discovered": [], "registry_match": {}}
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -222,8 +247,152 @@ def test_main_completes_without_traceback_with_zero_companions_active():
     finally:
         dr.ts.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
     assert rc == 0
     assert "conflict" not in out.lower(), out
+
+
+def test_version_drift_lines_render_drift_with_recorded_date():
+    drift = {"no_data": False,
+             "drifted": [{"name": "ponytail", "recorded_version": "4.9.0",
+                          "live_version": "5.0.0", "recorded_at": "2026-08-12T00:00:00Z"}],
+             "missing": []}
+    lines = dr._version_drift_lines(drift)
+    joined = "\n".join(lines)
+    assert "ponytail" in joined and "4.9.0" in joined and "5.0.0" in joined, lines
+    assert "2026-08-12T00:00:00Z" in joined, lines
+
+
+def test_version_drift_lines_no_data_row_for_missing_recorded_version():
+    drift = {"no_data": False, "drifted": [],
+             "missing": [{"name": "caveman", "live_version": "0d95a81d35a9"}]}
+    lines = dr._version_drift_lines(drift)
+    joined = "\n".join(lines)
+    assert "NO DATA" in joined and "caveman" in joined, lines
+
+
+def test_version_drift_lines_empty_when_no_drift():
+    # Calibrated: report() treats an empty list here as the trigger for its
+    # "no version drift" clean line (see test_report_version_drift_clean_
+    # line_when_no_drift below); this function itself must never
+    # editorialize a "no drift" string, just return no lines.
+    drift = {"no_data": False, "drifted": [], "missing": []}
+    assert dr._version_drift_lines(drift) == []
+
+
+def test_report_version_drift_detects_change_and_clean_line_when_matched():
+    companions = [_companion("ponytail", ["SessionStart"])]
+    matching_state = _state([{"name": "ponytail", "enabled": True,
+                              "source_label": "CLAUDE PROJECTED", "version": "4.9.0"}])
+    live_matching = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+                      "source_label": "CLAUDE PROJECTED"}]
+
+    orig_load = dr.ts.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
+    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: matching_state
+    dr._load_state = lambda path=None: matching_state
+    dr.dc.discover = lambda: live_matching
+    dr._open_experiments = lambda exp_dir=None: []
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.ts.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
+
+    assert rc == 0
+    assert "Version drift" in out, out
+    assert "no version drift" in out.lower(), out
+    assert "DRIFT:" not in out, out
+
+
+def test_report_version_drift_no_data_when_state_missing():
+    # Absent state file: doctor must render NO DATA, never "no drift".
+    companions = [_companion("ponytail", ["SessionStart"])]
+    live = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+             "source_label": "CLAUDE PROJECTED"}]
+
+    orig_load = dr.ts.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
+    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: None
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: live
+    dr._open_experiments = lambda exp_dir=None: []
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.ts.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
+
+    assert rc == 0
+    assert "Version drift" in out, out
+    assert "NO DATA" in out, out
+    assert "no version drift" not in out.lower(), out
+
+
+def test_open_experiments_reads_baseline_snapshots_from_a_directory():
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "shrink-claude-md.json"), "w") as f:
+            json.dump({"label": "shrink-claude-md", "started": "2026-08-12T00:00:00+0000"}, f)
+        with open(os.path.join(d, "not-json.txt"), "w") as f:
+            f.write("ignore me")
+        result = dr._open_experiments(exp_dir=d)
+        assert result == [{"label": "shrink-claude-md", "started": "2026-08-12T00:00:00+0000"}], result
+
+
+def test_open_experiments_empty_when_directory_missing():
+    assert dr._open_experiments(exp_dir="/nonexistent/path/for/sure/token-shield-u1") == []
+
+
+def test_spanning_warning_fires_when_experiment_open_and_change_inside_window():
+    open_experiments = [{"label": "shrink-claude-md", "started": "2026-08-12T00:00:00+0000"}]
+    # recorded_at is AFTER started: the actual bump (strictly after
+    # recorded_at) is guaranteed to fall inside the experiment's window.
+    drifted = [{"name": "ponytail", "recorded_version": "4.9.0", "live_version": "5.0.0",
+                "recorded_at": "2026-08-12T06:00:00Z"}]
+    lines = dr._spanning_warning_lines(open_experiments, drifted)
+    joined = "\n".join(lines)
+    assert "SPANNING EXPERIMENT WARNING" in joined, lines
+    assert "shrink-claude-md" in joined and "ponytail" in joined, lines
+    assert "4.9.0" in joined and "5.0.0" in joined, lines
+
+
+def test_spanning_warning_does_not_fire_with_no_open_experiment():
+    drifted = [{"name": "ponytail", "recorded_version": "4.9.0", "live_version": "5.0.0",
+                "recorded_at": "2026-08-12T06:00:00Z"}]
+    lines = dr._spanning_warning_lines([], drifted)
+    assert lines == [], lines
+
+
+def test_spanning_warning_does_not_fire_for_change_predating_experiment():
+    # recorded_at is well BEFORE started: the bump could have happened
+    # before the experiment opened, so the guard suppresses the warning.
+    open_experiments = [{"label": "shrink-claude-md", "started": "2026-08-12T12:00:00+0000"}]
+    drifted = [{"name": "ponytail", "recorded_version": "4.9.0", "live_version": "5.0.0",
+                "recorded_at": "2026-08-10T00:00:00Z"}]
+    lines = dr._spanning_warning_lines(open_experiments, drifted)
+    assert lines == [], lines
 
 
 if __name__ == "__main__":

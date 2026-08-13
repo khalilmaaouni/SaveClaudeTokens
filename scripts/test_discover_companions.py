@@ -69,6 +69,17 @@ def test_discover_returns_none_on_bad_json():
     assert dc.discover() is None
 
 
+def test_discover_captures_the_version_field():
+    # Calibrated: discover() dropped the "version" key entirely before this
+    # unit; confirmed red (KeyError below) against the code prior to this
+    # change, green once discover() started reading e.get("version").
+    dc.subprocess.run = _fake_run({("plugin", "list", "--json"): LIST_JSON})
+    rows = dc.discover()
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["ponytail"]["version"] == "4.9.0", rows
+    assert by_name["unrelated-plugin"]["version"] == "1.0.0", rows
+
+
 def test_hook_footprint_parses_the_real_captured_shape():
     dc.subprocess.run = _fake_run({("plugin", "details", "ponytail"): PONYTAIL_DETAILS})
     hooks = dc.hook_footprint_of("ponytail")
@@ -103,6 +114,59 @@ def test_registry_match_separates_curated_mention_unknown():
         match = dc._registry_match(["ponytail", "ccusage", "something-else"], path)
         assert match == {"ponytail": "curated", "ccusage": "mention",
                          "something-else": "unknown"}, match
+
+
+def test_version_drift_detects_an_injected_version_change():
+    # Central calibration for this unit: dc.version_drift does not exist
+    # before this change (AttributeError, confirmed red running this test
+    # against the prior code). The fixture below injects a fake version
+    # change (state says 4.9.0, live says 5.0.0) so the assertions only
+    # pass once real drift detection compares the two.
+    live = [{"name": "ponytail", "version": "5.0.0", "enabled": True,
+             "source_label": "CLAUDE PROJECTED"}]
+    state = {"schema": 1, "checked_at": "2026-08-12T00:00:00Z",
+             "discovered": [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+                             "source_label": "CLAUDE PROJECTED"}]}
+    result = dc.version_drift(["ponytail"], live, state)
+    assert result["no_data"] is False, result
+    assert len(result["drifted"]) == 1, result
+    d = result["drifted"][0]
+    assert d["name"] == "ponytail", d
+    assert d["recorded_version"] == "4.9.0", d
+    assert d["live_version"] == "5.0.0", d
+    assert d["recorded_at"] == "2026-08-12T00:00:00Z", d
+    assert result["missing"] == [], result
+
+
+def test_version_drift_clean_when_versions_match():
+    live = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+             "source_label": "CLAUDE PROJECTED"}]
+    state = {"schema": 1, "checked_at": "2026-08-12T00:00:00Z",
+             "discovered": [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+                             "source_label": "CLAUDE PROJECTED"}]}
+    result = dc.version_drift(["ponytail"], live, state)
+    assert result == {"no_data": False, "drifted": [], "missing": []}, result
+
+
+def test_version_drift_no_data_when_state_missing():
+    live = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+             "source_label": "CLAUDE PROJECTED"}]
+    result = dc.version_drift(["ponytail"], live, None)
+    assert result["no_data"] is True, result
+    assert result["drifted"] == [] and result["missing"] == [], result
+
+
+def test_version_drift_missing_recorded_version_is_no_data_not_no_drift():
+    # NO DATA beats a guess: a companion the state never recorded a version
+    # for must never be folded into "no drift".
+    live = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
+             "source_label": "CLAUDE PROJECTED"}]
+    state = {"schema": 1, "checked_at": "2026-08-12T00:00:00Z",
+             "discovered": [{"name": "ponytail", "enabled": True,
+                             "source_label": "CLAUDE PROJECTED"}]}
+    result = dc.version_drift(["ponytail"], live, state)
+    assert result["drifted"] == [], result
+    assert result["missing"] == [{"name": "ponytail", "live_version": "4.9.0"}], result
 
 
 def test_write_state_round_trips_and_never_carries_a_priced_field():
