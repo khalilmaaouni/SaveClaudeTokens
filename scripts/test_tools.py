@@ -708,6 +708,138 @@ def test_experiment_history_never_sums_across_labels():
     assert "1,200" not in html and "1200" not in html
 
 
+def test_waterfall_never_sums_percentages_or_marginal_deltas():
+    # Calibrated: the central assertion this unit exists for. core moves A
+    # (1,000,000) to B (800,000), a 20% saving of A. companion moves its own
+    # measured B (810,000, a SEPARATE measurement of the same nominal state)
+    # to C (400,000), a 51% saving of B. Naive-summed percentages would say
+    # 20% + 51% = 71% of A saved overall, implying C should be around
+    # 290,000; naive-summed token deltas would say 200,000 + 410,000 =
+    # 610,000 tokens saved. Both are wrong. The true total, computed straight
+    # from A and C, is 600,000 tokens, 60% of A. If build_waterfall ever adds
+    # core_delta_pct + companion_delta_pct (or core_delta + companion_delta)
+    # instead of deriving the total from A and C directly, this goes red.
+    rows = [
+        {"label": "core", "confidence": "VERIFIED", "timestamp": "2026-08-01T10:00:00+0000",
+         "first_request_before": 1000000, "first_request_after": 800000,
+         "floor_reduction_tokens": 200000, "fingerprint_start": "fpA",
+         "fingerprint_end": "fpB", "cohort_after": {"start": 2000, "end": 3000}},
+        {"label": "companion", "confidence": "VERIFIED", "timestamp": "2026-08-05T10:00:00+0000",
+         "first_request_before": 810000, "first_request_after": 400000,
+         "floor_reduction_tokens": 410000, "fingerprint_start": "fpB",
+         "fingerprint_end": "fpC", "cohort_before": {"start": 3000, "end": 4000}},
+    ]
+    wf = shield.build_waterfall(rows, "core", "companion")
+    assert wf["separable"] is True, wf
+    assert wf["baseline_a"] == 1000000 and wf["point_b"] == 800000 and wf["point_c"] == 400000
+    assert wf["core_delta"] == 200000 and wf["companion_delta"] == 410000
+    # The never-sum assertion, at the token level: B was measured twice (once
+    # by core's after-cohort, once by companion's before-cohort) and the two
+    # readings differ (800,000 vs 810,000), so the marginal deltas do not sum
+    # to the true total; the total is read straight off A and C instead.
+    assert wf["total_delta"] == 600000, wf["total_delta"]
+    assert wf["total_delta"] != wf["core_delta"] + wf["companion_delta"], wf
+    # The never-sum assertion, at the percentage level: 20% of A plus 51% of
+    # B is not a meaningful 71%, because the two percentages are shares of
+    # different baselines.
+    assert wf["core_delta_pct"] == 0.2
+    assert abs(wf["companion_delta_pct"] - (410000 / 810000)) < 1e-9
+    assert wf["total_delta_pct"] == 0.6
+    assert wf["total_delta_pct"] != wf["core_delta_pct"] + wf["companion_delta_pct"], wf
+
+    html = shield.render_waterfall(wf, "core", "companion")
+    assert "20%" in html and "51%" in html and "60%" in html
+    assert "600,000" in html
+    assert "610,000" not in html   # the naive token sum must never appear
+    assert "71%" not in html       # the naive percentage sum must never appear
+
+
+def test_waterfall_declares_interaction_not_separable_on_fingerprint_break():
+    # Calibrated: simulates exactly what a companion version change looks
+    # like on the ledger, reusing the SAME fingerprint fields
+    # experiment.build_record already writes (fingerprint_start,
+    # fingerprint_end), never a second version-tracking mechanism. If
+    # build_waterfall ever chained across a fingerprint break, this goes red
+    # on the separable assertion.
+    rows = [
+        {"label": "core", "confidence": "VERIFIED", "timestamp": "2026-08-01T10:00:00+0000",
+         "first_request_before": 1000000, "first_request_after": 800000,
+         "floor_reduction_tokens": 200000, "fingerprint_start": "fpA",
+         "fingerprint_end": "fpB", "cohort_after": {"start": 2000, "end": 3000}},
+        {"label": "companion", "confidence": "VERIFIED", "timestamp": "2026-08-05T10:00:00+0000",
+         "first_request_before": 810000, "first_request_after": 400000,
+         "floor_reduction_tokens": 410000, "fingerprint_start": "fpB-companion-v2",
+         "fingerprint_end": "fpC", "cohort_before": {"start": 3000, "end": 4000}},
+    ]
+    wf = shield.build_waterfall(rows, "core", "companion")
+    assert wf["separable"] is False, wf
+    assert wf["total_delta"] is None and wf["total_delta_pct"] is None, wf
+    assert "NOT SEPARABLE" in wf["interaction_note"], wf["interaction_note"]
+    assert "fingerprint" in wf["interaction_note"], wf["interaction_note"]
+
+    html = shield.render_waterfall(wf, "core", "companion")
+    assert "NOT SEPARABLE" in html, html
+    # No credit is split by a guess: no total figure renders at all.
+    assert "600,000" not in html and "610,000" not in html
+
+
+def test_waterfall_declares_interaction_not_separable_on_overlapping_windows():
+    # Calibrated: companion's before-cohort window (2500-4000) starts before
+    # core's after-cohort window (2000-3000) ends, so the same session could
+    # be counted on both sides. If build_waterfall only checked the
+    # fingerprint and ignored window overlap, this goes red.
+    rows = [
+        {"label": "core", "confidence": "VERIFIED", "timestamp": "2026-08-01T10:00:00+0000",
+         "first_request_before": 1000000, "first_request_after": 800000,
+         "floor_reduction_tokens": 200000, "fingerprint_start": "fpA",
+         "fingerprint_end": "fpB", "cohort_after": {"start": 2000, "end": 3000}},
+        {"label": "companion", "confidence": "VERIFIED", "timestamp": "2026-08-05T10:00:00+0000",
+         "first_request_before": 810000, "first_request_after": 400000,
+         "floor_reduction_tokens": 410000, "fingerprint_start": "fpB",
+         "fingerprint_end": "fpC", "cohort_before": {"start": 2500, "end": 4000}},
+    ]
+    wf = shield.build_waterfall(rows, "core", "companion")
+    assert wf["separable"] is False, wf
+    assert "NOT SEPARABLE" in wf["interaction_note"], wf["interaction_note"]
+    assert "overlap" in wf["interaction_note"], wf["interaction_note"]
+
+
+def test_waterfall_empty_ledger_is_no_data_not_zero():
+    # Calibrated: an empty ledger must never render a total of 0 or a blank
+    # section; it must say NO DATA. If build_waterfall silently defaulted
+    # missing records to 0 instead of NO DATA, this goes red.
+    wf = shield.build_waterfall([], "core", "companion")
+    assert wf["core"]["status"] == "NO DATA" and wf["companion"]["status"] == "NO DATA", wf
+    assert wf["separable"] is False and wf["total_delta"] is None, wf
+    html = shield.render_waterfall(wf, "core", "companion")
+    assert "NO DATA" in html, html
+    assert "core" in html and "companion" in html
+
+
+def test_waterfall_confidence_labels_never_blend_on_one_line():
+    # Calibrated: core is VERIFIED, companion never ran (NOT_PROVEN with a
+    # thin-data reason), so the chain cannot be separable. Each step's own
+    # confidence label must stand alone; a rendered line combining
+    # "VERIFIED" and "NOT_PROVEN" would blend two different confidences into
+    # one claim. If the renderer ever merged the two step lines into one
+    # paragraph, this goes red.
+    rows = [
+        {"label": "core", "confidence": "VERIFIED", "timestamp": "2026-08-01T10:00:00+0000",
+         "first_request_before": 1000000, "first_request_after": 800000,
+         "floor_reduction_tokens": 200000, "fingerprint_start": "fpA",
+         "fingerprint_end": "fpB", "cohort_after": {"start": 2000, "end": 3000}},
+        {"label": "companion", "confidence": "NOT_PROVEN", "timestamp": "2026-08-05T10:00:00+0000",
+         "reasons": ["only 1 sessions after the change, need 3"]},
+    ]
+    wf = shield.build_waterfall(rows, "core", "companion")
+    assert wf["core"]["status"] == "VERIFIED" and wf["companion"]["status"] == "NOT_PROVEN", wf
+    assert wf["separable"] is False, wf
+
+    html = shield.render_waterfall(wf, "core", "companion")
+    for para in html.split("</p>"):
+        assert not ("VERIFIED" in para and "NOT_PROVEN" in para), para
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

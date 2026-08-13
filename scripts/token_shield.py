@@ -41,6 +41,15 @@ CACHE_READ = 0.1  # a cached token bills at 0.1x, so the saving is (1 - 0.1)
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMPANIONS_PATH = os.path.join(HERE, "..", "data", "companions.json")
 
+# Default experiment labels the marginal attribution waterfall chains: the
+# user runs `experiment start "core"` / `end "core"` around a Token Shield
+# native change, then the same around a companion plugin change labeled
+# "companion" (docs/ROADMAP.md: "baseline A, plus Core to B, plus companion
+# to C"). Overridable via --waterfall-core/--waterfall-companion for anyone
+# who picked their own label names.
+WATERFALL_CORE_LABEL = "core"
+WATERFALL_COMPANION_LABEL = "companion"
+
 
 def load_measure():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -327,6 +336,192 @@ def verified_by_label(rows):
                            "timestamp": r.get("timestamp"),
                            "direction": r.get("direction")}
     return [by_label[k] for k in sorted(by_label)]
+
+
+def _latest_record(rows, label):
+    """The newest ledger record for one label, any confidence (unlike
+    verified_by_label, which keeps VERIFIED rows only). The waterfall needs
+    to say WHY a step failed, not just that it did, so a NOT_PROVEN record
+    is kept here and its reasons are what gets rendered.
+
+    Tie-break mirrors verified_by_label: a parsable timestamp beats ledger
+    order, ledger order (append-only) is the fallback.
+    """
+    best, best_key = None, None
+    for i, r in enumerate(rows or []):
+        if (r.get("label") or "(unlabeled)") != label:
+            continue
+        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
+        key = (ts, i)
+        if best_key is None or key > best_key:
+            best, best_key = r, key
+    return best
+
+
+def build_waterfall(rows, core_label=WATERFALL_CORE_LABEL,
+                    companion_label=WATERFALL_COMPANION_LABEL):
+    """The marginal attribution waterfall from docs/ROADMAP.md: baseline A,
+    plus Core's own before/after experiment to B, plus the companion's own
+    before/after experiment to C.
+
+    Each experiment.py record is already ONE treatment's before/after (one
+    label, one fingerprint-pinned comparison; docs/superpowers/specs/
+    2026-08-13-solid-core-design.md: "single-treatment attribution is
+    core"). This function only COMPOSES the two existing records; it never
+    re-derives a confidence verdict and never computes a second fingerprint.
+    A companion version change already ends the experiment that spans it
+    inside experiment.build_record's own fingerprint_start/fingerprint_end
+    guard (that record downgrades to NOT_PROVEN there); this function reads
+    that verdict and the two fingerprint fields already written to the
+    record, and refuses to chain across a break rather than invent its own
+    version check.
+
+    HARD RULES this function exists to hold:
+      - core_delta_pct is a percentage of A, companion_delta_pct is a
+        percentage of B: different baselines, so they are NEVER added.
+        total_delta_pct is computed straight from (A - C) / A.
+      - total_delta is computed straight from A and C too, not from
+        core_delta + companion_delta: B is measured twice (once as core's
+        own after-cohort, once as companion's own before-cohort), and those
+        two measurements are not guaranteed to agree exactly even when the
+        chain is otherwise clean, so summing the marginal deltas would
+        silently paper over that gap.
+      - when the two experiments cannot be chained cleanly (a fingerprint
+        break between them, or overlapping cohort windows), separable is
+        False and no total is computed at all: the interaction is declared
+        NOT SEPARABLE rather than credited to one side by a guess.
+    """
+    core = _latest_record(rows, core_label)
+    companion = _latest_record(rows, companion_label)
+
+    def step(rec, label):
+        if rec is None:
+            return {"label": label, "status": "NO DATA",
+                    "note": f"no experiment record labeled \"{label}\" in the ledger"}
+        if rec.get("confidence") != "VERIFIED":
+            reasons = rec.get("reasons") or ["not verified"]
+            return {"label": label, "status": "NOT_PROVEN",
+                    "note": "; ".join(str(x) for x in reasons)}
+        return {"label": label, "status": "VERIFIED", "record": rec}
+
+    core_step, companion_step = step(core, core_label), step(companion, companion_label)
+    result = {"core": core_step, "companion": companion_step, "separable": False,
+             "interaction_note": None, "baseline_a": None, "point_b": None,
+             "point_c": None, "core_delta": None, "core_delta_pct": None,
+             "companion_delta": None, "companion_delta_pct": None,
+             "total_delta": None, "total_delta_pct": None}
+
+    if core_step["status"] != "VERIFIED" or companion_step["status"] != "VERIFIED":
+        missing = [s["label"] for s in (core_step, companion_step) if s["status"] != "VERIFIED"]
+        result["interaction_note"] = (
+            f"NOT SEPARABLE: {' and '.join(missing)} has no VERIFIED experiment to "
+            f"chain from")
+        return result
+
+    a, b, c = (core["first_request_before"], core["first_request_after"],
+              companion["first_request_after"])
+    result["baseline_a"], result["point_b"], result["point_c"] = a, b, c
+    result["core_delta"] = core["floor_reduction_tokens"]
+    result["companion_delta"] = companion["floor_reduction_tokens"]
+
+    # Separable only when nothing moved between the two experiments: the
+    # fingerprint core ended on must be the exact fingerprint companion
+    # started from (read, never re-derived), and companion's before-cohort
+    # window must not overlap core's after-cohort window in time, or the
+    # same session would be double-counted on both sides of the chain.
+    fp_end, fp_start = core.get("fingerprint_end"), companion.get("fingerprint_start")
+    fp_continuous = fp_end is not None and fp_end == fp_start
+    ca, cb = core.get("cohort_after") or {}, companion.get("cohort_before") or {}
+    windows_clean = (ca.get("end") is not None and cb.get("start") is not None
+                     and cb["start"] >= ca["end"])
+
+    if not (fp_continuous and windows_clean):
+        reasons = []
+        if not fp_continuous:
+            reasons.append(
+                "the config fingerprint moved between the core and companion "
+                "experiments (for example a companion version change), so B is not "
+                "the same state on both sides")
+        if not windows_clean:
+            reasons.append(
+                "the companion's before-cohort window overlaps the core's "
+                "after-cohort window in time")
+        result["interaction_note"] = "NOT SEPARABLE: " + "; ".join(reasons)
+        return result
+
+    result["separable"] = True
+    if a:
+        result["core_delta_pct"] = result["core_delta"] / a
+    # companion_delta_pct is a share of companion's OWN before-value (its own
+    # experiment record), not of core's after-value b: the two are separate
+    # measurements of nominally the same state B and are not guaranteed to
+    # agree, so mixing them here would make the percentage inconsistent with
+    # companion["floor_reduction_tokens"], the number the experiment ledger
+    # itself already reports for this label.
+    companion_before = companion["first_request_before"]
+    if companion_before:
+        result["companion_delta_pct"] = result["companion_delta"] / companion_before
+    result["total_delta"] = a - c
+    if a:
+        result["total_delta_pct"] = result["total_delta"] / a
+    return result
+
+
+def render_waterfall(wf, core_label=WATERFALL_CORE_LABEL,
+                     companion_label=WATERFALL_COMPANION_LABEL):
+    parts = ['<h2>Marginal attribution waterfall</h2>']
+    if wf is None:
+        wf = build_waterfall([], core_label, companion_label)
+    if wf["core"]["status"] == "NO DATA" and wf["companion"]["status"] == "NO DATA":
+        parts.append(
+            f'<p class="nodata">NO DATA: no experiment named &quot;{esc(core_label)}&quot; or '
+            f'&quot;{esc(companion_label)}&quot; in the ledger yet. Run '
+            f'<code>experiment start "{esc(core_label)}"</code>, apply the core change, '
+            f'<code>experiment end "{esc(core_label)}"</code>, then the same around a '
+            f'companion change labeled "{esc(companion_label)}".</p>')
+        return "".join(parts)
+
+    if not wf["separable"]:
+        parts.append(f'<p class="nodata">{esc(wf["interaction_note"])} No total is computed; '
+                     f'the individual before/after figures below are shown as measured, never '
+                     f'split by a guess.</p>')
+        for step in (wf["core"], wf["companion"]):
+            if step["status"] == "VERIFIED":
+                rec = step["record"]
+                parts.append(
+                    f'<p class="n"><span class="cpill ver">VERIFIED</span> '
+                    f'<b>{esc(step["label"])}</b>: {human(rec["first_request_before"])} to '
+                    f'{human(rec["first_request_after"])} ({rec["floor_reduction_tokens"]:+,}), '
+                    f'source: experiment ledger.</p>')
+            elif step["status"] == "NOT_PROVEN":
+                parts.append(
+                    f'<p class="n"><span class="cpill est">NOT_PROVEN</span> '
+                    f'<b>{esc(step["label"])}</b>: {esc(step["note"])}</p>')
+            else:
+                parts.append(
+                    f'<p class="n"><b>{esc(step["label"])}</b>: {esc(step["note"])}</p>')
+        return "".join(parts)
+
+    a, b, c = wf["baseline_a"], wf["point_b"], wf["point_c"]
+    parts.append(
+        '<div class="compare">'
+        f'<div class="col"><p class="lbl">Baseline A</p><div class="amt">{human(a)}</div></div>'
+        f'<div class="col"><p class="lbl">+ Core to B</p>'
+        f'<div class="amt">{human(b)}</div><p class="n">{wf["core_delta"]:+,} '
+        f'({pct(wf["core_delta_pct"])} of A)</p></div>'
+        f'<div class="col"><p class="lbl">+ Companion to C</p>'
+        f'<div class="amt">{human(c)}</div><p class="n">{wf["companion_delta"]:+,} '
+        f'({pct(wf["companion_delta_pct"])} of B, not of A)</p></div>'
+        '</div>')
+    parts.append(
+        f'<p class="n"><span class="cpill ver">VERIFIED</span> total A to C: '
+        f'{wf["total_delta"]:+,} ({pct(wf["total_delta_pct"])} of A), computed straight from '
+        f'A and C, never from summing the two marginal deltas above. '
+        f'{pct(wf["core_delta_pct"])} is a share of A; {pct(wf["companion_delta_pct"])} is a '
+        f'share of B, a different baseline; the two percentages are never added together. '
+        f'Source: experiment ledger, labels "{esc(core_label)}" and '
+        f'"{esc(companion_label)}".</p>')
+    return "".join(parts)
 
 
 def _leaf(profile, section, key):
@@ -836,7 +1031,9 @@ def stat(k, v, note, is_nodata=False):
 
 def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
-           experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0):
+           experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0,
+           waterfall_core_label=WATERFALL_CORE_LABEL,
+           waterfall_companion_label=WATERFALL_COMPANION_LABEL):
     # usd_res is accepted for signature compatibility with callers (main()
     # still measures it for the separate `prices` command's use elsewhere)
     # but is never rendered here: the dashboard shows only figures the user
@@ -880,6 +1077,8 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     parts.append(render_recommendation_queue(advise_result, suppressed_n, companion_suppressed_n))
     parts.append(render_companions(companions_data, profile, cache_root))
     parts.append(render_experiment_history(experiment_rows or []))
+    wf = build_waterfall(experiment_rows or [], waterfall_core_label, waterfall_companion_label)
+    parts.append(render_waterfall(wf, waterfall_core_label, waterfall_companion_label))
 
     # WINS AND ISSUES at a glance, Brave-style reassurance.
     wins = []
@@ -1002,6 +1201,11 @@ def main():
                     help="add a per-session table (transcript rows carry no names)")
     ap.add_argument("--body-only", action="store_true",
                     help="emit body content without the html wrapper (for artifact publish)")
+    ap.add_argument("--waterfall-core", default=WATERFALL_CORE_LABEL,
+                    help="experiment label for the waterfall's Core step (default: core)")
+    ap.add_argument("--waterfall-companion", default=WATERFALL_COMPANION_LABEL,
+                    help="experiment label for the waterfall's companion step "
+                         "(default: companion)")
     a = ap.parse_args()
 
     if not os.path.isdir(a.root):
@@ -1060,7 +1264,9 @@ def main():
     body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified,
                   profile=profile, advise_result=advise_result, suppressed_n=suppressed_n,
                   companions_data=companions_data, experiment_rows=experiment_rows,
-                  companion_suppressed_n=companion_suppressed_n)
+                  companion_suppressed_n=companion_suppressed_n,
+                  waterfall_core_label=a.waterfall_core,
+                  waterfall_companion_label=a.waterfall_companion)
     out_html = body if a.body_only else render_standalone(body)
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
