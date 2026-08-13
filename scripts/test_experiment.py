@@ -535,6 +535,99 @@ def test_cohort_window_is_half_open_at_the_end():
               len(after) == 1 and after[0]["input"] == 111)
 
 
+# --- target_metric: each experiment judged on the metric it declares ---
+
+def test_legacy_baseline_without_target_metric_is_judged_exactly_as_before():
+    # target_metric is an OPTIONAL field added this unit. Every baseline ever
+    # pinned before today carries no such key at all, and must be judged
+    # exactly as it always has: on first_request_median, with the existing
+    # fields carrying the existing values.
+    baseline = _baseline(fr=80000)
+    check("no target_metric key on an old-shape baseline", "target_metric" not in baseline)
+    rec = ex.build_record(baseline, _after(fr=60000), "2026-08-30T00:00:00")
+    check("an undeclared metric reads as the default", rec["target_metric"] == ex.DEFAULT_METRIC)
+    check("metric_before mirrors first_request_before for the default metric",
+          rec["metric_before"] == rec["first_request_before"] == 80000)
+    check("metric_after mirrors first_request_after for the default metric",
+          rec["metric_after"] == rec["first_request_after"] == 60000)
+    check("metric_delta mirrors floor_reduction_tokens for the default metric",
+          rec["metric_delta"] == rec["floor_reduction_tokens"] == 20000)
+    check("verdict is VERIFIED exactly as before this unit", rec["confidence"] == "VERIFIED")
+    check("direction is unchanged", rec["direction"] == "saving")
+
+
+def test_declared_metric_is_the_one_actually_compared():
+    # Field names are exact summarize() keys (grepped from measure_tokens.py):
+    # hit_ratio_median is a real summary field. Declaring it must route the
+    # comparison and the verdict through THAT key, not first_request_median,
+    # even when first_request_median itself would say something different.
+    b = _baseline(fr=999999)
+    b["target_metric"] = "hit_ratio_median"
+    b["summary"]["hit_ratio_median"] = 0.5
+    after = _after(fr=1)
+    after["hit_ratio_median"] = 0.9
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("target_metric is carried on the record", rec["target_metric"] == "hit_ratio_median")
+    check("metric_before reads the declared field, not first_request_median",
+          rec["metric_before"] == 0.5)
+    check("metric_after reads the declared field, not first_request_median",
+          rec["metric_after"] == 0.9)
+    check("metric_delta is computed from the declared field",
+          abs(rec["metric_delta"] - (0.5 - 0.9)) < 1e-9)
+    check("the declared metric is present on both sides, so the verdict is VERIFIED",
+          rec["confidence"] == "VERIFIED")
+    check("first_request_before/after still carry the floor numbers untouched",
+          rec["first_request_before"] == 999999 and rec["first_request_after"] == 1)
+
+
+def test_absent_declared_metric_downgrades_with_metric_not_measured_reason():
+    b = _baseline()
+    b["target_metric"] = "output_total"  # never recorded on this baseline's summary
+    after = _after()
+    after["output_total"] = 12345  # present after, absent before: still a downgrade
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("missing declared metric on one side downgrades to NOT_PROVEN",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason literally says metric not measured",
+          any("metric not measured" in r for r in rec["reasons"]))
+    check("the reason names the missing metric",
+          any("output_total" in r for r in rec["reasons"]))
+    check("no guess is made: metric_before/after are None, not a stand-in value",
+          rec["metric_before"] is None and rec["metric_after"] is not None)
+
+
+def test_experiment_cli_start_with_metric_flag_stores_target_metric():
+    # cmd_start's own CLI (python3 experiment.py start ... --metric X) is the
+    # entry point that declares a target_metric; cli.py's hand-rolled
+    # subcommand parsing is untouched by this unit and still only knows
+    # --treats, so this exercises experiment.py's argparse directly.
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        r = _run_experiment_cli(home, ["start", "cli-metric-smoke",
+                                       "--metric", "hit_ratio_median"])
+        check("experiment.py start with --metric exits 0", r.returncode == 0)
+        check("experiment.py start with --metric does not raise",
+              "Traceback" not in r.stderr)
+        snap = os.path.join(home, ".claude", "token-shield", "experiments",
+                            "cli-metric-smoke.json")
+        with open(snap) as f:
+            baseline = json.load(f)
+        check("the declared metric is stored on the baseline",
+              baseline.get("target_metric") == "hit_ratio_median")
+
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        r = _run_experiment_cli(home, ["start", "cli-no-metric-smoke"])
+        check("experiment.py start without --metric exits 0", r.returncode == 0)
+        snap = os.path.join(home, ".claude", "token-shield", "experiments",
+                            "cli-no-metric-smoke.json")
+        with open(snap) as f:
+            baseline = json.load(f)
+        check("target_metric key is absent from the baseline when --metric is "
+              "not passed (purely additive, optional field)",
+              "target_metric" not in baseline)
+
+
 def test_per_label_aggregation_never_sums_across_labels():
     records = [
         {"label": "a", "confidence": "VERIFIED", "floor_reduction_tokens": 1000},
@@ -559,6 +652,16 @@ def _run_cli(home, args):
     env = dict(os.environ)
     env["HOME"] = home
     return subprocess.run([sys.executable, os.path.join(HERE, "cli.py")] + args,
+                          cwd=HERE, env=env, capture_output=True, text=True)
+
+
+def _run_experiment_cli(home, args):
+    """Same sandboxing as _run_cli, but drives experiment.py's own argparse
+    directly (the --metric flag lives there; cli.py's hand-rolled subcommand
+    parsing is out of scope for this unit)."""
+    env = dict(os.environ)
+    env["HOME"] = home
+    return subprocess.run([sys.executable, os.path.join(HERE, "experiment.py")] + args,
                           cwd=HERE, env=env, capture_output=True, text=True)
 
 

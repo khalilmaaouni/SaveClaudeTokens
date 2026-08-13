@@ -62,6 +62,12 @@ EXP_SCHEMA = 2  # ledger record schema. v1 records never carried a "schema" key
                 # at all, so its absence on an old record means schema 1; this
                 # is a different axis than mt.SCHEMA, which is the meter's own.
 
+# The metric build_record judges VERIFIED/NOT_PROVEN by, when a baseline
+# carries no target_metric of its own. Every baseline pinned before this
+# unit existed is missing the key entirely, and reads as this same default,
+# so nothing about the legacy path changes.
+DEFAULT_METRIC = "first_request_median"
+
 # The keys a v2 baseline snapshot must carry for the v2 guards to have anything
 # to check. A v1.6 snapshot has none of them, and every v2 guard is written as
 # "downgrade if this moved", which a missing key silently passes.
@@ -311,6 +317,10 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
       - window length differs (different windows hold different sessions);
       - too few sessions on EITHER side to measure a floor honestly, because a
         one-session before cohort is exactly as thin as a one-session after;
+      - the baseline's declared target_metric (a summarize() key; defaults to
+        first_request_median when the baseline names none, which is every
+        baseline pinned before this field existed) is absent from either
+        cohort's summary: "metric not measured", never a guess;
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
         mover was not the file named at start's --treats;
@@ -377,21 +387,35 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
                 f"dominant model changed during experiment window "
                 f"(before {dominant_before!r}, after {dominant_after!r})")
 
+    # first_request_before/after/floor_reduction_tokens stay informational and
+    # always read the startup floor, regardless of which metric is declared,
+    # so a record's existing consumers see the exact values they always have.
     fr_before = b.get("first_request_median")
     fr_after = after_sm.get("first_request_median")
-    if fr_before is None or fr_after is None:
-        reasons.append("no first-request median on one side")
+    floor_reduction = (fr_before - fr_after) if (fr_before is not None
+                                                  and fr_after is not None) else None
+
+    # The verdict itself, and direction, are judged on the DECLARED metric: a
+    # baseline naming no target_metric reads as DEFAULT_METRIC, which makes
+    # metric_before/after literally the same values as fr_before/fr_after
+    # above, so nothing about a legacy or metric-less record's verdict moves.
+    metric = baseline.get("target_metric") or DEFAULT_METRIC
+    metric_before = b.get(metric)
+    metric_after = after_sm.get(metric)
+    if metric_before is None or metric_after is None:
+        reasons.append("no first-request median on one side" if metric == DEFAULT_METRIC
+                       else f"metric not measured: '{metric}' missing from one side")
 
     verified = not reasons
-    floor_reduction = None
-    if fr_before is not None and fr_after is not None:
-        floor_reduction = fr_before - fr_after
+    metric_delta = None
+    if metric_before is not None and metric_after is not None:
+        metric_delta = metric_before - metric_after
 
     direction = None
-    if floor_reduction is not None:
-        if floor_reduction > 0:
+    if metric_delta is not None:
+        if metric_delta > 0:
             direction = "saving"
-        elif floor_reduction < 0:
+        elif metric_delta < 0:
             direction = "regression"
         else:
             direction = "flat"
@@ -418,6 +442,10 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         "first_request_after": fr_after,
         "floor_reduction_tokens": floor_reduction,
         "direction": direction,
+        "target_metric": metric,
+        "metric_before": metric_before,
+        "metric_after": metric_after,
+        "metric_delta": metric_delta,
         "sessions_before": b.get("parent_sessions"),
         "sessions_after": after_sm.get("parent_sessions"),
         "dispersion_before": p90_before,
@@ -495,7 +523,7 @@ def print_excluded(excluded):
           "this treatment.")
 
 
-def cmd_start(label, root, days, now_ts, treats):
+def cmd_start(label, root, days, now_ts, treats, metric=None):
     os.makedirs(EXP_DIR, exist_ok=True)
     before_start_ts = now_ts - days * 86400
     before_end_ts = now_ts
@@ -506,12 +534,17 @@ def cmd_start(label, root, days, now_ts, treats):
             "schema": mt.SCHEMA, "cohort_start_ts": before_start_ts,
             "cohort_end_ts": before_end_ts, "fingerprint_start": fingerprint_start,
             "treats": treats, "fingerprint_excluded": excluded, "summary": sm}
+    if metric:
+        snap["target_metric"] = metric
     path = os.path.join(EXP_DIR, label.replace("/", "_") + ".json")
     with open(path, "w") as f:
         json.dump(snap, f, indent=2)
     fr = sm.get("first_request_median")
     print(f"baseline pinned for '{label}': first-request median "
           f"{mt.fmt(fr)} tokens over {days:g} days.")
+    if metric and metric != DEFAULT_METRIC:
+        print(f"target metric for this experiment: '{metric}' "
+              f"(baseline value {mt.fmt(sm.get(metric))})")
     print_excluded(excluded)
     print("Make ONE change now (for example diet CLAUDE.md), work normally, then run: "
           f"python3 experiment.py end \"{label}\"")
@@ -558,6 +591,11 @@ def cmd_end(label, root, days, now_ts):
     if fr_b is not None and fr_a is not None:
         print(f"first-request median  {mt.fmt(fr_b)} -> {mt.fmt(fr_a)} tokens "
               f"({rec['floor_reduction_tokens']:+,} per call)")
+    if rec["target_metric"] != DEFAULT_METRIC:
+        mb, ma = rec["metric_before"], rec["metric_after"]
+        if mb is not None and ma is not None:
+            print(f"{rec['target_metric']}  {mt.fmt(mb)} -> {mt.fmt(ma)} "
+                  f"({rec['metric_delta']:+,})")
     print_excluded(rec["fingerprint_excluded"])
     print(f"one record appended to {LEDGER}")
     return 0
@@ -600,6 +638,9 @@ def main():
     ap.add_argument("--treats", default=None,
                     help="path excluded from the config fingerprint (the file "
                          "this experiment's own treatment edits); start only")
+    ap.add_argument("--metric", default=None,
+                    help="summarize() field this experiment is judged on (start "
+                         "only); defaults to first_request_median when omitted")
     a = ap.parse_args()
 
     if a.action == "report":
@@ -612,7 +653,7 @@ def main():
         return 2
     now_ts = time.time()
     if a.action == "start":
-        return cmd_start(a.label, a.root, a.days, now_ts, a.treats)
+        return cmd_start(a.label, a.root, a.days, now_ts, a.treats, a.metric)
     return cmd_end(a.label, a.root, a.days, now_ts)
 
 
