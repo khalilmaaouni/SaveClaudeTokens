@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "updated": "2026-08-13",
+  "pairs": [
+    {
+      "companions": ["ponytail", "caveman"],
+      "hook_event": "SessionStart",
+      "verdict": "known-safe",
+      "evidence_date": "2026-08-13",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "ownership": {
+        "ponytail": "writes its own flag file ($CLAUDE_CONFIG_DIR/.ponytail-active), injects the ponytail ruleset as hidden SessionStart context, and checks for a missing statusline config (hooks/ponytail-activate.js)",
+        "caveman": "writes its own flag file ($CLAUDE_CONFIG_DIR/.caveman-active), injects the caveman ruleset as hidden SessionStart context, and checks for a missing statusline config (src/hooks/caveman-activate.js)"
+      },
+      "evidence": "Both activation hooks are quoted verbatim in the source doc: distinct flag file names, independently injected context blocks, no shared write target documented."
+    },
+    {
+      "companions": ["ponytail", "caveman"],
+      "hook_event": "UserPromptSubmit",
+      "verdict": "needs-review",
+      "evidence_date": "2026-08-13",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "ownership": {
+        "ponytail": "runs hooks/ponytail-mode-tracker.js on every prompt (mode tracking); write targets not quoted in evidence",
+        "caveman": "runs src/hooks/caveman-mode-tracker.js on every prompt (mode tracking); write targets not quoted in evidence"
+      },
+      "evidence": "The source doc names both tracker hooks by file path but does not quote their contents or state keys, so the interaction is not verified either way."
+    },
+    {
+      "companions": ["ponytail", "token-saver"],
+      "hook_event": "SessionStart",
+      "verdict": "needs-review",
+      "evidence_date": "2026-08-13",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "ownership": {
+        "ponytail": "writes its own flag file ($CLAUDE_CONFIG_DIR/.ponytail-active), injects the ponytail ruleset as hidden SessionStart context, and checks for a missing statusline config (hooks/ponytail-activate.js)",
+        "token-saver": "runs scripts/hook_session.py on SessionStart; behavior not quoted beyond the command line in hooks/hooks.json"
+      },
+      "evidence": "ponytail's SessionStart behavior is quoted verbatim; token-saver's hook_session.py content is not, so this pair is not certified safe."
+    },
+    {
+      "companions": ["caveman", "token-saver"],
+      "hook_event": "SessionStart",
+      "verdict": "needs-review",
+      "evidence_date": "2026-08-13",
+      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "ownership": {
+        "caveman": "writes its own flag file ($CLAUDE_CONFIG_DIR/.caveman-active), injects the caveman ruleset as hidden SessionStart context, and checks for a missing statusline config (src/hooks/caveman-activate.js)",
+        "token-saver": "runs scripts/hook_session.py on SessionStart; behavior not quoted beyond the command line in hooks/hooks.json"
+      },
+      "evidence": "caveman's SessionStart behavior is quoted verbatim; token-saver's hook_session.py content is not, so this pair is not certified safe."
+    }
+  ]
+}

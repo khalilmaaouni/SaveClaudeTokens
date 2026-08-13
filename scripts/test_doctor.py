@@ -13,6 +13,8 @@ set-intersection check, green again.
 
 import contextlib
 import io
+import os
+import tempfile
 import time
 
 import doctor as dr
@@ -111,7 +113,100 @@ def test_report_prints_shared_hook_and_never_conflict():
     assert "SHARED HOOK" in out, out
     assert "SessionStart" in out, out
     assert "conflict" not in out.lower(), out
-    assert "wave 2" in out.lower(), out
+    assert "Hook ownership" in out, out
+    assert "known-safe" in out or "needs-review" in out, out
+
+
+def test_ownership_lines_render_needs_review_pair_from_fixture():
+    companions = [
+        _companion("ponytail", ["SessionStart", "UserPromptSubmit"]),
+        _companion("caveman", ["SessionStart", "UserPromptSubmit"]),
+    ]
+    state = _state([
+        {"name": "ponytail", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+        {"name": "caveman", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+    ])
+    compat_data = {
+        "schema": 1,
+        "pairs": [
+            {
+                "companions": ["ponytail", "caveman"],
+                "hook_event": "UserPromptSubmit",
+                "verdict": "needs-review",
+                "evidence_date": "2026-08-13",
+                "ownership": {"ponytail": "tracks mode on every prompt",
+                              "caveman": "tracks mode on every prompt"},
+            }
+        ],
+    }
+    lines = dr._ownership_lines(companions, state, compat_data)
+    joined = "\n".join(lines)
+    assert "needs-review" in joined, lines
+    assert "UserPromptSubmit" in joined and "ponytail" in joined and "caveman" in joined, lines
+    assert "tracks mode on every prompt" in joined, lines
+
+
+def test_ownership_reports_no_data_for_pair_absent_from_compatibility_file():
+    """Calibrated: temporarily defaulting the missing-entry branch in
+    _ownership_lines to verdict "known-safe" instead of "NO DATA" turned
+    this red (both assertions failed); restored to NO DATA, green again."""
+    companions = [
+        _companion("ponytail", ["SessionStart"]),
+        _companion("caveman", ["SessionStart"]),
+    ]
+    state = _state([
+        {"name": "ponytail", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+        {"name": "caveman", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+    ])
+    compat_data = {"schema": 1, "pairs": []}  # no evidence on file for this pair
+    lines = dr._ownership_lines(companions, state, compat_data)
+    joined = "\n".join(lines)
+    assert "NO DATA" in joined, lines
+    assert "known-safe" not in joined, lines
+
+
+def test_load_compatibility_returns_reason_on_malformed_json():
+    fd, path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("{not valid json")
+        data, error = dr._load_compatibility(path)
+        assert data is None, data
+        assert error, "expected a parse error reason, got none"
+    finally:
+        os.remove(path)
+
+
+def test_report_stays_clean_when_compatibility_file_is_malformed():
+    companions = [
+        _companion("ponytail", ["SessionStart", "UserPromptSubmit"]),
+        _companion("caveman", ["SessionStart", "UserPromptSubmit"]),
+    ]
+    state = _state([
+        {"name": "ponytail", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+        {"name": "caveman", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+    ])
+
+    orig_load = dr.ts.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_compat = dr._load_compatibility
+    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: state
+    dr._load_compatibility = lambda: (None, "Expecting value: line 1 column 1 (char 0)")
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.ts.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_compatibility = orig_compat
+
+    assert rc == 0
+    assert "malformed" in out.lower(), out
+    assert "Expecting value" in out, out
+    assert "Health" in out and "Staleness" in out and "Overlap" in out, out
 
 
 def test_main_completes_without_traceback_with_zero_companions_active():
