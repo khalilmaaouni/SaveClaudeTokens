@@ -91,8 +91,22 @@ def test_window_mismatch_is_not_proven():
 
 
 def test_thin_data_is_not_proven():
+    # m1. NOT_PROVEN alone does not say which cohort was too thin to trust;
+    # the reason must name the side, the same way every sibling reason does
+    # (schema names the schema, window names both window lengths).
     rec = ex.build_record(_baseline(sessions=10), _after(sessions=1), "2026-08-30T00:00:00")
     check("thin post-change data downgrades to NOT_PROVEN", rec["confidence"] == "NOT_PROVEN")
+    check("the reason names the after side as the thin one",
+          any("after the change" in r for r in rec["reasons"]))
+    check("the before side, which was not thin, is not named",
+          not any("before the change" in r for r in rec["reasons"]))
+
+    rec_before = ex.build_record(_baseline(sessions=1), _after(sessions=10),
+                                 "2026-08-30T00:00:00")
+    check("the reason names the before side when that is the thin one",
+          any("before the change" in r for r in rec_before["reasons"]))
+    check("the after side, which was not thin, is not named",
+          not any("after the change" in r for r in rec_before["reasons"]))
 
 
 def test_no_verified_record_without_a_real_floor_on_both_sides():
@@ -300,6 +314,76 @@ def test_min_sessions_guards_both_cohorts():
           ex.build_record(_baseline(sessions=ex.MIN_SESSIONS),
                           _after(sessions=ex.MIN_SESSIONS),
                           "2026-08-30T00:00:00")["confidence"] == "VERIFIED")
+
+
+def test_record_carries_per_cohort_evidence_scale():
+    # M1. A VERIFIED record used to show a floor delta with no sense of how
+    # much evidence sits behind it. The record now names the session count on
+    # each side (the same parent_sessions counts the thin-data gate already
+    # computes) and a dispersion figure per cohort, or NO DATA when the
+    # cohort is too small for summarize() to compute a p90 at all.
+    rec = ex.build_record(_baseline(sessions=12), _after(sessions=15),
+                          "2026-08-30T00:00:00")
+    check("sessions_before reflects the baseline cohort size",
+          rec["sessions_before"] == 12)
+    check("sessions_after reflects the after cohort size",
+          rec["sessions_after"] == 15)
+    check("no p90 in the fixtures reads NO DATA, never a guess",
+          rec["dispersion_before"] == "NO DATA" and rec["dispersion_after"] == "NO DATA")
+
+    b = _baseline(sessions=12)
+    b["summary"]["first_request_p90"] = 95000
+    after = _after(sessions=15)
+    after["first_request_p90"] = 71000
+    rec2 = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("a real p90 is carried through instead of NO DATA",
+          rec2["dispersion_before"] == 95000 and rec2["dispersion_after"] == 71000)
+
+
+def test_direction_field_distinguishes_regression_from_saving():
+    # C2. VERIFIED alone does not say whether the floor got better or worse;
+    # a -8000 regression used to carry the same shape as a +8000 saving.
+    rec_saving = ex.build_record(_baseline(fr=80000), _after(fr=60000),
+                                 "2026-08-30T00:00:00")
+    check("a real reduction reads as a saving", rec_saving["direction"] == "saving")
+
+    rec_regression = ex.build_record(_baseline(fr=60000), _after(fr=68000),
+                                     "2026-08-30T00:00:00")
+    check("a real increase reads as a regression",
+          rec_regression["direction"] == "regression")
+    check("a regression still carries a negative floor_reduction_tokens",
+          rec_regression["floor_reduction_tokens"] == -8000)
+
+    rec_flat = ex.build_record(_baseline(fr=60000), _after(fr=60000),
+                               "2026-08-30T00:00:00")
+    check("no change reads as flat", rec_flat["direction"] == "flat")
+
+
+def test_model_mix_confound_is_not_proven():
+    # M2. A floor change measured across a model switch might come from the
+    # new model, not the named treatment. The two cohorts' model sets are
+    # compared the same way the config fingerprint is: a mismatch downgrades
+    # to NOT_PROVEN with a stated reason, and no data on either side (a
+    # legacy or hand-built summary) is not treated as a mismatch.
+    b = _baseline()
+    b["summary"]["_models"] = ["claude-opus-5"]
+    after_same = _after()
+    after_same["_models"] = ["claude-opus-5"]
+    rec_same = ex.build_record(b, after_same, "2026-08-30T00:00:00")
+    check("matching model sets add no model-mix reason",
+          not any("model mix" in r for r in rec_same["reasons"]))
+    check("matching model sets stay VERIFIED", rec_same["confidence"] == "VERIFIED")
+
+    after_diff = _after()
+    after_diff["_models"] = ["claude-sonnet-5"]
+    rec_diff = ex.build_record(b, after_diff, "2026-08-30T00:00:00")
+    check("a model switch downgrades to NOT_PROVEN", rec_diff["confidence"] == "NOT_PROVEN")
+    check("the model-mix reason names the change",
+          any("model mix changed" in r for r in rec_diff["reasons"]))
+
+    rec_no_data = ex.build_record(_baseline(), _after(), "2026-08-30T00:00:00")
+    check("no model data on either side is not treated as a mismatch",
+          not any("model mix" in r for r in rec_no_data["reasons"]))
 
 
 def test_straddling_transcript_contributes_no_first_request():

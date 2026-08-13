@@ -281,7 +281,8 @@ def _read_session_cohort(fp, start_ts, end_ts):
         "write_total": write_total, "raw_input": raw_input,
         "normalized_input": normalized,
         "output_to_input": (tot["output"] / normalized) if normalized else None,
-        "models": len(models), "sub_calls": sub_calls, "sub_output": sub_output,
+        "models": len(models), "model_names": models,
+        "sub_calls": sub_calls, "sub_output": sub_output,
         "straddler": straddler,
         **tot,
     }
@@ -312,7 +313,9 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         one-session before cohort is exactly as thin as a one-session after;
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
-        mover was not the file named at start's --treats.
+        mover was not the file named at start's --treats;
+      - the set of models used changed between the before and after cohort,
+        when both sides carry a model list at all.
     Non-overlap between the before and after cohort windows is a harder
     refusal, enforced by check_cohort_order before this function is ever
     called, so no ledger record gets written for it at all.
@@ -338,6 +341,20 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
     if fingerprint_end is not None and fp_start is not None and fingerprint_end != fp_start:
         reasons.append("config changed during experiment window")
 
+    # Model mix is a confound the same way the config fingerprint is: a floor
+    # change might come from a model switch mid-experiment, not the named
+    # treatment. Only compared when both sides actually carry a model list
+    # (a legacy or hand-built summary carries neither, and None vs None is
+    # not a difference), same guard style as the fingerprint check above.
+    models_before = b.get("_models")
+    models_after = after_sm.get("_models")
+    if models_before is not None and models_after is not None:
+        set_before, set_after = set(models_before), set(models_after)
+        if set_before != set_after:
+            reasons.append(
+                f"model mix changed during experiment window "
+                f"(before {sorted(set_before)}, after {sorted(set_after)})")
+
     fr_before = b.get("first_request_median")
     fr_after = after_sm.get("first_request_median")
     if fr_before is None or fr_after is None:
@@ -347,6 +364,18 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
     floor_reduction = None
     if fr_before is not None and fr_after is not None:
         floor_reduction = fr_before - fr_after
+
+    direction = None
+    if floor_reduction is not None:
+        if floor_reduction > 0:
+            direction = "saving"
+        elif floor_reduction < 0:
+            direction = "regression"
+        else:
+            direction = "flat"
+
+    p90_before = b.get("first_request_p90")
+    p90_after = after_sm.get("first_request_p90")
 
     return {
         "schema": EXP_SCHEMA,
@@ -366,10 +395,15 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         "first_request_before": fr_before,
         "first_request_after": fr_after,
         "floor_reduction_tokens": floor_reduction,
+        "direction": direction,
+        "sessions_before": b.get("parent_sessions"),
+        "sessions_after": after_sm.get("parent_sessions"),
+        "dispersion_before": p90_before if p90_before is not None else "NO DATA",
+        "dispersion_after": p90_after if p90_after is not None else "NO DATA",
         "normalized_input_before": b.get("normalized_input_total"),
         "normalized_input_after": after_sm.get("normalized_input_total"),
-        "models_before": b.get("_models"),
-        "models_after": after_sm.get("_models"),
+        "models_before": models_before,
+        "models_after": models_after,
         "evidence": "API usage counters, before/after over the same window, "
                     "cohorted by message timestamp",
     }
@@ -397,11 +431,19 @@ def aggregate_by_label(records):
 
 
 def _measure_cohort(root, start_ts, end_ts, days):
-    sm = mt.summarize(collect_cohort(root, start_ts, end_ts)) or {}
+    sessions = collect_cohort(root, start_ts, end_ts)
+    sm = mt.summarize(sessions) or {}
     sm = dict(sm)
     sm["_window_days"] = days
     sm["_cohort_start_ts"] = start_ts
     sm["_cohort_end_ts"] = end_ts
+    # The distinct model names actually used in this cohort, so build_record
+    # can catch a model switch between the before and after cohort: a floor
+    # change might come from the new model, not the named treatment.
+    models = set()
+    for s in sessions:
+        models |= s.get("model_names") or set()
+    sm["_models"] = sorted(models)
     return sm
 
 

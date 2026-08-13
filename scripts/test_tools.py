@@ -551,16 +551,21 @@ def test_verified_headline_is_per_label_and_never_a_cross_label_total():
     # a number about nothing, on a page that says one paragraph later that
     # floor deltas are never summed across labels.
     rows = [
-        {"label": "diet-claude-md", "confidence": "VERIFIED",
+        {"label": "diet-claude-md", "confidence": "VERIFIED", "direction": "saving",
          "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000"},
-        {"label": "diet-claude-md", "confidence": "VERIFIED",
+        {"label": "diet-claude-md", "confidence": "VERIFIED", "direction": "saving",
          "floor_reduction_tokens": 5000, "timestamp": "2026-08-02T10:00:00+0000"},
-        {"label": "prune-mcp", "confidence": "VERIFIED",
+        {"label": "prune-mcp", "confidence": "VERIFIED", "direction": "regression",
          "floor_reduction_tokens": -8000, "timestamp": "2026-08-03T10:00:00+0000"},
     ]
     verified = shield.verified_by_label(rows)
     assert [r["label"] for r in verified] == ["diet-claude-md", "prune-mcp"], verified
     assert [r["floor_reduction"] for r in verified] == [5000, -8000], verified
+    # M3/m1. A regression's own record must never carry the same shape as a
+    # saving: -8000 must say direction "regression" on the raw row itself,
+    # not just print negative in a rendered string somewhere downstream.
+    assert rows[2]["direction"] == "regression", rows[2]
+    assert all(r["direction"] == "saving" for r in rows[:2]), rows[:2]
 
     big, under = shield.render_verified_hero(verified)
     hero = big + under
