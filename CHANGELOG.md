@@ -35,6 +35,22 @@ Keep a Changelog. Entries are newest first.
   only in this change. Per the founder's 2026-08-13 gate amendment, no
   version tag, release, or plugin/MCP registration happens until the
   claude-md-diet experiment reaches a verdict; that boundary is unchanged.
+- Experiment ledger hardening from a methodology audit (`scripts/experiment.py`):
+  every record now names its per-cohort evidence scale (`sessions_before`,
+  `sessions_after`, and a p90 `dispersion_before`/`dispersion_after`, None
+  when the cohort is too thin for a p90); carries an explicit `direction`
+  (saving, regression, or flat) so a regression can never render with the
+  same shape as a saving, proven through `token_shield.verified_by_label`'s
+  actual output, not just the fixture that feeds it; downgrades to
+  NOT_PROVEN when the DOMINANT main-thread model (by session count, ties
+  broken lexically) differs between the before and after cohort, the same
+  confounder guard already applied to the config fingerprint, with a
+  routine minor-version bump on one session no longer enough to trip it;
+  downgrades to NOT_PROVEN, never a silent pass, when exactly one cohort
+  predates main-thread model tracking entirely; and the thin-data reason
+  names which side (before or after) was too thin, matching its sibling
+  reasons. Calibrated tests added to `scripts/test_experiment.py` and
+  `scripts/test_tools.py`, each proven red before the fix.
 
 ## 1.7.1
 

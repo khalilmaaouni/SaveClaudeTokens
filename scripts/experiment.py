@@ -281,7 +281,8 @@ def _read_session_cohort(fp, start_ts, end_ts):
         "write_total": write_total, "raw_input": raw_input,
         "normalized_input": normalized,
         "output_to_input": (tot["output"] / normalized) if normalized else None,
-        "models": len(models), "sub_calls": sub_calls, "sub_output": sub_output,
+        "models": len(models), "model_names": models,
+        "sub_calls": sub_calls, "sub_output": sub_output,
         "straddler": straddler,
         **tot,
     }
@@ -312,7 +313,12 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         one-session before cohort is exactly as thin as a one-session after;
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
-        mover was not the file named at start's --treats.
+        mover was not the file named at start's --treats;
+      - the DOMINANT main-thread model (the one used in the most sessions,
+        ties broken lexically) differs between the before and after cohort,
+        when both sides carry main-thread model tracking at all; exactly one
+        side missing it (a baseline pinned before this field existed) is
+        itself a downgrade, never a silent skip, since NO DATA beats a guess.
     Non-overlap between the before and after cohort windows is a harder
     refusal, enforced by check_cohort_order before this function is ever
     called, so no ledger record gets written for it at all.
@@ -338,6 +344,39 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
     if fingerprint_end is not None and fp_start is not None and fingerprint_end != fp_start:
         reasons.append("config changed during experiment window")
 
+    # Model mix is a confound the same way the config fingerprint is: a floor
+    # change might come from a model switch mid-experiment, not the named
+    # treatment. The trigger is the DOMINANT model per cohort (the one used
+    # in the most sessions, ties broken lexically), not full-set equality:
+    # a routine minor-version bump touching one session out of many would
+    # otherwise downgrade every experiment. The full sets still ride along
+    # on the record as models_before/models_after for transparency.
+    #
+    # "Neither side tracked" (both None, e.g. a legacy baseline compared
+    # against another legacy-shaped summary) is not a difference and stays
+    # silent. But EXACTLY ONE side missing _models is not "no data on
+    # either side": it means the comparison itself cannot be trusted, and a
+    # silent skip there would let a live baseline pinned before this field
+    # existed sail through to VERIFIED with the guard never having run.
+    # NO DATA beats a guess, so that case downgrades with a named reason.
+    models_before = b.get("_models")
+    models_after = after_sm.get("_models")
+    if models_before is None and models_after is None:
+        pass
+    elif (models_before is None) != (models_after is None):
+        thin_side = "before" if models_before is None else "after"
+        reasons.append(
+            f"model mix cannot be compared: the {thin_side} cohort predates "
+            f"model tracking (no _models recorded)")
+    else:
+        dominant_before = b.get("_dominant_model")
+        dominant_after = after_sm.get("_dominant_model")
+        if (dominant_before is not None and dominant_after is not None
+                and dominant_before != dominant_after):
+            reasons.append(
+                f"dominant model changed during experiment window "
+                f"(before {dominant_before!r}, after {dominant_after!r})")
+
     fr_before = b.get("first_request_median")
     fr_after = after_sm.get("first_request_median")
     if fr_before is None or fr_after is None:
@@ -347,6 +386,18 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
     floor_reduction = None
     if fr_before is not None and fr_after is not None:
         floor_reduction = fr_before - fr_after
+
+    direction = None
+    if floor_reduction is not None:
+        if floor_reduction > 0:
+            direction = "saving"
+        elif floor_reduction < 0:
+            direction = "regression"
+        else:
+            direction = "flat"
+
+    p90_before = b.get("first_request_p90")
+    p90_after = after_sm.get("first_request_p90")
 
     return {
         "schema": EXP_SCHEMA,
@@ -366,10 +417,15 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         "first_request_before": fr_before,
         "first_request_after": fr_after,
         "floor_reduction_tokens": floor_reduction,
+        "direction": direction,
+        "sessions_before": b.get("parent_sessions"),
+        "sessions_after": after_sm.get("parent_sessions"),
+        "dispersion_before": p90_before,
+        "dispersion_after": p90_after,
         "normalized_input_before": b.get("normalized_input_total"),
         "normalized_input_after": after_sm.get("normalized_input_total"),
-        "models_before": b.get("_models"),
-        "models_after": after_sm.get("_models"),
+        "models_before": models_before,
+        "models_after": models_after,
         "evidence": "API usage counters, before/after over the same window, "
                     "cohorted by message timestamp",
     }
@@ -397,11 +453,31 @@ def aggregate_by_label(records):
 
 
 def _measure_cohort(root, start_ts, end_ts, days):
-    sm = mt.summarize(collect_cohort(root, start_ts, end_ts)) or {}
+    sessions = collect_cohort(root, start_ts, end_ts)
+    sm = mt.summarize(sessions) or {}
     sm = dict(sm)
     sm["_window_days"] = days
     sm["_cohort_start_ts"] = start_ts
     sm["_cohort_end_ts"] = end_ts
+    # The main-thread model names actually used in this cohort (model_names
+    # is collected only from non-subagent records, see _read_session_cohort),
+    # so build_record can catch a model switch between the before and after
+    # cohort: a floor change might come from the new model, not the named
+    # treatment. _models is the full set, kept for transparency on the
+    # record; _dominant_model is the one used in the most sessions (ties
+    # broken lexically) and is what the downgrade guard actually compares,
+    # so a minor-version bump touching one session out of many does not by
+    # itself flag every experiment.
+    models = set()
+    session_counts = {}
+    for s in sessions:
+        names = s.get("model_names") or set()
+        models |= names
+        for name in names:
+            session_counts[name] = session_counts.get(name, 0) + 1
+    sm["_models"] = sorted(models)
+    sm["_dominant_model"] = (min(session_counts, key=lambda m: (-session_counts[m], m))
+                             if session_counts else None)
     return sm
 
 
