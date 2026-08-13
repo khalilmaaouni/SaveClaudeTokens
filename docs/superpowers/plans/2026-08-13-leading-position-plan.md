@@ -21,7 +21,19 @@ Source: the two external benchmark tables recorded verbatim in docs/SCORECARD.md
 | Attribution 6.0 | experiment engine ships; zero VERIFIED records yet; waterfall not rendered | H3, plus the verdict itself |
 | Cache intelligence 6.5 | rules corrected against first-party docs in 1.1.0; evidence not yet scored | F1 |
 
-Strengths to defend, not dilute: measurement truth (9.5 external; the meter, calibrated suite, bench kit) and cache plus startup (9.0). No unit may trade honesty labels or the zero-hook default for a score.
+Strengths to defend, not dilute: measurement truth (9.5 external; the meter, calibrated suite, bench kit) and cache plus startup (9.0). No unit may trade honesty labels or the zero-hook default for a score. Stated plainly per review finding M5: the priority ORDER above is derived from unverified external direction; the units themselves are justified independently by the repo's own gaps.
+
+## Wave T: trust repairs (runs FIRST, before F1; from the 2026-08-13 BrotherSBE verification of numbers and methodology)
+
+Two read-only reviewers (evidence audit and data methodology, both opus-tier) attacked the repo's numbers and methodology on 2026-08-13. Verdicts: NUMBERS CONTESTED (0 Critical, 3 Major) and METHODOLOGY CONTESTED (2 Critical, 5 Major); the four load-bearing findings were independently re-confirmed by the orchestrator against the files. The scorecard pass (F1) would inherit every one of these, so repairs run first.
+
+| Unit | Finding it repairs | What | Agent | Model | Done-check |
+|---|---|---|---|---|---|
+| T1 | CLAIMS.md B3/B5/B8 claim an "independent second derivation" that exists nowhere on disk (grep over scripts/ and bench/ returns no artifact; both reviewers converged) | build scripts/reconcile.py, a genuinely independent re-derivation of the headline figures from the transcripts with different code, its output recorded beside the claims; UNTIL it lands, those rows relabel CONFIRMED to UNVERIFIED | one builder | sonnet | reconcile output quoted with drift stated; or the relabel diff merged; never both claims at once |
+| T2 | VERIFIED has no sign check (experiment.py:346 verified = not reasons; test_tools.py:559 asserts a -8000 regression as VERIFIED); the record carries no per-cohort session count (MIN_SESSIONS = 3 gates but never reaches the record); a model-mix change between cohorts appends no reason; the thin-data downgrade reason does not name the thin side | record gains per-cohort session counts and dispersion; verdict carries direction so a regression can never render as a plain saving (V1 share card inherits this); model-mix mismatch appends a named reason; thin-data reason names the side | one builder plus opus REVIEW (it changes verdict semantics) | sonnet build, opus refute | new tests calibrated red to green including a regression-never-renders-as-saving assertion and a models-differ reason assertion |
+| T3 | CLAUDE.md calls the 11-file line "the exact line CI runs" while ci.yml also runs the selftest and mcp-server tests; CLAIMS.md's stability sentence ("drifts by a handful") was refuted by a live re-run (transcripts -8.2 percent day over day); SCORECARD anchors allow two honest reviewers to differ by two points (no tie-break); budget ranges cite "actual unit costs" no file records; companions.json carries two empty reason strings against its own discipline | docs truth sweep: correct the CI-line sentence and wire the uncounted tests into the documented line or say why not; rewrite the stability sentence to the measured churn; add tie-break rules to the anchors (Fable drafts the anchor text, the builder applies); label the budget basis "unrecorded until the WBS ledger ships"; empty reasons become explicit NO DATA | one builder | sonnet | grep confirms each corrected sentence; dash scan empty; suite still green |
+
+Wave T budget: T1 60k to 120k; T2 80k to 150k plus 40k to 80k review; T3 30k to 60k. Findings deliberately NOT auto-fixed this session: they change claim semantics, so they land as reviewed PRs like all code.
 
 ## What we borrow from the ecosystem as core features
 
