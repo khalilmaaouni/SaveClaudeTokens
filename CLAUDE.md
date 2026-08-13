@@ -5,7 +5,7 @@ A Claude Code plugin that measures where tokens go and proves its own numbers. T
 
 ## Commands (documented, never guessed)
 - Full test suite (the exact line CI runs, from repo root):
-  `python3 scripts/check_py311.py && cd scripts && python3 test_measure_tokens.py && python3 test_tools.py && python3 test_pricing.py && python3 test_experiment.py && python3 test_optimize.py && python3 test_profile.py && python3 test_advisor.py && python3 test_report.py`
+  `python3 scripts/check_py311.py && cd scripts && python3 test_measure_tokens.py && python3 test_tools.py && python3 test_pricing.py && python3 test_experiment.py && python3 test_optimize.py && python3 test_profile.py && python3 test_advisor.py && python3 test_report.py && python3 test_detail_report.py && python3 test_discover_companions.py && python3 test_doctor.py`
 - Dashboard: `python3 scripts/cli.py dashboard` (writes ~/.token-shield/token-shield.html)
 - Profiler: `python3 scripts/cli.py profile`; advisor: `python3 scripts/cli.py advise`
 - Experiments: `python3 scripts/cli.py experiment start|end "<label>"`
