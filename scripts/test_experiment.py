@@ -9,6 +9,7 @@ import time
 
 import experiment as ex
 import measure_tokens as mt
+import token_shield as ts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -561,6 +562,15 @@ def test_declared_metric_is_the_one_actually_compared():
     # hit_ratio_median is a real summary field. Declaring it must route the
     # comparison and the verdict through THAT key, not first_request_median,
     # even when first_request_median itself would say something different.
+    #
+    # m1 (rewritten). The old version of this test asserted the raw signed
+    # delta (0.5 - 0.9 == -0.4) and never looked at direction at all, so it
+    # stayed green while C1 stamped this exact real cache-hit IMPROVEMENT as
+    # "regression" (hit_ratio_median is up-is-better, so a negative
+    # before-minus-after delta is the win, not the loss) and C2 leaked a
+    # 999,998-token floor_reduction_tokens out of a metric that never
+    # measured the floor. This version asserts the MEANING: which way the
+    # verdict says things moved, and what a downstream consumer sees.
     b = _baseline(fr=999999)
     b["target_metric"] = "hit_ratio_median"
     b["summary"]["hit_ratio_median"] = 0.5
@@ -572,12 +582,17 @@ def test_declared_metric_is_the_one_actually_compared():
           rec["metric_before"] == 0.5)
     check("metric_after reads the declared field, not first_request_median",
           rec["metric_after"] == 0.9)
-    check("metric_delta is computed from the declared field",
+    check("metric_delta is the raw before-minus-after (documented convention), "
+          "not yet direction-adjusted",
           abs(rec["metric_delta"] - (0.5 - 0.9)) < 1e-9)
+    check("a 0.5 -> 0.9 cache-hit gain is stamped a saving, not a regression (C1)",
+          rec["direction"] == "saving")
     check("the declared metric is present on both sides, so the verdict is VERIFIED",
           rec["confidence"] == "VERIFIED")
     check("first_request_before/after still carry the floor numbers untouched",
           rec["first_request_before"] == 999999 and rec["first_request_after"] == 1)
+    check("a non-default-metric record never claims a token floor reduction it "
+          "did not measure (C2)", rec["floor_reduction_tokens"] is None)
 
 
 def test_absent_declared_metric_downgrades_with_metric_not_measured_reason():
@@ -594,6 +609,105 @@ def test_absent_declared_metric_downgrades_with_metric_not_measured_reason():
           any("output_total" in r for r in rec["reasons"]))
     check("no guess is made: metric_before/after are None, not a stand-in value",
           rec["metric_before"] is None and rec["metric_after"] is not None)
+
+
+def test_up_metric_degradation_is_stamped_a_regression():
+    # C1, the other half. hit_ratio_median going DOWN (0.80 -> 0.55) is a real
+    # collapse and must read as "regression", the mirror of the improvement
+    # case above. The inverted code stamped this "saving" instead, because it
+    # judged every metric by "did the raw before-minus-after go positive".
+    b = _baseline()
+    b["target_metric"] = "hit_ratio_median"
+    b["summary"]["hit_ratio_median"] = 0.80
+    after = _after()
+    after["hit_ratio_median"] = 0.55
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("a 0.80 -> 0.55 cache-hit collapse is stamped a regression",
+          rec["direction"] == "regression")
+    check("a non-default-metric record still claims no floor reduction",
+          rec["floor_reduction_tokens"] is None)
+
+
+def test_non_default_metric_verified_record_never_reaches_verified_by_label():
+    # C2. A VERIFIED hit-ratio experiment used to leak floor_reduction_tokens
+    # computed from first_request_median regardless of what was declared, so
+    # token_shield.verified_by_label (the dashboard's own reader of the
+    # ledger) rendered a hit-ratio experiment as a proven token saving it
+    # never measured. floor_reduction_tokens is None for a non-default
+    # metric, and verified_by_label already skips a record whose delta is
+    # not a real number, so the label must not appear in its output at all.
+    b = _baseline(fr=999999)
+    b["target_metric"] = "hit_ratio_median"
+    b["summary"]["hit_ratio_median"] = 0.5
+    after = _after(fr=1)
+    after["hit_ratio_median"] = 0.9
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("sanity: this record is VERIFIED", rec["confidence"] == "VERIFIED")
+    check("sanity: floor_reduction_tokens is None on a non-default metric",
+          rec["floor_reduction_tokens"] is None)
+    rows = [dict(rec, timestamp=rec.get("timestamp") or "2026-08-30T00:00:00")]
+    out = ts.verified_by_label(rows)
+    check("a non-default-metric VERIFIED record contributes no row to "
+          "verified_by_label (a hit-ratio proof must never render as a "
+          "token saving)", out == [])
+
+
+def test_non_numeric_target_metric_downgrades_instead_of_crashing():
+    # M1. A target_metric that is present on both sides but not numeric (a
+    # model name string, a list of models) used to raise TypeError trying to
+    # subtract them. Absent-metric already downgraded honestly (see the test
+    # above); present-and-unsubtractable must downgrade the same way, not
+    # crash the whole `end` command.
+    b = _baseline()
+    b["target_metric"] = "_dominant_model"
+    b["summary"]["_dominant_model"] = "opus"
+    after = _after()
+    after["_dominant_model"] = "opus"
+    rec = ex.build_record(b, after, "2026-08-30T00:00:00")
+    check("a non-numeric metric downgrades to NOT_PROVEN instead of raising",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason says non-numeric and names the key",
+          any("non-numeric" in r and "_dominant_model" in r for r in rec["reasons"]))
+    check("no metric_delta is fabricated from an unsubtractable pair",
+          rec["metric_delta"] is None)
+    check("no direction is fabricated either", rec["direction"] is None)
+
+    b2 = _baseline()
+    b2["target_metric"] = "_models"
+    b2["summary"]["_models"] = ["opus"]
+    after2 = _after()
+    after2["_models"] = ["opus", "sonnet"]
+    rec2 = ex.build_record(b2, after2, "2026-08-30T00:00:00")
+    check("a list-valued metric downgrades the same way, not raising",
+          rec2["confidence"] == "NOT_PROVEN")
+    check("the reason names _models",
+          any("non-numeric" in r and "_models" in r for r in rec2["reasons"]))
+
+
+def test_cli_start_refuses_an_unknown_metric_before_writing_anything():
+    # M2. A typo'd --metric used to be accepted with exit 0 and pinned a
+    # baseline that could only be discovered wrong 30 days later at `end`.
+    # It must refuse at start, exit 2, name the bad value, and list the
+    # valid ones, and it must not write a baseline file at all.
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        r = _run_experiment_cli(home, ["start", "typo-metric-smoke",
+                                       "--metric", "hit_ratio_medain"])
+        check("an unknown --metric exits 2, not 0", r.returncode == 2)
+        check("the refusal names the bad value", "hit_ratio_medain" in r.stdout)
+        check("the refusal lists the valid metrics",
+              "hit_ratio_median" in r.stdout and "first_request_median" in r.stdout)
+        snap = os.path.join(home, ".claude", "token-shield", "experiments",
+                            "typo-metric-smoke.json")
+        check("no baseline file is written for a refused start",
+              not os.path.exists(snap))
+
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        r = _run_experiment_cli(home, ["start", "valid-metric-smoke",
+                                       "--metric", "hit_ratio_median"])
+        check("a metric that is in METRIC_DIRECTIONS is accepted, exit 0",
+              r.returncode == 0)
 
 
 def test_experiment_cli_start_with_metric_flag_stores_target_metric():
