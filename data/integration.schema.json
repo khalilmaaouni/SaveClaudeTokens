@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/khalilmaaouni/token-shield/data/integration.schema.json",
+  "title": "Token Shield integration contract v1",
+  "description": "Shape of token-shield.integration.json, a declaration any optimization plugin may ship in its own installed plugin root. Every field read from a file matching this schema is labeled DECLARED by Token Shield discovery, never CURATED: a declaration is the plugin's own claim about itself, not a first-party verification. Enforced in code by discover_companions.py's _validate_declaration (standard library only, no jsonschema dependency); this file is the human-readable mirror of that same contract and is kept in agreement with it by hand. See docs/superpowers/specs/integration-contract-v1.md for the full contract, including the curated-plus-declaring collision rule.",
+  "type": "object",
+  "required": ["capabilities"],
+  "properties": {
+    "capabilities": {
+      "type": "array",
+      "description": "What the plugin does to token usage. Token Shield's own vocabulary (minimal_code, output_compression, tool_output_isolation, deterministic_deduplication) is recommended where it applies, but any non-empty string is accepted.",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "name": {
+      "type": "string",
+      "description": "The plugin's own name. When it matches a name already curated in data/companions.json, the curated evidence wins and the collision is reported."
+    },
+    "modes": {
+      "type": "array",
+      "description": "Operating modes the plugin supports, for example off, lite, full.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "status_command": {
+      "type": "string",
+      "description": "How a user or tool checks whether the plugin is currently active."
+    },
+    "version_command": {
+      "type": "string",
+      "description": "How a user or tool checks the plugin's installed version."
+    },
+    "activation_command": {
+      "type": "string",
+      "description": "How a user turns the plugin on (install or enable)."
+    },
+    "rollback_command": {
+      "type": "string",
+      "description": "How a user turns the plugin off or removes it. Declaring this does not grant curation; it lets Token Shield report it as DECLARED where curation would otherwise have blocked the plugin entirely for lacking documented evidence of this path."
+    }
+  },
+  "additionalProperties": true
+}
