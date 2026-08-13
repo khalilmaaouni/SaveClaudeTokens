@@ -840,7 +840,7 @@ def test_tournament_native_before_companion_at_equal_fit():
     t = result["tournaments"][0]
     assert t["winner"]["id"] == "output.native", t["winner"]
     assert t["also_considered"][0]["id"] == "companion.comp"
-    assert t["also_considered"][0]["why_lost"] == "(detect only, never a fix)", t["also_considered"][0]
+    assert t["also_considered"][0]["why_lost"] == "(companion: prescribed through its own card, never crowned over a native)", t["also_considered"][0]
 
 
 def test_tournament_missing_signal_renders_no_data_reason():
@@ -930,7 +930,7 @@ def test_tournament_never_crowns_a_detect_only_companion_even_when_it_alone_fire
         assert t["winner"]["id"] != "companion.token-saver", t
         for loser in t["also_considered"]:
             if loser["id"] == "companion.token-saver":
-                assert loser["why_lost"] == "(detect only, never a fix)", loser
+                assert loser["why_lost"] == "(companion: prescribed through its own card, never crowned over a native)", loser
 
 
 def test_all_no_data_problem_class_renders_no_tournament():

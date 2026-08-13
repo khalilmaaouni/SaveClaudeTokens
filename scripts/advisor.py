@@ -588,7 +588,7 @@ def build_tournaments(strategies, profile, best_id=None):
 
     A companion strategy never wins: it is excluded from the winner pool the
     same way advise() excludes it from best/queue, and always renders as an
-    "also considered" loser tagged "(detect only, never a fix)" rather than
+    "also considered" loser tagged "(companion: prescribed through its own card, never crowned over a native)" rather than
     compared on fit.
 
     `best_id`, when given, is advise()'s own `best` card's strategy id. The
@@ -647,7 +647,7 @@ def build_tournaments(strategies, profile, best_id=None):
         also_considered = []
         for loser in losers:
             if loser["is_companion"]:
-                why_lost = "(detect only, never a fix)"
+                why_lost = "(companion: prescribed through its own card, never crowned over a native)"
             elif loser["no_data"]:
                 metric_name = loser["strategy"]["trigger"]["metric"].split(".")[-1].replace("_", " ")
                 why_lost = f"NO DATA: {metric_name} could not be read from your profile"
