@@ -5,6 +5,23 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Companion capability suppression (unit G2): when a companion plugin you
+  already run owns a capability, Token Shield stops repeating its own
+  duplicate advice card for it. The guard that keeps this safe is a
+  per-record metric baseline, not a band: a suppression records the metric
+  value it saw, and the card returns whenever the current value is
+  materially worse (REGRESSION_MARGIN, 50 percent) in whichever direction
+  that strategy's own trigger operator defines as worse. A suppression is
+  never silently re-armed once it lapses, sync only ever touches records it
+  wrote itself (a user's own decision, accepted included, is untouchable),
+  companion state older than STALE_COMPANION_STATE_DAYS (30) suppresses
+  nothing, a malformed state file degrades to nothing rather than raising,
+  and a strategy whose metric cannot be read right now is not suppressed at
+  all, because a guard with no baseline could never lift the suppression.
+  Machine suppressions are never reported as the user's own choices on the
+  dashboard, and never filed under "what did not work" in the monthly
+  report.
+
 - Deep advisor (unit G3): `python3 scripts/cli.py advise --deep`. When the
   deterministic Quick Advisor cannot decide, and only then, one pinned
   Fable-tier call chooses a single treatment from data/strategies.json. It

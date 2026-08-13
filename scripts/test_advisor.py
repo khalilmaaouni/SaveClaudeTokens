@@ -551,6 +551,23 @@ def test_companion_suppression_expires_and_card_returns():
     assert result["suppressed_by_companion"] == [], result
 
 
+
+def test_sync_refuses_to_suppress_when_the_metric_cannot_be_read():
+    # A suppression whose baseline value is unknown can never be lifted by
+    # the regression guard, so the card would stay silent for the whole
+    # window however badly the metric degraded. Refuse to suppress instead.
+    import tempfile
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    path = tempfile.mktemp()
+    newly = adv.sync_companion_suppressions(strategies, {"ponytail"}, {"schema": 1}, path=path)
+    assert newly == [], newly
+    assert adv.load_treatments(path) == {}, adv.load_treatments(path)
+    # And the card is still offered, rather than silently withheld.
+    result = adv.advise(nest({"usage.m1": leaf(500)}), adv.load_treatments(path), strategies)
+    assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

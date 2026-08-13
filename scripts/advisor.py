@@ -503,7 +503,10 @@ def sync_companion_suppressions(strategies, active_companions, profile, days=COM
     and a user's own choice is never sync's to overwrite.
 
     A strategy with no "companion" declared is left alone entirely (NO DATA
-    beats a guess).
+    beats a guess). So is a strategy whose trigger metric cannot be read
+    right now: with no baseline value the regression guard could never fire,
+    so suppressing would silence that card for the whole window with no way
+    back. If the safety net cannot be armed, nothing is suppressed.
 
     Returns the list of strategy ids newly suppressed by this call.
     """
@@ -520,6 +523,12 @@ def sync_companion_suppressions(strategies, active_companions, profile, days=COM
             continue
         leaf = _get_leaf(profile, s["trigger"]["metric"])
         metric_value = leaf["value"] if leaf and isinstance(leaf.get("value"), (int, float)) else None
+        if metric_value is None:
+            # The regression guard needs a baseline value to compare against
+            # later. Without one it can never fire, so suppressing here would
+            # silence this card for the whole window with no way back. If the
+            # safety net cannot be armed, do not suppress at all.
+            continue
         record_decision(s["id"], "suppressed", days=days,
                          note=f"companion {owner} already owns this capability",
                          reason="companion", metric_value=metric_value, path=path)
