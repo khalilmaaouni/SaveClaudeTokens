@@ -534,6 +534,23 @@ def test_report_facts_section_is_no_data_when_facts_file_malformed():
     assert "NO DATA: Expecting value" in facts_section, out
 
 
+
+def test_fact_without_its_own_interval_uses_the_thirty_day_default():
+    # A fact that states no review_interval_days falls back to
+    # DEFAULT_FACT_REVIEW_DAYS. That default is 30 days, not a quarter: a
+    # documented default, a cache rule or a price can change in any week, and
+    # a fact going stale must surface within one monthly reporting cycle.
+    bare = {"id": "A9", "statement": "a platform fact",
+            "source": "code.claude.com/docs/en/x", "verified": "2026-07-01"}
+    assert "review_interval_days" not in bare
+    # 2026-07-01 to 2026-08-05 is 35 days: past 30, inside 90.
+    flagged = dr._fact_staleness_lines([bare], today="2026-08-05")
+    assert flagged and "NEEDS REVIEW" in "\n".join(flagged), flagged
+    assert "A9" in "\n".join(flagged), flagged
+    # 2026-07-01 to 2026-07-20 is 19 days: inside 30, so silent.
+    assert dr._fact_staleness_lines([bare], today="2026-07-20") == []
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

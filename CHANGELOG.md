@@ -5,6 +5,12 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Fact review interval lowered from 90 days to 30 (founder decision): a
+  documented default, a cache rule or a price can change in any given week,
+  and 30 days matches the monthly report rhythm, so a fact that has gone
+  stale surfaces within one reporting cycle rather than three. All 28 facts
+  and the fallback constant moved together.
+
 - Marginal attribution waterfall on the dashboard (unit H3): baseline A, plus
   core to B, plus companion to C, so an improvement can be read apart into
   which change produced which part of it. Marginal deltas are never summed as
