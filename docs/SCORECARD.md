@@ -10,6 +10,8 @@ Founder decision 2026-08-13: external benchmark tables are direction, never meas
 - Under 5: capability absent or aspirational.
 A score may never exceed what its named evidence supports. NO DATA rows stay NOT YET SCORED.
 
+Tie-breaks, so two honest reviewers land on one number: evidence sitting between two bands scores the LOWER band. A cell may reach 8.5 or higher only when it cites BOTH a calibrated test AND a real-usage measured number. Thin-but-present real-usage evidence (fewer than 30 days or fewer than 30 sessions behind the number) caps the cell at 8.0. Ties always break down, never up.
+
 ## Current scores (as of v1.7.1, first pass PENDING)
 
 Skeleton shipped with the Solid Core spec (2026-08-13). The first evidence-backed scoring pass is the next session's work: each cell below must cite its evidence (test name, measured number with source, or shipped surface) before it carries a number.

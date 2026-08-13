@@ -22,9 +22,13 @@ Three kinds of claim, three kinds of proof:
 
 Snapshot for every MEASURED number below, unless it says otherwise:
 `2026-08-12 15:07:01`, schema 2, a 90 day window, 229 parent sessions among
-6,251 transcripts. The transcript total drifts by a handful run to run because
-the machine keeps writing sessions while the meter reads them; the median and
-the session count are stable, the raw totals move by fractions of a percent.
+6,251 transcripts. These totals are snapshot-bound, not stable: a live re-run
+one day later, 2026-08-13, read 238 parent sessions among 5,739 transcripts,
+median first request 85,587 against 85,021 the day before. A rolling window
+churns by whole percents day to day, not a handful, because sessions age out
+the trailing edge of the window while new ones are written at the front. This
+is why every figure below names its own snapshot instead of standing as a
+fixed constant.
 
 ---
 
