@@ -197,6 +197,22 @@ def _is_claim_code(text):
     return len(text) >= 2 and text[0].isalpha() and text[1:].isdigit()
 
 
+def _source_claim_codes(source):
+    """Every claim code (A6, D5, ...) a strategy's `source` field names.
+    These are row ids in docs/CLAIMS.md and, not by accident, the same ids
+    data/facts.json uses: a strategy sourced "A4, A6" is citing exactly the
+    facts an id-keyed fact registry would call A4 and A6. Returns [] when
+    source is not shaped as claim codes (a URL, free text, empty), which
+    format_source and the stale-fact check below both read as "no facts to
+    check against"."""
+    if not source:
+        return []
+    codes = [c.strip() for c in str(source).strip().split(",") if c.strip()]
+    if not codes or not all(_is_claim_code(c) for c in codes):
+        return []
+    return codes
+
+
 def format_source(source):
     """Render a strategy's `source` as something a reader can go and check.
 
@@ -210,11 +226,47 @@ def format_source(source):
     if not source:
         return source
     text = str(source).strip()
-    codes = [c.strip() for c in text.split(",") if c.strip()]
-    if not codes or not all(_is_claim_code(c) for c in codes):
+    codes = _source_claim_codes(source)
+    if not codes:
         return text
     word = "row" if len(codes) == 1 else "rows"
     return f"{CLAIMS_DOC} {word} {', '.join(codes)}"
+
+
+def _load_facts_by_id():
+    """data/facts.json indexed by id, via doctor.py's own loader, the only
+    fact loader in this repo (this module never re-implements it). Imported
+    locally, not at module top, so a plain `import advisor` never drags in
+    doctor.py's own dependency chain (discover_companions, experiment,
+    profile, token_shield) unless a card actually needs a staleness check.
+    A missing or malformed registry degrades to an empty dict, same NO DATA
+    posture as every other read in this file, never a crash."""
+    import doctor
+    facts, _refused, _error = doctor._load_facts()
+    return {f["id"]: f for f in facts if f.get("id")}
+
+
+def _stale_fact_lines(source, facts_by_id, today=None):
+    """One "FACT STALE" line per claim code a strategy's source cites that
+    is past its own review interval in data/facts.json, so a card built on
+    an aging platform claim visibly carries that staleness to the reader
+    instead of presenting it with the same confidence as a fresh one.
+    Reuses doctor.py's own staleness rule (_is_fact_stale) rather than a
+    second definition of "stale" here. A code with no matching fact, or a
+    fact that is still fresh, contributes nothing."""
+    if not facts_by_id:
+        return []
+    import doctor
+    lines = []
+    for code in _source_claim_codes(source):
+        fact = facts_by_id.get(code)
+        if fact is None or not doctor._is_fact_stale(fact, today):
+            continue
+        interval = fact.get("review_interval_days", doctor.DEFAULT_FACT_REVIEW_DAYS)
+        lines.append(
+            f"FACT STALE, verify before acting: {code} "
+            f"(verified {fact.get('verified')}, review interval {interval} days)")
+    return lines
 
 
 def _get_leaf(profile, dotted_key):
@@ -284,7 +336,7 @@ def _why_selected(strategy, leaf, trigger):
             f"which meets this card's trigger ({trigger['op']} {_fmt_value(trigger['value'])}).")
 
 
-def _card(strategy, rank, profile):
+def _card(strategy, rank, profile, facts_by_id, today=None):
     leaf = _get_leaf(profile, strategy["trigger"]["metric"])
     return {
         "id": strategy["id"],
@@ -302,6 +354,9 @@ def _card(strategy, rank, profile):
         # Citable at the point every surface reads it (CLI, dashboard, report),
         # so no consumer has to know that A6 is a docs/CLAIMS.md row id.
         "source": format_source(strategy["source"]),
+        # Carries the fact's own staleness to the reader when the platform
+        # claim this card leans on has gone past its review interval.
+        "stale_facts": _stale_fact_lines(strategy["source"], facts_by_id, today),
         "requires_confirmation": strategy["requires_confirmation"],
         "how": strategy.get("how", []),
     }
@@ -352,13 +407,19 @@ def _sort_key(entry):
     return (-BANDS[band], cat_rank)
 
 
-def advise(profile, treatments=None, strategies=None):
-    """Deterministic advice from a profile. Pure function: no file I/O, no
-    clock reads except the ISO string used to compare treatment expiry
-    against, so it stays directly testable with synthetic profiles.
+def advise(profile, treatments=None, strategies=None, facts=None, today=None):
+    """Deterministic advice from a profile. Pure function apart from two
+    reads: the ISO string used to compare treatment expiry against, and (when
+    `facts` is not supplied) data/facts.json via doctor.py's loader, so it
+    stays directly testable with synthetic profiles and a synthetic facts
+    list alike. `facts` is the same shape as data/facts.json's "facts" array;
+    pass one, with `today`, to control staleness in a test without touching
+    the real registry or the clock.
     """
     if strategies is None:
         strategies = load_strategies()
+    facts_by_id = ({f["id"]: f for f in facts if f.get("id")}
+                   if facts is not None else _load_facts_by_id())
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
 
     insufficient = []
@@ -396,12 +457,12 @@ def advise(profile, treatments=None, strategies=None):
     best_card = None
     alt_cards = []
     if main_fired:
-        best_card = _card(main_fired[0][1], "RECOMMENDED", profile)
-        alt_cards = [_card(s, "ALTERNATIVE", profile) for _sid, s, _b in main_fired[1:3]]
+        best_card = _card(main_fired[0][1], "RECOMMENDED", profile, facts_by_id, today)
+        alt_cards = [_card(s, "ALTERNATIVE", profile, facts_by_id, today) for _sid, s, _b in main_fired[1:3]]
 
     companion_card = None
     if companion_fired:
-        companion_card = _card(companion_fired[0][1], "COMPANION", profile)
+        companion_card = _card(companion_fired[0][1], "COMPANION", profile, facts_by_id, today)
 
     queue = ([best_card] if best_card else []) + alt_cards
     do_nothing = best_card is None
@@ -595,6 +656,8 @@ def _print_card(card):
     print(f"  how measured:        {card['how_measured']}")
     print(f"  if you say no:       {card['if_you_say_no']}")
     print(f"  source:              {card['source']}")
+    for line in card.get("stale_facts", []):
+        print(f"  {line}")
     print(f"  requires confirmation: {card['requires_confirmation']}")
     print()
 

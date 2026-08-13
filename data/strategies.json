@@ -91,7 +91,7 @@
       ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "A6",
+      "source": "A4, A6",
       "how": [
         {"text": "Before switching model or effort mid-session, ask whether the sub-task could run as a subagent instead."},
         {"text": "Spawn the subagent for the cheaper sub-task and keep the parent session's model fixed."},
