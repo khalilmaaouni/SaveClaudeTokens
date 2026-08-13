@@ -11,10 +11,17 @@ Three kinds of claim, three kinds of proof:
   documentation page, fetched and read on the date shown, with the sentence
   quoted. These are re-checkable by opening the URL.
 - **MEASURED** a number about token usage. Proof: the API `usage` counters in
-  local session transcripts, read by `scripts/measure_tokens.py`, and for the
-  headline figures a second derivation by different code with zero drift. Every
-  measured number carries its snapshot and the caveat that it was measured on
-  one machine.
+  local session transcripts, read by `scripts/measure_tokens.py`. Independence
+  is checked by `scripts/reconcile.py`, a second parser (different code, the
+  same population rules) that runs against whatever transcripts are on disk
+  right now and diffs its own numbers against a live run of
+  `measure_tokens.py` on the same day window. That script did not exist when
+  the B3, B5, and B8 rows below were first written, so the "zero drift"
+  wording on those rows described a comparison that was asserted, not run; see
+  those rows for the corrected wording. `scripts/reconcile.py` cannot replay a
+  past snapshot, only reconcile live data, because the transcript window
+  churns day to day (see the note below). Every measured number carries its
+  snapshot and the caveat that it was measured on one machine.
 - **CODE** a statement about what a script in this repo does. Proof: a named
   test in `scripts/test_measure_tokens.py` or `scripts/test_tools.py`, each
   calibrated by reinjecting the defect it guards so a green result means
@@ -68,12 +75,12 @@ platform.claude.com/docs/en/build-with-claude/prompt-caching.
 |---|---|---|---|
 | B1 | The `usage.cache_creation` object carries both `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, present on every record. | CONFIRMED | probe over 11,760 records in a 7 day window: nested object present 11,760 / 11,760. |
 | B2 | The flat `cache_creation_input_tokens` can read 0 while the nested fields carry real writes. | CONFIRMED | same probe: 8 of 11,760 records had flat 0 and nested sum 2,001. This is why the parser prefers the nested object. |
-| B3 | 90 day median first request is 85,021 tokens; p90 is 100,606. | CONFIRMED, zero drift | `measure_tokens.py --days 90` and an independent second derivation (different code, same transcripts) both returned 85,021 and 100,606. |
+| B3 | 90 day median first request is 85,021 tokens; p90 is 100,606. | CONFIRMED (snapshot transcription) | `measure_tokens.py --days 90` on the pinned snapshot returned 85,021 and 100,606. The "independent second derivation" once claimed here did not exist on disk (an audit found this twice). `scripts/reconcile.py` is that artifact now, but it reconciles live transcripts against a live `measure_tokens.py` run on the same day window, not this fixed snapshot, since the window churns day to day and cannot be replayed. Run `scripts/reconcile.py --days 90` for a live reconciliation. |
 | B4 | The startup floor is about 36 percent of everything a session reads (median first-request share 0.360). | CONFIRMED | `measure_tokens.py` per-session share, median over sessions with 3+ calls. |
-| B5 | Subagents produced about 41 percent of all output tokens (share 0.406). | CONFIRMED, zero drift | both derivations returned 0.406 and the same subagent output total 118,123,824. |
+| B5 | Subagents produced about 41 percent of all output tokens (share 0.406). | CONFIRMED (snapshot transcription) | `measure_tokens.py` on the pinned snapshot returned 0.406 and a subagent output total of 118,123,824. The earlier "both derivations" wording predated `scripts/reconcile.py`, the real second-parser artifact; it reconciles live data on demand, not this fixed snapshot. |
 | B6 | The per-session median cache hit ratio is 0.865. | CONFIRMED, and note the distinction below | `measure_tokens.py` median of per-session ratios. |
 | B7 | The earlier "41,890 preamble" figure measured the wrong population. | CONFIRMED | over the same 90 day window, the schema-1 method (first record of every transcript) saw 6,249 transcripts with a 41,898 median; schema 2 saw the 229 real sessions among them with an 85,021 median. Same machine, same counters. The metric changed, not the spend. |
-| B8 | 65 sessions switched model mid-flight, 28 percent of the 229 active parent sessions, each rebuilding its cache from zero. | CONFIRMED, zero drift on the count | `measure_tokens.py` per-session model count and an independent derivation that reads transcripts directly (not through `measure_tokens`) both returned exactly 65 switched sessions. The denominator is the code's own `len(parent)` = 229 active sessions, so the share is 65/229 = 28 percent. Model switching is a PROVEN pain point because each model has its own cache (claim A6). |
+| B8 | 65 sessions switched model mid-flight, 28 percent of the 229 active parent sessions, each rebuilding its cache from zero. | CONFIRMED (snapshot transcription) | `measure_tokens.py` per-session model count on the pinned snapshot returned exactly 65 switched sessions against the code's own `len(parent)` = 229 active sessions, a 28 percent share. The "independent derivation" once claimed here did not exist on disk. `scripts/reconcile.py` now runs a real second parser, counting sessions whose assistant messages carry more than one distinct model, and diffs it against a live `measure_tokens.py` run on the same window, not this snapshot. Model switching is a PROVEN pain point because each model has its own cache (claim A6). |
 | B9 | Caching's net saving in the 90 day window is about 74.6 billion base-input token-units. | CONFIRMED, and stated net | reads of 84.8B billed 8.5B at 0.1x instead of 84.8B uncached, a gross read saving of 76.3B (0.9 x reads). Caching also pays a write premium of 1.7B (0.25 x the 5 minute writes plus 1.0 x the 1 hour writes). The dashboard headline is the NET, 76.3B minus 1.7B = 74.6B, not the gross read figure dressed up as net. A relative figure in base-input units, not dollars. |
 | B10 | The 74.6B saving is Claude Code's native automatic caching, NOT produced by this tool. | CONFIRMED, and this is the load-bearing honesty of the whole dashboard | Claude Code "manages prompt caching automatically" (code.claude.com/docs/en/prompt-caching); the cache reads that generate B9 happen by default whether or not Token Shield is installed. The dashboard attributes the number to Anthropic's caching in the hero itself and does not claim it. The tool's own attributable value is separate: the pain-point prescriptions (what following its rules saves ON TOP of native caching) and the visibility of the number. Presenting the native saving as the plugin's own would be the exact overclaim this project exists to avoid. |
 
