@@ -29,5 +29,7 @@ A Claude Code plugin that measures where tokens go and proves its own numbers. T
 ## The ratified gate
 Version 1.8 (deep advisor subagent, semantic optimizer, ecosystem waves in docs/ROADMAP.md) does not start until one real experiment reaches VERIFIED or an honest NOT_PROVEN in the proof ledger. Do not create v1.8 files before that record exists.
 
+FOUNDER AMENDMENT 2026-08-13 (explicit decision via question window, after the gate collision was surfaced with the ~30 day verdict timeline): BUILDING is authorized before the verdict. The gate MOVES to the release boundary: no version tag, no release, no plugin publish, and no local plugin update or MCP client registration on this machine until the claude-md-diet experiment reaches VERIFIED or an honest NOT_PROVEN. The experiment itself stays untouched while it runs.
+
 ## Machine-local files
 STATE.md, GANTT.html, PROJECT.md are gitignored working files for the founder's machine; they never ship in the plugin.

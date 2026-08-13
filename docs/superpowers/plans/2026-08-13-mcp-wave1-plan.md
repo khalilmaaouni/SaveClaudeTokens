@@ -16,6 +16,8 @@ cd /Users/khalil.maaouni/SaveClaudeTokens && python3 scripts/cli.py experiment r
 
 Look for a `claude-md-diet` row with a VERIFIED or NOT_PROVEN count greater than 0. If the row is absent, or shows 0 runs, STOP. Do not create any file listed in this plan. Report the gate as closed and wait.
 
+FOUNDER AMENDMENT 2026-08-13 (explicit decision via question window, after the gate collision was surfaced with the ~30 day verdict timeline): BUILDING is authorized before the verdict. The gate MOVES to the release boundary: no version tag, no release, no plugin publish, and no local plugin update or MCP client registration on this machine until the claude-md-diet experiment reaches VERIFIED or an honest NOT_PROVEN. The experiment itself stays untouched while it runs. Under that amendment this plan's implementation steps MAY run before the verdict; the STOP above now applies only to release steps.
+
 ## Scope
 
 In scope: the `mcp-server/` package, all nine wave-1 tools listed in the MCP design spec (including `get_detailed_report`), the new `scripts/detail_report.py` module and its schema v1, the test files for both, one live smoke check, CI wiring, the README install block, and version tagging.
