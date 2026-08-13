@@ -526,6 +526,50 @@ def test_suppressed_treatment_reduces_the_rendered_queue():
     assert "suppressed by your earlier choices" in html_with
 
 
+def test_companion_only_suppression_never_reads_as_the_users_own_choice():
+    # Calibrated: before this split, suppressed_recommendation_count folded
+    # a companion-caused suppression (reason "companion", written by
+    # sync_companion_suppressions, nothing the user ever decided) into the
+    # same count as a user's rejected/not-now choice, and the dashboard
+    # rendered "suppressed by your earlier choices" over a decision the user
+    # never made. suppressed_recommendation_counts must split the two, and
+    # each count must render its own honest line, never the other's.
+    strategies = [
+        _mini_strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH"),
+        _mini_strategy("startup.b", "startup", "usage.m2", ">=", 1, "HIGH"),
+    ]
+    profile = {"usage": {"m1": _leaf(5), "m2": _leaf(5)}}
+    treatments = {
+        "cache.a": {"decision": "rejected", "until": "2999-01-01T00:00:00"},
+        "startup.b": {"decision": "suppressed", "until": "2999-01-01T00:00:00",
+                      "reason": "companion"},
+    }
+
+    with_t = adv.advise(profile, treatments, strategies)
+    assert len(with_t["queue"]) == 0
+
+    user_n, companion_n = shield.suppressed_recommendation_counts(adv, profile, treatments, strategies)
+    assert user_n == 1, user_n
+    assert companion_n == 1, companion_n
+
+    html = shield.render_recommendation_queue(with_t, user_n, companion_n)
+    assert "1 recommendation(s) suppressed by your earlier choices" in html, html
+    assert "1 recommendation(s) suppressed because an already installed companion" in html, html
+    assert "not your choice" in html, html
+
+    # A companion-only suppression, with no user-caused one at all, must
+    # never render the "your earlier choices" line: that is the exact
+    # honesty defect this fix closes.
+    companion_only = {"startup.b": treatments["startup.b"]}
+    with_c = adv.advise(profile, companion_only, strategies)
+    user_n2, companion_n2 = shield.suppressed_recommendation_counts(adv, profile, companion_only, strategies)
+    assert user_n2 == 0, user_n2
+    assert companion_n2 == 1, companion_n2
+    html_c = shield.render_recommendation_queue(with_c, user_n2, companion_n2)
+    assert "your earlier choices" not in html_c, html_c
+    assert "not your choice" in html_c, html_c
+
+
 def test_dashboard_html_contains_no_en_or_em_dash():
     profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
     strategies = adv.load_strategies()

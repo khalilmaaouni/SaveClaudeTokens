@@ -29,11 +29,31 @@ rejected or suppressed strategy is filtered out of consideration until its
 until date passes; an accepted one is stamped with a lineage label so a
 later experiment can cite the card that caused it.
 
+CAPABILITY-OWNERSHIP SUPPRESSION
+A strategy's own "companion" field names the companion plugin that already
+owns its capability, when one does. sync_companion_suppressions() writes a
+"suppressed" treatment record (reason "companion") for such a strategy the
+first time its named companion is seen active, reusing the exact treatments
+store above rather than a second one, and stamps the metric value observed
+at that moment. It writes AT MOST ONCE per strategy id, ever: any record
+already on file for that id, sync's own or the user's, is left untouched,
+whatever its decision or expiry. That single rule keeps a user's own choice
+(including an accepted one with experiment lineage) safe from being
+clobbered, and keeps a lapsed companion suppression from being silently
+re-armed with a fresh window on the next run.
+
+A companion suppression is not a permanent muzzle: advise() compares the
+current metric reading against the value recorded when the suppression was
+written, and if it has grown materially worse (REGRESSION_MARGIN below), the
+card returns regardless of the still-open suppression window. A strategy
+with no "companion" declared is never touched: NO DATA beats a guess.
+
 USAGE
   python3 advisor.py
   python3 advisor.py --decide <strategy-id> <done|not-now|never>
 """
 
+import calendar
 import json
 import os
 import shutil
@@ -44,6 +64,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STRATEGIES = os.path.join(HERE, "..", "data", "strategies.json")
 TREATMENTS_PATH = os.path.expanduser("~/.token-shield/treatments.json")
 PROFILE_PATH = os.path.expanduser("~/.token-shield/profile.json")
+# discover_companions.py's cached state: {"checked_at": "...Z", "discovered":
+# [{"name","enabled",...}], "registry_match": {name: "curated"|"mention"|
+# "unknown"}}. Read here, never written here; discovery stays that module's
+# job.
+COMPANIONS_STATE_PATH = os.path.expanduser("~/.token-shield/companions_state.json")
 
 EVIDENCE_LABELS = {"MEASURED", "ESTIMATED", "VERIFIED", "NATIVE"}
 PROFILE_LABELS = {"MEASURED", "SIGNAL", "INFERRED", "NO DATA"}
@@ -58,6 +83,31 @@ DECIDE_CHOICES = {"done": "accepted", "not-now": "suppressed", "never": "rejecte
 # "not-now" quiets a card for 90 days; "never" uses the same "rejected"
 # decision but far out, so it does not resurface on its own.
 DECIDE_DAYS = {"not-now": 90, "never": 36500}
+
+# A companion-ownership suppression gets the same quiet window as a plain
+# "not-now": long enough to stop nagging, short enough that the record's
+# own expiry is a real, reachable event rather than a formality.
+COMPANION_SUPPRESSION_DAYS = 90
+
+# How much worse the current metric reading has to be than the value
+# recorded when a companion suppression was written before the card returns
+# anyway. 0.5 (50% worse) was chosen over the old "always show on HIGH band"
+# rule: enumerating data/strategies.json showed only 2 of 13 strategies can
+# ever reach HIGH, so that rule was nearly a no-op. A flat 50% swing is well
+# above the run-to-run noise these usage ratios and counts show in practice,
+# so it will not flap on an ordinary day, but it is reachable by a genuine
+# regression, not just an astronomical one.
+REGRESSION_MARGIN = 0.5
+
+# discover_companions.py only runs on demand, never from a hook, so its
+# cached state can go stale the moment a companion plugin is uninstalled and
+# discovery is never rerun again. 30 days is comfortably longer than
+# doctor.py's own 1-day auto-refresh window (STATE_FRESHNESS_SECONDS in
+# doctor.py), so a state doctor.py just refreshed is never treated as stale
+# here, but far short of the 90-day companion suppression window itself, so
+# a suppression this module wrote can never outlive the evidence that
+# justified it.
+STALE_COMPANION_STATE_DAYS = 30
 
 DASHES = ("\u2013", "\u2014")  # en dash, em dash: never allowed in any strategy text
 
@@ -267,6 +317,32 @@ def _is_suppressed(strategy_id, treatments, now_iso):
     return bool(until) and until > now_iso
 
 
+def _regression_override(strategy, profile, rec):
+    """True when the metric a companion suppression (reason "companion")
+    covers has grown materially (REGRESSION_MARGIN) worse than the value
+    recorded the moment that suppression was written, in the direction the
+    strategy's own trigger op defines as worse: bigger for ">="/"==",
+    smaller for "<=". A record with no recorded value, or a profile that
+    cannot currently be read, never overrides: NO DATA beats a guess.
+    """
+    recorded = rec.get("metric_value_at_suppression")
+    if not isinstance(recorded, (int, float)):
+        return False
+    leaf = _get_leaf(profile, strategy["trigger"]["metric"])
+    if leaf is None or leaf.get("value") is None:
+        return False
+    current = leaf["value"]
+    if not isinstance(current, (int, float)):
+        return False
+    if strategy["trigger"]["op"] == "<=":
+        if recorded == 0:
+            return current < 0
+        return current <= recorded * (1 - REGRESSION_MARGIN)
+    if recorded == 0:
+        return current > 0
+    return current >= recorded * (1 + REGRESSION_MARGIN)
+
+
 def _sort_key(entry):
     _sid, strategy, band = entry
     try:
@@ -288,10 +364,21 @@ def advise(profile, treatments=None, strategies=None):
     insufficient = []
     main_fired = []
     companion_fired = []
+    suppressed_by_companion = []
     for s in strategies:
-        if _is_suppressed(s["id"], treatments, now_iso):
-            continue
+        rec = (treatments or {}).get(s["id"])
+        is_companion_rec = bool(rec) and rec.get("reason") == "companion"
+        suppressed = _is_suppressed(s["id"], treatments, now_iso)
         band = _evaluate_trigger(profile, s["trigger"])
+
+        if suppressed:
+            if is_companion_rec and _regression_override(s, profile, rec):
+                pass  # regression guard: worse than when suppressed, card returns
+            else:
+                if is_companion_rec and band not in (None, False):
+                    suppressed_by_companion.append(s["id"])
+                continue
+
         if band is None:
             insufficient.append(s["id"])
             continue
@@ -327,6 +414,7 @@ def advise(profile, treatments=None, strategies=None):
         "do_nothing": do_nothing,
         "advisor_cost_tokens": 0,
         "insufficient": insufficient,
+        "suppressed_by_companion": suppressed_by_companion,
     }
     if do_nothing:
         hit = _get_leaf(profile, "usage.cache_hit_ratio_median")
@@ -363,16 +451,28 @@ def load_treatments(path=TREATMENTS_PATH):
         return {}
 
 
-def record_decision(strategy_id, decision, days=90, note="", path=TREATMENTS_PATH):
+def record_decision(strategy_id, decision, days=90, note="", reason=None, metric_value=None,
+                     path=TREATMENTS_PATH):
     """Record a decision on a card. rejected/suppressed carry an expiry
     `days` out; accepted carries a lineage label instead, for a later
-    experiment to cite as the card that caused it.
+    experiment to cite as the card that caused it. `reason`, when given, is
+    stamped onto the record so a later reader (advise()'s own suppression
+    check) can tell this was not the user's own choice; the only reason this
+    file writes today is "companion", from sync_companion_suppressions.
+    `metric_value`, when given, is the profile reading observed at the
+    moment of this decision, stamped as "metric_value_at_suppression" so
+    advise()'s regression guard has a baseline to compare a later, worse
+    reading against.
     """
     if decision not in DECISIONS:
         raise ValueError(f"decision {decision!r} not in {sorted(DECISIONS)}")
     treatments = load_treatments(path)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     rec = {"decision": decision, "at": now, "note": note}
+    if reason:
+        rec["reason"] = reason
+    if metric_value is not None:
+        rec["metric_value_at_suppression"] = metric_value
     if decision == "accepted":
         rec["lineage"] = f"{strategy_id}-{time.strftime('%Y%m%d')}"
     else:
@@ -384,6 +484,103 @@ def record_decision(strategy_id, decision, days=90, note="", path=TREATMENTS_PAT
     with open(path, "w") as f:
         json.dump(treatments, f, indent=2)
     return rec
+
+
+def sync_companion_suppressions(strategies, active_companions, profile, days=COMPANION_SUPPRESSION_DAYS,
+                                 path=TREATMENTS_PATH):
+    """For every strategy whose own "companion" field names a companion in
+    `active_companions`, write a "suppressed" treatment record (reason
+    "companion") through record_decision, stamping the metric value observed
+    right now so advise()'s regression guard has a baseline.
+
+    Writes AT MOST ONCE per strategy id, ever: any record already on file
+    for that id, whether sync wrote it earlier or the user did (including an
+    "accepted" record carrying experiment lineage), is left completely
+    untouched, no matter its decision or whether its window has already
+    lapsed. That one rule is deliberate, not an oversight: a lapsed
+    companion suppression must never be silently re-armed with a fresh
+    window on the next run, or the card could never come back on its own,
+    and a user's own choice is never sync's to overwrite.
+
+    A strategy with no "companion" declared is left alone entirely (NO DATA
+    beats a guess). So is a strategy whose trigger metric cannot be read
+    right now: with no baseline value the regression guard could never fire,
+    so suppressing would silence that card for the whole window with no way
+    back. If the safety net cannot be armed, nothing is suppressed.
+
+    Returns the list of strategy ids newly suppressed by this call.
+    """
+    active = set(active_companions or ())
+    if not active:
+        return []
+    treatments = load_treatments(path)
+    newly = []
+    for s in strategies:
+        owner = s.get("companion")
+        if not owner or owner not in active:
+            continue
+        if s["id"] in treatments:
+            continue
+        leaf = _get_leaf(profile, s["trigger"]["metric"])
+        metric_value = leaf["value"] if leaf and isinstance(leaf.get("value"), (int, float)) else None
+        if metric_value is None:
+            # The regression guard needs a baseline value to compare against
+            # later. Without one it can never fire, so suppressing here would
+            # silence this card for the whole window with no way back. If the
+            # safety net cannot be armed, do not suppress at all.
+            continue
+        record_decision(s["id"], "suppressed", days=days,
+                         note=f"companion {owner} already owns this capability",
+                         reason="companion", metric_value=metric_value, path=path)
+        newly.append(s["id"])
+    return newly
+
+
+def load_active_companions(path=COMPANIONS_STATE_PATH):
+    """Companions treated as active for capability-ownership suppression:
+    discover_companions.py's cached state, filtered to entries that are both
+    enabled and registry-matched to "curated" (never a "mention" or
+    "unknown" name, which could be an unvetted lookalike plugin). A state
+    file older than STALE_COMPANION_STATE_DAYS is NO DATA: an uninstalled
+    companion whose discovery was never rerun must not go on silencing
+    advice forever.
+
+    Mirrors load_treatments's guard pattern (an isinstance check on the
+    loaded root, corrupt-file handling) rather than inventing a second one:
+    a missing or malformed state file (a JSON root that is not an object, a
+    bad or missing checked_at, a "discovered" that is not a list) is NO
+    DATA, an empty set, never a crash.
+    """
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not isinstance(state, dict):
+        return set()
+    try:
+        checked = time.strptime(state.get("checked_at"), "%Y-%m-%dT%H:%M:%SZ")
+        age_days = (time.time() - calendar.timegm(checked)) / 86400
+    except (TypeError, ValueError):
+        return set()
+    if age_days > STALE_COMPANION_STATE_DAYS:
+        return set()
+    discovered = state.get("discovered")
+    if not isinstance(discovered, list):
+        return set()
+    match = state.get("registry_match")
+    if not isinstance(match, dict):
+        match = {}
+    active = set()
+    for d in discovered:
+        if not isinstance(d, dict):
+            continue
+        name = d.get("name")
+        if name and d.get("enabled") and match.get(name) == "curated":
+            active.add(name)
+    return active
 
 
 def _print_card(card):
@@ -442,6 +639,7 @@ def main(argv=None):
         return 2
 
     strategies = load_strategies()
+    sync_companion_suppressions(strategies, load_active_companions(), profile)
     treatments = load_treatments()
     result = advise(profile, treatments, strategies)
 
@@ -458,6 +656,9 @@ def main(argv=None):
     if result["insufficient"]:
         print(f"NO DATA on {len(result['insufficient'])} strategy trigger(s): "
               + ", ".join(result["insufficient"]))
+    if result["suppressed_by_companion"]:
+        print(f"suppressed {len(result['suppressed_by_companion'])} duplicate card(s): "
+              "an installed, active companion already owns that capability")
     print("Advisor cost: 0 tokens (deterministic)")
     return 0
 
