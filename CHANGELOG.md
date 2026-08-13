@@ -5,6 +5,17 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Marginal attribution waterfall on the dashboard (unit H3): baseline A, plus
+  core to B, plus companion to C, so an improvement can be read apart into
+  which change produced which part of it. Marginal deltas are never summed as
+  naive percentages, because percentages of different baselines do not add:
+  the core delta is a share of A and the companion delta is a share of its own
+  before-value, each labeled as such. When the config fingerprint moved between
+  the two experiments (a companion version change, for example) or the cohort
+  windows overlap, the interaction is declared NOT SEPARABLE with the reason
+  printed, rather than credit being split by a guess. An empty ledger renders
+  NO DATA, never a zero.
+
 - Open integration contract v1 (unit I1): any plugin may ship
   token-shield.integration.json in its own root declaring its capabilities,
   modes, and status, version, activation and rollback commands. Discovery
