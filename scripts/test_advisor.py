@@ -46,7 +46,8 @@ def nest(flat):
     return profile
 
 
-def strategy(sid, category, metric, op, value, band, evidence="MEASURED", escalate=None):
+def strategy(sid, category, metric, op, value, band, evidence="MEASURED", escalate=None,
+             companion=None):
     trig = {"metric": metric, "op": op, "value": value, "band": band}
     if escalate:
         trig["escalate"] = escalate
@@ -55,7 +56,7 @@ def strategy(sid, category, metric, op, value, band, evidence="MEASURED", escala
         "trigger": trig, "what_it_changes": "x", "expected_benefit": "x",
         "evidence": evidence, "drawback": "x", "quality_risk": "LOW",
         "reversibility": "x", "how_measured": "x", "if_you_say_no": "x",
-        "alternatives": [], "companion": None, "requires_confirmation": False,
+        "alternatives": [], "companion": companion, "requires_confirmation": False,
         "source": "A1",
     }
 
@@ -339,6 +340,215 @@ def test_composite_leaf_without_descent_is_insufficient_not_a_crash():
     result = adv.advise(profile, {}, strategies)
     assert result["best"] is None
     assert "cache.ttl" in result["insufficient"], result
+
+
+def test_companion_ownership_suppresses_duplicate_card():
+    # Calibrated: before sync_companion_suppressions/advise() honored a
+    # strategy's own "companion" field, this card stayed in the queue no
+    # matter which companions were active; fixed, an active owner hides it
+    # and stamps the metric value observed at that moment on the record.
+    import tempfile
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    profile = nest({"usage.m1": leaf(5)})
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "treatments.json")
+        newly = adv.sync_companion_suppressions(strategies, {"ponytail"}, profile, path=path)
+        assert newly == ["overbuild.s1"], newly
+        treatments = adv.load_treatments(path)
+        assert treatments["overbuild.s1"]["decision"] == "suppressed"
+        assert treatments["overbuild.s1"]["reason"] == "companion"
+        assert treatments["overbuild.s1"]["metric_value_at_suppression"] == 5, treatments
+        result = adv.advise(profile, treatments, strategies)
+        assert result["best"] is None, result["best"]
+        assert result["suppressed_by_companion"] == ["overbuild.s1"], result
+
+
+def test_strategy_without_declared_companion_is_never_suppressed():
+    # NO DATA beats a guess: a strategy that never names a companion must
+    # never be suppressed, no matter which companions are active.
+    import tempfile
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion=None)]
+    profile = nest({"usage.m1": leaf(5)})
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "treatments.json")
+        newly = adv.sync_companion_suppressions(strategies, {"ponytail"}, profile, path=path)
+        assert newly == [], newly
+        assert adv.load_treatments(path) == {}
+    result = adv.advise(profile, {}, strategies)
+    assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
+
+
+def test_sync_never_re_arms_a_lapsed_companion_suppression():
+    # Calibrated to catch the real defect (not the theater the first attempt
+    # shipped, which only re-checked advise()'s pre-existing expiry filter):
+    # a companion suppression that has already lapsed must never be rewritten
+    # with a fresh window on the next sync run, or the card could never come
+    # back on its own. This exercises sync_companion_suppressions() itself,
+    # not just advise()'s unrelated suppression filter.
+    import tempfile
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    profile = nest({"usage.m1": leaf(5)})
+    past = "2000-01-01T00:00:00"
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "treatments.json")
+        with open(path, "w") as f:
+            json.dump({"overbuild.s1": {"decision": "suppressed", "until": past,
+                                        "reason": "companion", "at": past,
+                                        "metric_value_at_suppression": 5}}, f)
+
+        newly = adv.sync_companion_suppressions(strategies, {"ponytail"}, profile, path=path)
+        assert newly == [], newly
+
+        treatments = adv.load_treatments(path)
+        assert treatments["overbuild.s1"]["until"] == past, treatments["overbuild.s1"]
+        result = adv.advise(profile, treatments, strategies)
+        assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
+        assert result["suppressed_by_companion"] == [], result
+
+
+def test_sync_never_overwrites_a_user_record_even_an_accepted_one_with_lineage():
+    # The reviewer's own repro: an accepted record carrying experiment
+    # lineage must survive sync untouched, whatever the strategy's companion
+    # field says, because a later experiment may cite that exact lineage.
+    import tempfile
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    profile = nest({"usage.m1": leaf(5)})
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "treatments.json")
+        user_rec = {"decision": "accepted", "at": "2026-01-01T00:00:00",
+                    "lineage": "overbuild.s1-20260101", "note": "did it"}
+        with open(path, "w") as f:
+            json.dump({"overbuild.s1": dict(user_rec)}, f)
+
+        newly = adv.sync_companion_suppressions(strategies, {"ponytail"}, profile, path=path)
+        assert newly == [], newly
+        assert adv.load_treatments(path)["overbuild.s1"] == user_rec
+
+
+def test_load_active_companions_filters_to_enabled_and_curated():
+    # A missing state file is NO DATA (empty set, never guessed active); an
+    # enabled companion whose name is not registry-matched to "curated" (a
+    # same-named lookalike plugin, for example) is left out too.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions_state.json")
+        assert adv.load_active_companions(path) == set()
+        state = {
+            "schema": 1,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "discovered": [
+                {"name": "ponytail", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+                {"name": "caveman", "enabled": False, "source_label": "CLAUDE PROJECTED"},
+                {"name": "some-fork", "enabled": True, "source_label": "CLAUDE PROJECTED"},
+            ],
+            "registry_match": {"ponytail": "curated", "caveman": "curated", "some-fork": "unknown"},
+        }
+        with open(path, "w") as f:
+            json.dump(state, f)
+        assert adv.load_active_companions(path) == {"ponytail"}, adv.load_active_companions(path)
+
+
+def test_load_active_companions_stale_state_suppresses_nothing():
+    # Calibrated: discover_companions.py stamps checked_at but nothing read
+    # it; a state file two years old still counted as active. Uninstalling a
+    # companion and never re-running discovery must not silence advice
+    # forever, so a state older than STALE_COMPANION_STATE_DAYS is NO DATA.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions_state.json")
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 400 * 86400))
+        state = {
+            "schema": 1, "checked_at": old,
+            "discovered": [{"name": "ponytail", "enabled": True, "source_label": "x"}],
+            "registry_match": {"ponytail": "curated"},
+        }
+        with open(path, "w") as f:
+            json.dump(state, f)
+        assert adv.load_active_companions(path) == set(), adv.load_active_companions(path)
+
+        fresh = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        state["checked_at"] = fresh
+        with open(path, "w") as f:
+            json.dump(state, f)
+        assert adv.load_active_companions(path) == {"ponytail"}
+
+
+def test_load_active_companions_never_raises_on_a_malformed_root():
+    # load_active_companions's docstring promises it never raises. A JSON
+    # root of [], null, "hi", or a dict missing checked_at/registry_match
+    # must all degrade to an empty set, never kill the advise command.
+    import tempfile
+    for bad_root in ([], None, "hi", {"discovered": ["ponytail"]}):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "companions_state.json")
+            with open(path, "w") as f:
+                json.dump(bad_root, f)
+            assert adv.load_active_companions(path) == set(), bad_root
+
+
+def test_regression_guard_returns_card_when_metric_far_worse_ge_direction():
+    # Finding-1 replacement for the old "always show on HIGH band" rule:
+    # enumerating strategies.json's real triggers proved that rule was
+    # nearly a no-op (11 of 13 strategies can never reach HIGH). Here the
+    # fixture is extreme (100000x the recorded value) so the assertion is
+    # unambiguous either way the margin is implemented.
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    future = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 86400))
+    treatments = {"overbuild.s1": {"decision": "suppressed", "until": future,
+                                   "reason": "companion", "metric_value_at_suppression": 100}}
+    profile = nest({"usage.m1": leaf(100 * 100000)})
+    result = adv.advise(profile, treatments, strategies)
+    assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
+    assert result["suppressed_by_companion"] == [], result
+
+
+def test_regression_guard_returns_card_when_metric_far_worse_le_direction():
+    # Same guard, "<=" direction: smaller is worse for a <= trigger.
+    strategies = [strategy("memory.s1", "memory", "usage.m1", "<=", 10, "MED",
+                            companion="ponytail")]
+    future = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 86400))
+    treatments = {"memory.s1": {"decision": "suppressed", "until": future,
+                                "reason": "companion", "metric_value_at_suppression": 100}}
+    profile = nest({"usage.m1": leaf(1)})
+    result = adv.advise(profile, treatments, strategies)
+    assert result["best"] is not None and result["best"]["id"] == "memory.s1", result
+    assert result["suppressed_by_companion"] == [], result
+
+
+def test_regression_guard_margin_not_crossed_keeps_card_suppressed():
+    # The margin's own effect: a metric that is worse but by less than
+    # REGRESSION_MARGIN must not override the suppression. 100 -> 120 is 20%
+    # worse, well under the 50% margin.
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    future = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 86400))
+    treatments = {"overbuild.s1": {"decision": "suppressed", "until": future,
+                                   "reason": "companion", "metric_value_at_suppression": 100}}
+    profile = nest({"usage.m1": leaf(120)})
+    result = adv.advise(profile, treatments, strategies)
+    assert result["best"] is None, result
+    assert result["suppressed_by_companion"] == ["overbuild.s1"], result
+
+
+def test_companion_suppression_expires_and_card_returns():
+    # Without expiry, a companion suppression record written once would hide
+    # the card forever; the "until" cooldown must let it come back, and it
+    # must not carry the old regression-metric baseline forward as a reason
+    # to keep hiding it.
+    strategies = [strategy("overbuild.s1", "overbuild", "usage.m1", ">=", 1, "MED",
+                            companion="ponytail")]
+    profile = nest({"usage.m1": leaf(5)})
+    past = "2000-01-01T00:00:00"
+    treatments = {"overbuild.s1": {"decision": "suppressed", "until": past, "reason": "companion",
+                                   "metric_value_at_suppression": 5}}
+    result = adv.advise(profile, treatments, strategies)
+    assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
+    assert result["suppressed_by_companion"] == [], result
 
 
 if __name__ == "__main__":

@@ -270,18 +270,35 @@ def _verified_rows_for_month(records, start_ts, end_ts):
 
 
 def _what_did_not_work(records, treatments, start_ts, end_ts):
+    """Rows for the "What did not work" section, plus a count of companion
+    (reason "companion") suppressions excluded from it this month.
+
+    A companion suppression is sync_companion_suppressions writing over a
+    strategy an active companion plugin already owns; it is not a rejected
+    or failed treatment, so it is excluded here rather than filed under a
+    section the project treats as evidence something did not pan out. The
+    excluded count is still surfaced (never silently dropped) so the section
+    stays honest about what happened this month, without misfiling it.
+    """
     rows = []
     not_proven = [r for r in records
                   if r.get("confidence") == "NOT_PROVEN" and _in_month(r.get("timestamp"), start_ts, end_ts)]
     for r in not_proven:
         reasons = "; ".join(r.get("reasons") or []) or "no reason recorded"
         rows.append(f"experiment '{r.get('label') or '(unlabeled)'}' NOT_PROVEN: {reasons}")
+    companion_excluded = 0
     for sid, rec in sorted((treatments or {}).items()):
+        if not _in_month(rec.get("at"), start_ts, end_ts):
+            continue
+        if rec.get("reason") == "companion":
+            if rec.get("decision") in ("rejected", "suppressed"):
+                companion_excluded += 1
+            continue
         decision = rec.get("decision")
-        if decision in ("rejected", "suppressed") and _in_month(rec.get("at"), start_ts, end_ts):
+        if decision in ("rejected", "suppressed"):
             note = f": {rec['note']}" if rec.get("note") else ""
             rows.append(f"strategy '{sid}' {decision}{note}")
-    return rows
+    return rows, companion_excluded
 
 
 def build_report(year, month, root=None):
@@ -377,13 +394,16 @@ def build_report(year, month, root=None):
 
     # WHAT DID NOT WORK
     lines.append("## What did not work")
-    not_worked = _what_did_not_work(records, treatments, start_ts, end_ts)
-    if not not_worked:
+    not_worked, companion_excluded = _what_did_not_work(records, treatments, start_ts, end_ts)
+    if not not_worked and not companion_excluded:
         lines.append("NO DATA: no NOT_PROVEN experiment and no rejected or suppressed "
                      "strategy recorded this month.")
     else:
         for row in not_worked:
             lines.append(f"- {row}")
+    if companion_excluded:
+        lines.append(f"({companion_excluded} companion suppression(s) excluded: an installed "
+                     f"companion plugin already owned that capability, not a failed treatment.)")
     lines.append("")
 
     # NEXT MONTH

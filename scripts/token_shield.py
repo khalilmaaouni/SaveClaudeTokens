@@ -345,8 +345,21 @@ def suppressed_recommendation_count(adv_mod, profile, treatments, strategies):
     The queue caps at 3, so this can undercount when more than 3 cards would
     otherwise fire, but it never invents a figure.
     """
+    return sum(suppressed_recommendation_counts(adv_mod, profile, treatments, strategies))
+
+
+def suppressed_recommendation_counts(adv_mod, profile, treatments, strategies):
+    """Same diff as suppressed_recommendation_count, split into what the
+    user chose (a rejected/suppressed record with no "reason") and what
+    sync_companion_suppressions wrote (reason "companion"), so a machine
+    suppression is never rendered as "your earlier choices": that used to
+    happen after a companion-only sync, attributing a decision to the user
+    that the user never made.
+
+    Returns (user_n, companion_n).
+    """
     if not treatments:
-        return 0
+        return 0, 0
     with_t = adv_mod.advise(profile, treatments, strategies)
     without_t = adv_mod.advise(profile, None, strategies)
 
@@ -356,7 +369,9 @@ def suppressed_recommendation_count(adv_mod, profile, treatments, strategies):
             s.add(res["companion"]["id"])
         return s
 
-    return len(ids(without_t) - ids(with_t))
+    hidden = ids(without_t) - ids(with_t)
+    companion_n = sum(1 for sid in hidden if (treatments.get(sid) or {}).get("reason") == "companion")
+    return len(hidden) - companion_n, companion_n
 
 
 def _band_rank(value, low, med, high):
@@ -517,7 +532,7 @@ def render_observed_pattern(profile):
     return "".join(parts)
 
 
-def render_recommendation_queue(advise_result, suppressed_n):
+def render_recommendation_queue(advise_result, suppressed_n, companion_suppressed_n=0):
     parts = ['<h2>Recommendation queue</h2>']
     if not advise_result:
         parts.append('<p class="nodata">NO DATA: no profile to advise on.</p>')
@@ -536,9 +551,17 @@ def render_recommendation_queue(advise_result, suppressed_n):
                 f'<div class="fix">{esc(c["drawback"])}</div>'
                 f'{_render_how(c.get("how"))}{_render_chips(c["id"])}</div>')
         parts.append('<div class="pain">' + "".join(rows) + '</div>')
+    # A companion-caused suppression is never the user's own choice, so it
+    # gets its own honest line rather than being folded into "your earlier
+    # choices": that phrase used to render after a companion-only sync, with
+    # nothing the user ever decided behind it.
     if suppressed_n:
         parts.append(f'<p class="n">{suppressed_n} recommendation(s) suppressed by your '
                      f'earlier choices.</p>')
+    if companion_suppressed_n:
+        parts.append(f'<p class="n">{companion_suppressed_n} recommendation(s) suppressed '
+                     f'because an already installed companion plugin owns that capability '
+                     f'(not your choice).</p>')
     return "".join(parts)
 
 
@@ -813,7 +836,7 @@ def stat(k, v, note, is_nodata=False):
 
 def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
-           experiment_rows=None, plugin_cache_root=None):
+           experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0):
     # usd_res is accepted for signature compatibility with callers (main()
     # still measures it for the separate `prices` command's use elsewhere)
     # but is never rendered here: the dashboard shows only figures the user
@@ -854,7 +877,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     cache_root = plugin_cache_root or os.path.expanduser("~/.claude/plugins/cache")
     parts.append(render_next_best_move(advise_result))
     parts.append(render_observed_pattern(profile))
-    parts.append(render_recommendation_queue(advise_result, suppressed_n))
+    parts.append(render_recommendation_queue(advise_result, suppressed_n, companion_suppressed_n))
     parts.append(render_companions(companions_data, profile, cache_root))
     parts.append(render_experiment_history(experiment_rows or []))
 
@@ -1020,6 +1043,7 @@ def main():
     profile = None
     advise_result = None
     suppressed_n = 0
+    companion_suppressed_n = 0
     try:
         import advisor as adv
         profile = load_profile(adv.PROFILE_PATH)
@@ -1027,14 +1051,16 @@ def main():
             strategies = adv.load_strategies()
             treatments = adv.load_treatments()
             advise_result = adv.advise(profile, treatments, strategies)
-            suppressed_n = suppressed_recommendation_count(adv, profile, treatments, strategies)
+            suppressed_n, companion_suppressed_n = suppressed_recommendation_counts(
+                adv, profile, treatments, strategies)
     except (OSError, ValueError, ImportError) as e:
         print(f"note: advisor skipped ({e})", file=sys.stderr)
     companions_data = load_companions(COMPANIONS_PATH)
 
     body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified,
                   profile=profile, advise_result=advise_result, suppressed_n=suppressed_n,
-                  companions_data=companions_data, experiment_rows=experiment_rows)
+                  companions_data=companions_data, experiment_rows=experiment_rows,
+                  companion_suppressed_n=companion_suppressed_n)
     out_html = body if a.body_only else render_standalone(body)
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)

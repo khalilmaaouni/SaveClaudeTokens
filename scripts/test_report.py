@@ -240,6 +240,46 @@ def test_verified_and_estimated_figures_never_share_a_line():
     check("no single line mixes a VERIFIED figure with an estimated one", not bad_lines)
 
 
+def test_companion_suppression_never_filed_as_what_did_not_work():
+    # Calibrated: _what_did_not_work selected any rejected or suppressed
+    # treatment record with no filter on reason, so a companion-caused
+    # suppression (reason "companion", written by sync_companion_suppressions,
+    # not a failed treatment) landed in a section the project treats as
+    # evidence something did not pan out. It must be excluded there, and the
+    # exclusion itself must be visible, not silently dropped.
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [_usage_rec("2026-08-10T00:00:00+00:00")])
+        ledger = os.path.join(d, "savings.jsonl")
+
+        def _mixed_treatments():
+            return {
+                "companion.ponytail": {"decision": "suppressed", "at": "2026-08-05T00:00:00",
+                                       "until": "2999-01-01T00:00:00", "reason": "companion",
+                                       "note": "companion ponytail already owns this capability"},
+                "overbuild.git-instructions-off": {"decision": "rejected",
+                                                    "at": "2026-08-06T00:00:00",
+                                                    "until": "2999-01-01T00:00:00",
+                                                    "note": "not for me"},
+            }
+
+        orig_ledger, orig_load = ex.LEDGER, adv.load_treatments
+        ex.LEDGER, adv.load_treatments = ledger, _mixed_treatments
+        try:
+            report = rp.build_report(2026, 8, root=root)
+        finally:
+            ex.LEDGER, adv.load_treatments = orig_ledger, orig_load
+
+    not_worked = _section(report, "What did not work")
+    check("the user's own rejected strategy is listed",
+          "overbuild.git-instructions-off" in not_worked)
+    check("the companion suppression's strategy id never appears in the section",
+          "companion.ponytail" not in not_worked)
+    check("the exclusion is still surfaced, not silently dropped",
+          "companion suppression" in not_worked.lower())
+
+
 def test_no_data_rendering_when_ledger_absent():
     with tempfile.TemporaryDirectory() as d:
         root = os.path.join(d, "projects")
