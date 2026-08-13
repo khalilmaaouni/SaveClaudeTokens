@@ -5,7 +5,11 @@
 
 Calibrated tests (defect reinjected during development, confirmed red, then
 fixed and confirmed green again): queue cap, RECOMMENDED-in-evidence guard,
-suppression filter, NO DATA exclusion, and token-saver's companion-only rank.
+suppression filter, NO DATA exclusion, token-saver's companion-only rank,
+aggressive mode's curated-registry gate, and the recipe trust boundary
+(disabling cmd_recipe's `result["refused"]` check made
+test_recipe_refuses_a_name_not_in_the_curated_registry crash with a
+KeyError instead of passing; restoring the check made it pass again).
 """
 
 import importlib.util
@@ -550,6 +554,177 @@ def test_companion_suppression_expires_and_card_returns():
     assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
     assert result["suppressed_by_companion"] == [], result
 
+
+
+def test_mode_strategies_nested_deterministic_and_aggressive_equals_full_set():
+    # conservative subset of ids <= balanced subset of ids <= aggressive
+    # subset of ids, every call returning the exact same list (same ids,
+    # same order): a non-technical user picking a "bigger" mode must never
+    # lose a card the smaller mode already offered. aggressive == the full,
+    # unfiltered strategy list is the proof that a companion strategy is
+    # only ever added by the top mode, never silently included earlier.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    subsets = {m: adv.mode_strategies(real, m) for m in adv.MODES}
+    assert subsets["conservative"] == adv.mode_strategies(real, "conservative"), "not deterministic"
+
+    cons_ids = [s["id"] for s in subsets["conservative"]]
+    bal_ids = [s["id"] for s in subsets["balanced"]]
+    agg_ids = [s["id"] for s in subsets["aggressive"]]
+    assert set(cons_ids) <= set(bal_ids) <= set(agg_ids), (cons_ids, bal_ids, agg_ids)
+    assert all(s["quality_risk"] == "LOW" and s["category"] != "companion"
+               for s in subsets["conservative"]), subsets["conservative"]
+    assert all(s["category"] != "companion" for s in subsets["balanced"]), subsets["balanced"]
+    assert agg_ids == [s["id"] for s in real], (agg_ids, [s["id"] for s in real])
+
+
+def test_mode_strategies_rejects_an_unknown_mode():
+    try:
+        adv.mode_strategies(adv.load_strategies(STRATEGIES_PATH), "reckless")
+        assert False, "expected a ValueError for an unknown mode"
+    except ValueError as e:
+        assert "reckless" in str(e), str(e)
+
+
+def test_mode_strategies_aggressive_drops_a_companion_not_in_the_curated_registry():
+    # Calibrated: an early draft of mode_strategies gated aggressive mode
+    # only on category == "companion", with no curated-registry check at
+    # all; this test went red (the uncurated strategy stayed in the
+    # aggressive subset); restored to checking the id's companion name
+    # against curated_names, green again.
+    strategies = [
+        strategy("companion.widget", "companion", "usage.m1", ">=", 1, "LOW"),
+        strategy("cache.s1", "cache", "usage.m2", ">=", 1, "LOW"),
+    ]
+    kept = adv.mode_strategies(strategies, "aggressive", curated_names={"other-thing"})
+    ids = [s["id"] for s in kept]
+    assert "companion.widget" not in ids, ids
+    assert "cache.s1" in ids, ids
+    kept2 = adv.mode_strategies(strategies, "aggressive", curated_names={"widget"})
+    assert "companion.widget" in [s["id"] for s in kept2]
+
+
+def test_main_no_mode_never_filters_and_never_prints_a_mode_line():
+    # Calibrated: an early draft always called mode_strategies (defaulting
+    # a bare mode to "conservative" instead of None), so the default,
+    # no-mode CLI path silently narrowed to a subset; this test went red
+    # (mode_strategies raised via the monkeypatch, or "mode:" appeared in
+    # the output); restored to only filtering when --mode is actually
+    # given, green again: today's behavior, unchanged.
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        real_mode_strategies = adv.mode_strategies
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+
+        def _boom(*_a, **_k):
+            raise AssertionError("mode_strategies must not run when --mode is omitted")
+
+        adv.mode_strategies = _boom
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main([])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+            adv.mode_strategies = real_mode_strategies
+    assert rc == 0
+    assert "mode:" not in out, out
+
+
+def test_main_mode_flag_filters_and_prints_the_mode_line():
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main(["--mode", "conservative"])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+    assert rc == 0
+    assert "mode: conservative" in out, out
+
+
+def test_main_rejects_an_unknown_mode_before_touching_the_profile():
+    # No PROFILE_PATH setup: an unknown --mode is refused before any file
+    # is opened, so this runs against whatever PROFILE_PATH is on the box.
+    assert adv.main(["--mode", "reckless"]) == 2
+    assert adv.main(["--mode"]) == 2
+
+
+def test_recipe_refuses_a_name_not_in_the_curated_registry():
+    # UNVETTED PLUGIN REFUSED: this is the trust boundary the recipe
+    # feature exists to enforce. Calibrated (see the module docstring
+    # above): disabling cmd_recipe's `result["refused"]` check made this
+    # test crash with a KeyError instead of passing; restoring the check
+    # makes it pass again.
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("not-a-real-companion-xyz")
+    out = buf.getvalue()
+    assert rc == 2, rc
+    assert "REFUSED" in out, out
+    assert "not-a-real-companion-xyz" in out, out
+
+
+def test_recipe_prints_commands_verbatim_from_the_real_registry():
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        raw = f.read()
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("ponytail")
+    out = buf.getvalue()
+    assert rc == 0, out
+    install_line = [l for l in out.splitlines() if "install:" in l][0]
+    rollback_line = [l for l in out.splitlines() if "rollback:" in l][0]
+    install_cmd = install_line.split("install:", 1)[1].strip()
+    rollback_cmd = rollback_line.split("rollback:", 1)[1].strip()
+    assert install_cmd in raw, install_cmd
+    assert rollback_cmd in raw, rollback_cmd
+
+
+def test_recipe_refuses_when_registry_entry_missing_a_required_field():
+    # Missing-field refusal: a curated entry that names the companion but
+    # is missing "uninstall" must be refused, naming that exact field,
+    # never crash and never fall back to inventing a rollback command.
+    import tempfile
+    real_path = adv.ts.COMPANIONS_PATH
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump({"schema": 2, "mentions": [], "companions": [{
+                "name": "widget", "install": "do it",
+                "tested_version_range": {"min": "1.0.0", "max": "1.0.0",
+                                         "tested_on": "2026-08-13"},
+            }]}, f)
+        adv.ts.COMPANIONS_PATH = path
+        try:
+            buf = io.StringIO()
+            import contextlib
+            with contextlib.redirect_stdout(buf):
+                rc = adv.cmd_recipe("widget")
+        finally:
+            adv.ts.COMPANIONS_PATH = real_path
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "uninstall" in out, out
 
 
 def test_sync_refuses_to_suppress_when_the_metric_cannot_be_read():

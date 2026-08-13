@@ -48,8 +48,30 @@ written, and if it has grown materially worse (REGRESSION_MARGIN below), the
 card returns regardless of the still-open suppression window. A strategy
 with no "companion" declared is never touched: NO DATA beats a guess.
 
+MODES AS INTENT
+--mode conservative|balanced|aggressive narrows the strategy set BEFORE
+ranking, so a non-technical user can say what they want in plain words
+instead of picking strategy ids: conservative keeps only zero-risk,
+measurement-or-habit-only cards (non-companion, quality_risk LOW);
+balanced adds every reversible non-companion config treatment
+(quality_risk MED too); aggressive adds companion installs, but only for
+a companion actually present in data/companions.json's curated registry,
+never a strategies.json entry alone. See mode_strategies() below.
+Omitting --mode is exactly today's behavior: every strategy considered,
+unchanged.
+
+GUIDED RECIPES
+--recipe <companion-name> prints the copy-paste install command and its
+rollback command for one curated companion, both taken verbatim from
+data/companions.json (schema v2) via companions.describe(). A name that
+is not in the curated registry, or a registry entry missing a required
+field, is refused with the exact reason printed: no recipe is ever
+invented. See cmd_recipe() below.
+
 USAGE
   python3 advisor.py
+  python3 advisor.py --mode conservative|balanced|aggressive
+  python3 advisor.py --recipe <companion-name>
   python3 advisor.py --decide <strategy-id> <done|not-now|never>
 """
 
@@ -59,6 +81,9 @@ import os
 import shutil
 import sys
 import time
+
+import token_shield as ts
+from companions import describe, load_state
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STRATEGIES = os.path.join(HERE, "..", "data", "strategies.json")
@@ -75,6 +100,11 @@ PROFILE_LABELS = {"MEASURED", "SIGNAL", "INFERRED", "NO DATA"}
 BANDS = {"HIGH": 3, "MED": 2, "LOW": 1}
 OPS = {">=", "<=", "=="}
 DECISIONS = {"accepted", "rejected", "suppressed"}
+
+# The three intent words a non-technical user can say instead of picking
+# strategy ids. Ordered least to most invasive; mode_strategies() below is
+# the ranked subset each one maps to.
+MODES = ("conservative", "balanced", "aggressive")
 
 # The plain-word choices offered on a dashboard chip or in the /advisor
 # command, mapped onto the decision vocabulary treatment memory already
@@ -187,6 +217,49 @@ def load_strategies(path=DEFAULT_STRATEGIES):
             raise ValueError(f"strategy {sid}: source must be non-empty")
         _validate_how(sid, s["how"])
     return strategies
+
+
+def _curated_companion_names(companions_path=None):
+    """Names in data/companions.json's own "companions" list (the CURATED
+    registry), never "mentions" (data/companions.json's own "NO DATA: not
+    yet verified first-party" entries). Reuses token_shield.load_companions
+    rather than a second reader; a missing or corrupt file is an empty set,
+    never a guess."""
+    data = ts.load_companions(companions_path or ts.COMPANIONS_PATH)
+    return {c.get("name") for c in (data or {}).get("companions", [])}
+
+
+def mode_strategies(strategies, mode, curated_names=None):
+    """The ranked subset of `strategies` one intent mode offers, in the
+    same relative order as `strategies` itself (advise()'s own _sort_key
+    ranks the fired subset afterward; this only narrows which ids are ever
+    considered). Deterministic: same strategies and mode, same subset,
+    every call.
+
+    conservative: zero risk, non-companion strategies whose quality_risk is
+    LOW, the ones that are a check or a habit rather than a change to any
+    file or setting.
+    balanced: every non-companion strategy (conservative's LOW risk cards
+    plus the MED risk ones), all of which are reversible config treatments
+    per their own "reversibility" field.
+    aggressive: balanced, plus a companion-category strategy, but ONLY when
+    its companion name (the id's suffix, "companion.ponytail" ->
+    "ponytail") is present in data/companions.json's curated registry, not
+    merely a strategies.json entry: a companion install is never offered
+    on strategies.json's say-so alone.
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode {mode!r} not in {MODES}")
+    if mode == "conservative":
+        return [s for s in strategies
+                if s["category"] != "companion" and s["quality_risk"] == "LOW"]
+    if mode == "balanced":
+        return [s for s in strategies if s["category"] != "companion"]
+    if curated_names is None:
+        curated_names = _curated_companion_names()
+    return [s for s in strategies
+            if s["category"] != "companion"
+            or s["id"].split(".", 1)[-1] in curated_names]
 
 
 CLAIMS_DOC = "docs/CLAIMS.md"
@@ -682,6 +755,26 @@ def cmd_decide(strategy_id, choice):
     return 0
 
 
+def cmd_recipe(name):
+    """Handle `advisor.py --recipe <companion-name>`: print the copy-paste
+    install command and its rollback command for one curated companion,
+    both taken verbatim from data/companions.json (schema v2) via
+    companions.describe(). This is the trust boundary: a name that is not
+    in the curated registry, or a registry entry missing a required
+    evidence field, is refused with the exact reason printed. No command
+    is ever built or guessed here, only read.
+    """
+    data = ts.load_companions(ts.COMPANIONS_PATH)
+    result = describe(data, load_state(), name)
+    if result["refused"]:
+        print(f"REFUSED: {result['reason']}")
+        return 2
+    print(f"Recipe for {name} (verbatim from data/companions.json):")
+    print(f"  install:   {result['activation_command']['value']}")
+    print(f"  rollback:  {result['rollback_command']['value']}")
+    return 0
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -690,6 +783,22 @@ def main(argv=None):
             print("usage: advisor.py --decide <strategy-id> <done|not-now|never>")
             return 2
         return cmd_decide(argv[1], argv[2])
+    if argv and argv[0] == "--recipe":
+        if len(argv) != 2:
+            print("usage: advisor.py --recipe <companion-name>")
+            return 2
+        return cmd_recipe(argv[1])
+
+    mode = None
+    if "--mode" in argv:
+        i = argv.index("--mode")
+        if i + 1 >= len(argv):
+            print(f"usage: advisor.py --mode <{'|'.join(MODES)}>")
+            return 2
+        mode = argv[i + 1]
+        if mode not in MODES:
+            print(f"unknown mode {mode!r}; use one of {sorted(MODES)}")
+            return 2
 
     if not os.path.exists(PROFILE_PATH):
         print("NO DATA: run profile.py first")
@@ -702,11 +811,15 @@ def main(argv=None):
         return 2
 
     strategies = load_strategies()
+    if mode:
+        strategies = mode_strategies(strategies, mode)
     sync_companion_suppressions(strategies, load_active_companions(), profile)
     treatments = load_treatments()
     result = advise(profile, treatments, strategies)
 
     print("=== Token Shield: Quick Advisor ===")
+    if mode:
+        print(f"mode: {mode}")
     if result["do_nothing"]:
         print(result["message"])
     else:
