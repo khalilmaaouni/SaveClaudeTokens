@@ -254,6 +254,21 @@ def test_do_nothing_on_a_healthy_profile():
     assert result["best"] is None
     assert result["do_nothing"] is True
     assert "95%" in result["message"] and "5%" in result["message"], result["message"]
+    # Calibrated (finding C2/M2): before the tournament gated on a real
+    # native signal, this profile printed "this profile looks healthy" AND
+    # four tournament winners in the same breath (one of them a
+    # companion.token-saver crown, even though its own card says it is
+    # never offered as a recommended fix), a contradicting second
+    # recommendation with no reconciliation in the rendered text. Fixed, a
+    # profile with nothing real anywhere renders no tournaments at all: the
+    # "do nothing" message stays the only headline.
+    assert result["tournaments"] == [], result["tournaments"]
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_tournaments(result["tournaments"])
+    assert printed.getvalue() == "", printed.getvalue()
 
 
 def test_load_treatments_recovers_from_a_corrupt_file(tmp_path=None):
@@ -811,10 +826,11 @@ def test_tournament_ranks_two_candidates_winner_and_visible_loser():
 
 
 def test_tournament_native_before_companion_at_equal_fit():
-    # Calibrated: with the native-before-companion tiebreak inverted
-    # (is_companion sorted before native at equal fit and risk), the
-    # companion wins here instead and this test goes red; restored, native
-    # wins again and it is green.
+    # Calibrated: with the companion-exclusion removed from the winner pool
+    # (build_tournaments picking min() over ALL candidates, companions
+    # included), companion.comp wins here instead and this test goes red;
+    # restored, the native wins and the companion is a tagged loser, never
+    # a winner, at any fit or risk.
     strategies = [
         strategy("output.native", "output", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
         strategy("companion.comp", "companion", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
@@ -823,8 +839,8 @@ def test_tournament_native_before_companion_at_equal_fit():
     result = adv.advise(profile, {}, strategies)
     t = result["tournaments"][0]
     assert t["winner"]["id"] == "output.native", t["winner"]
-    assert "native" in t["why_won"], t["why_won"]
     assert t["also_considered"][0]["id"] == "companion.comp"
+    assert t["also_considered"][0]["why_lost"] == "(detect only, never a fix)", t["also_considered"][0]
 
 
 def test_tournament_missing_signal_renders_no_data_reason():
@@ -872,6 +888,158 @@ def test_real_strategies_json_carries_a_problem_class_and_tournaments():
         adv._print_tournaments(result["tournaments"])
     out = printed.getvalue()
     assert "also considered" in out and "cache_health" in out, out
+
+
+def test_tournament_winner_is_seeded_from_best_even_when_it_would_otherwise_lose():
+    # Calibrated (finding C1): before build_tournaments accepted a
+    # `best_id` to seed the winner, this exact profile produced a
+    # contradiction: result["best"] names cache.a (advise()'s own
+    # band-then-category ranking), but the "p" tournament, ranked purely on
+    # fit and quality_risk within its own class, crowned memory.b instead
+    # (memory.b's LOW quality_risk beats cache.a's HIGH), with no
+    # reconciliation between the two in the rendered text. Fixed, the class
+    # containing best's own strategy always crowns that exact strategy.
+    strategies = [
+        strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="p", quality_risk="HIGH"),
+        strategy("memory.b", "memory", "usage.m2", ">=", 1, "HIGH", problem_class="p", quality_risk="LOW"),
+    ]
+    profile = nest({"usage.m1": leaf(5), "usage.m2": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    assert result["best"]["id"] == "cache.a", result["best"]
+    t = next(t for t in result["tournaments"] if t["problem_class"] == "p")
+    assert t["winner"]["id"] == "cache.a", t["winner"]
+    assert t["also_considered"][0]["id"] == "memory.b"
+    # The seeded case never claims a false comparative reason (memory.b, not
+    # cache.a, is the one with lower quality risk here).
+    assert "quality risk" not in t["why_won"], t["why_won"]
+
+
+def test_tournament_never_crowns_a_detect_only_companion_even_when_it_alone_fired():
+    # Calibrated (finding C2/M2): the "detect and measure only, never a
+    # recommended fix" companion.token-saver used to win the tool_output
+    # tournament outright whenever it was the only member of its class with
+    # a real signal, exactly mirroring test_token_saver_entry_can_never_be_best's
+    # profile but for result["tournaments"] instead of best/queue. Fixed,
+    # the same exclusion applies: a companion is never the winner, and the
+    # native did-not-trigger candidates are the only eligible winners, so
+    # this class renders nothing (neither native ever really fired either).
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(250_000)})
+    result = adv.advise(profile, {}, real)
+    for t in result["tournaments"]:
+        assert t["winner"]["id"] != "companion.token-saver", t
+        for loser in t["also_considered"]:
+            if loser["id"] == "companion.token-saver":
+                assert loser["why_lost"] == "(detect only, never a fix)", loser
+
+
+def test_all_no_data_problem_class_renders_no_tournament():
+    # The orchestrator's p1_nodata probe: usage.output_tokens_total is
+    # explicitly NO DATA, so every tool_output candidate (all three share
+    # that one metric) is NO DATA. Before the real-native-signal gate, this
+    # rendered a "winner" anyway, printed as "ranked first only by the
+    # stable id tiebreak" even when the sort actually used qr_rank; fixed,
+    # a class with nothing real anywhere is left out of the report.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(None, label="NO DATA")})
+    result = adv.advise(profile, {}, real)
+    classes = {t["problem_class"] for t in result["tournaments"]}
+    assert "tool_output" not in classes, classes
+
+
+def test_load_strategies_rejects_a_bad_problem_class_value():
+    # The orchestrator's p2_typo probe, case A and C: load_strategies must
+    # refuse a mistyped or null problem_class by the exact strategy id, the
+    # same way it already refuses a bad trigger op or band. Before this
+    # check, a typo silently formed its own one-member group (excluded from
+    # every tournament with no error) and a null value was skipped the same
+    # way (`if not pc: continue` in build_tournaments); the strategy just
+    # vanished from the report with nothing telling anyone why.
+    import tempfile
+    real = adv.load_strategies(STRATEGIES_PATH)
+
+    with tempfile.TemporaryDirectory() as d:
+        broken = json.loads(json.dumps({"schema": 2, "strategies": real}))
+        broken["strategies"][0]["problem_class"] = "tool_ouput"
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump(broken, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a mistyped problem_class"
+        except ValueError as e:
+            assert broken["strategies"][0]["id"] in str(e), str(e)
+            assert "problem_class" in str(e), str(e)
+
+    with tempfile.TemporaryDirectory() as d:
+        broken2 = json.loads(json.dumps({"schema": 2, "strategies": real}))
+        broken2["strategies"][0]["problem_class"] = None
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump(broken2, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a null problem_class"
+        except ValueError as e:
+            assert broken2["strategies"][0]["id"] in str(e), str(e)
+
+
+def test_deciding_criterion_always_names_the_first_differing_tuple_field():
+    # Finding M1: why_won/why_lost must always derive from the first field
+    # of _tournament_key's own tuple that actually differs between the two
+    # candidates, never a hardcoded guess (the old bug: an all-NO-DATA
+    # winner was always described as "ranked first only by the stable id
+    # tiebreak" even when qr_rank was the real decider). Three constructed
+    # pairs, each differing on a different tuple field, prove the mapping.
+    cand_a = adv._tournament_candidate(
+        strategy("cache.a", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    cand_b_lower_fit = adv._tournament_candidate(
+        strategy("cache.b", "cache", "usage.m", ">=", 1, "MED", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    reason = adv._deciding_criterion(cand_a, cand_b_lower_fit)
+    assert "HIGH" in reason and "MED" in reason, reason
+
+    cand_c_worse_risk = adv._tournament_candidate(
+        strategy("cache.c", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p", quality_risk="MED"),
+        nest({"usage.m": leaf(5)}))
+    reason2 = adv._deciding_criterion(cand_a, cand_c_worse_risk)
+    assert "quality risk" in reason2, reason2
+
+    cand_d_same_everything_higher_id = adv._tournament_candidate(
+        strategy("cache.z", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    reason3 = adv._deciding_criterion(cand_a, cand_d_same_everything_higher_id)
+    assert "cache.a" in reason3 and "cache.z" in reason3 and "tiebreak" in reason3, reason3
+
+
+def test_main_mode_narrows_tournament_field_and_notes_it():
+    # Finding m1: --mode silently narrowed the tournament's candidate field
+    # with no note. Fixed, the printed header names the mode and the exact
+    # count narrowed away, so the omission is never silent.
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main(["--mode", "conservative"])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+    assert rc == 0
+    real = adv.load_strategies()
+    n = len(adv.mode_strategies(real, "conservative"))
+    m = len(real)
+    assert n < m, (n, m)  # conservative must actually narrow this fixture, or the test proves nothing
+    assert f"field narrowed by mode conservative: {n} of {m} candidates" in out, out
 
 
 if __name__ == "__main__":

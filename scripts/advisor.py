@@ -69,21 +69,30 @@ field, is refused with the exact reason printed: no recipe is ever
 invented. See cmd_recipe() below.
 
 TREATMENT TOURNAMENT
-Each strategy names one "problem_class" (a small, boring enum: cache
-health, startup rent, overbuild, tool output, verbosity, boundaries).
-build_tournaments() groups strategies by that field and, for every class
-with 2 or more members, ranks the whole field deterministically: fit to
-the profile's own measured signal first (the band a strategy's own
-trigger reaches, NO DATA sorting last), then quality_risk ascending, then
-native before a companion install, then the strategy id as a stable
-tiebreak. One winner, the rest as subordinate "also considered" losers,
-each with the exact criterion that decided against it. A class with only
-one strategy has nothing to rank and is left out of the report. This
-never overrides advise()'s own best/alternatives/companion selection
-above: it is a second, independent view of the full field for a problem,
-so it can in principle name a different strategy than `best` when a
-companion legitimately outranks a native one on fit or risk within its
-own class. See build_tournaments() below.
+Each strategy names one "problem_class", one of the PROBLEM_CLASSES enum
+(cache health, startup rent, overbuild, tool output, verbosity,
+boundaries); load_strategies() refuses a strategy naming anything else,
+by the exact id, the same way it refuses a bad op or band. build_tournaments()
+groups strategies by that field and, for every class with 2 or more
+members, ranks the field deterministically: fit to the profile's own
+measured signal first (the band a strategy's own trigger reaches, NO DATA
+sorting last), then quality_risk ascending, then the strategy id as a
+stable tiebreak. One winner, the rest as subordinate "also considered"
+losers, each with the exact criterion that decided against it, derived
+from the first field of the sort tuple that actually differed (never a
+hardcoded guess). A class with only one strategy has nothing to rank and
+is left out of the report; so is a class where no native (non-companion)
+candidate has a real triggered signal, so a healthy profile's "do nothing"
+message is never followed by a tournament pretending otherwise.
+
+A companion strategy (category "companion", detect-and-measure cards like
+companion.token-saver included) can never be a tournament winner, the
+same exclusion advise() already applies to best/queue: it only ever
+appears as an "also considered" loser, tagged "(detect only, never a
+fix)". Within the problem class that contains advise()'s own `best`
+selection, the winner is seeded to be that exact strategy, so the
+tournament view can never contradict the card rendered above it: see
+build_tournaments()'s `best_id` parameter. See build_tournaments() below.
 
 USAGE
   python3 advisor.py
@@ -117,6 +126,12 @@ PROFILE_LABELS = {"MEASURED", "SIGNAL", "INFERRED", "NO DATA"}
 BANDS = {"HIGH": 3, "MED": 2, "LOW": 1}
 OPS = {">=", "<=", "=="}
 DECISIONS = {"accepted", "rejected", "suppressed"}
+
+# The small, boring enum a strategy's "problem_class" must be one of. A typo
+# (tool_ouput) or a null value used to silently drop a strategy out of every
+# tournament with no error; validated at load time, exactly like op and band.
+PROBLEM_CLASSES = {"cache_health", "startup_rent", "overbuild", "tool_output",
+                   "verbosity", "boundaries"}
 
 # The tournament's second ranking criterion, after fit. Lower risk ranks
 # first, same "ascending" sense the WORK spec names.
@@ -232,6 +247,8 @@ def load_strategies(path=DEFAULT_STRATEGIES):
                 raise ValueError(f"strategy {sid}: escalate missing value or band")
             if esc["band"] not in BANDS:
                 raise ValueError(f"strategy {sid}: escalate band {esc['band']!r} not in {sorted(BANDS)}")
+        if s["problem_class"] not in PROBLEM_CLASSES:
+            raise ValueError(f"strategy {sid}: problem_class {s['problem_class']!r} not in {sorted(PROBLEM_CLASSES)}")
         if s["evidence"] not in EVIDENCE_LABELS:
             raise ValueError(f"strategy {sid}: evidence {s['evidence']!r} not in {sorted(EVIDENCE_LABELS)}")
         if not s.get("source"):
@@ -551,7 +568,7 @@ def _deciding_criterion(better, worse):
     return f"stable id tiebreak ({better['strategy']['id']} before {worse['strategy']['id']})"
 
 
-def build_tournaments(strategies, profile):
+def build_tournaments(strategies, profile, best_id=None):
     """For every problem_class shared by 2 or more of `strategies`, the full
     ranked field for that problem: one winner and the rest as "also
     considered" losers, each with the exact criterion that decided against
@@ -560,6 +577,24 @@ def build_tournaments(strategies, profile):
     order, independent of strategies.json's own ordering, so the report is
     deterministic. A strategy carrying no problem_class (only possible for
     synthetic test data built without one) is never grouped, never crashes.
+
+    A class renders only when a native (non-companion) candidate has a real
+    triggered signal (fit_rank > 0, not NO DATA, not "did not trigger") --
+    OR it is the class containing `best_id`, which always renders since
+    advise() already decided it deserves the top card. A profile with
+    nothing real anywhere (do_nothing) therefore produces no tournaments at
+    all: the "do nothing" message stays the only headline, never followed
+    by a contradicting winner.
+
+    A companion strategy never wins: it is excluded from the winner pool the
+    same way advise() excludes it from best/queue, and always renders as an
+    "also considered" loser tagged "(detect only, never a fix)" rather than
+    compared on fit.
+
+    `best_id`, when given, is advise()'s own `best` card's strategy id. The
+    problem_class containing it has its winner seeded to be that exact
+    strategy: alignment by construction, so the tournament can never name a
+    different winner than the card already rendered above it.
     """
     groups = {}
     for s in strategies:
@@ -575,19 +610,53 @@ def build_tournaments(strategies, profile):
             continue
         candidates = sorted((_tournament_candidate(s, profile) for s in members),
                              key=_tournament_key)
-        winner, *losers = candidates
-        runner_up = losers[0]
-        if winner["no_data"]:
-            why_won = (f"NO DATA: no candidate for {pc} could be evaluated on this "
-                       "profile; ranked first only by the stable id tiebreak.")
+        has_real_native_signal = any(not c["is_companion"] and c["fit_rank"] > 0
+                                      for c in candidates)
+        natives = [c for c in candidates if not c["is_companion"]]
+        natural_winner = min(natives, key=_tournament_key) if natives else None
+        forced = best_id is not None and any(
+            c["strategy"]["id"] == best_id for c in candidates)
+        if not has_real_native_signal and not forced:
+            continue
+
+        if forced:
+            winner = next(c for c in candidates if c["strategy"]["id"] == best_id)
         else:
-            why_won = _deciding_criterion(winner, runner_up)
+            if natural_winner is None:
+                continue
+            winner = natural_winner
+        # True whenever the seeded winner is also what the field's own
+        # ranking would have picked, native-vs-native: the common case, and
+        # the only one where a comparative reason is safe to print (the
+        # winner is then guaranteed no worse than any native loser by the
+        # sort tuple, so _deciding_criterion's "X beats Y" is never a lie).
+        aligned_naturally = (natural_winner is not None
+                             and natural_winner["strategy"]["id"] == winner["strategy"]["id"])
+
+        losers = [c for c in candidates if c is not winner]
+        native_losers = [c for c in losers if not c["is_companion"]]
+
+        if not aligned_naturally:
+            why_won = (f"this is the card recommended above for {pc}; "
+                       "this problem's tournament winner is seeded to match it.")
+        elif native_losers:
+            why_won = _deciding_criterion(winner, native_losers[0])
+        else:
+            why_won = "only native candidate for this problem."
 
         also_considered = []
         for loser in losers:
-            if loser["no_data"]:
+            if loser["is_companion"]:
+                why_lost = "(detect only, never a fix)"
+            elif loser["no_data"]:
                 metric_name = loser["strategy"]["trigger"]["metric"].split(".")[-1].replace("_", " ")
                 why_lost = f"NO DATA: {metric_name} could not be read from your profile"
+            elif _tournament_key(loser) < _tournament_key(winner):
+                # Only reachable when the seeded winner was not the field's
+                # own pick: a loser that the sort tuple actually prefers.
+                # Naming a false "X beats Y" here would repeat the bug this
+                # unit fixes, so this stays a flat, always-true statement.
+                why_lost = "the recommended card above stays this problem's pick"
             else:
                 why_lost = _deciding_criterion(winner, loser)
             also_considered.append({
@@ -676,7 +745,8 @@ def advise(profile, treatments=None, strategies=None, facts=None, today=None):
         "advisor_cost_tokens": 0,
         "insufficient": insufficient,
         "suppressed_by_companion": suppressed_by_companion,
-        "tournaments": build_tournaments(strategies, profile),
+        "tournaments": build_tournaments(strategies, profile,
+                                         best_id=best_card["id"] if best_card else None),
     }
     if do_nothing:
         hit = _get_leaf(profile, "usage.cache_hit_ratio_median")
@@ -863,9 +933,22 @@ def _print_card(card):
     print()
 
 
-def _print_tournaments(tournaments):
+def _print_tournaments(tournaments, mode=None, narrowed=None):
+    """Print the tournament section, headed by a one-line note that the
+    recommended card above stays the recommendation (this section is a
+    second view of the field, never a second recommendation) and, when
+    `mode` narrowed the field before ranking, how much of it is missing:
+    `narrowed` is (n, m), the strategies actually considered vs the full
+    unfiltered set, so a mode-driven omission is never silent.
+    """
     if not tournaments:
         return
+    header = ("Tournament view: how each problem's candidates compare "
+              "(the recommended card above stays the recommendation).")
+    if mode and narrowed:
+        n, m = narrowed
+        header += f" field narrowed by mode {mode}: {n} of {m} candidates."
+    print(header)
     print("=== Treatment tournament ===")
     for t in tournaments:
         w = t["winner"]
@@ -954,6 +1037,7 @@ def main(argv=None):
         return 2
 
     strategies = load_strategies()
+    full_count = len(strategies)
     if mode:
         strategies = mode_strategies(strategies, mode)
     sync_companion_suppressions(strategies, load_active_companions(), profile)
@@ -978,7 +1062,8 @@ def main(argv=None):
     if result["suppressed_by_companion"]:
         print(f"suppressed {len(result['suppressed_by_companion'])} duplicate card(s): "
               "an installed, active companion already owns that capability")
-    _print_tournaments(result["tournaments"])
+    _print_tournaments(result["tournaments"], mode=mode,
+                       narrowed=(len(strategies), full_count) if mode else None)
     print("Advisor cost: 0 tokens (deterministic)")
     return 0
 
