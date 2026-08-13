@@ -1,6 +1,6 @@
 {
-  "schema": 1,
-  "updated": "2026-08-12",
+  "schema": 2,
+  "updated": "2026-08-13",
   "companions": [
     {
       "name": "ponytail",
@@ -10,7 +10,10 @@
       "when": "profile shows overbuilding: large diffs per accepted change",
       "benefit": "smaller diffs, YAGNI ladder",
       "drawback": "can under-build; user must ask for the full version when needed",
-      "uninstall": "claude plugin uninstall ponytail"
+      "uninstall": "claude plugin uninstall ponytail",
+      "tested_version_range": {"min": "4.9.0", "max": "4.9.0", "tested_on": "2026-08-13"},
+      "hook_footprint": ["SessionStart", "SubagentStart", "UserPromptSubmit"],
+      "last_reviewed": "2026-08-13"
     },
     {
       "name": "caveman",
@@ -20,7 +23,10 @@
       "when": "output tokens are the measured pain AND corrective turns are not rising",
       "benefit": "compressed narration",
       "drawback": "compression prompt has its own overhead; net negative for users who need explanations; never for user-facing prose",
-      "uninstall": "claude plugin uninstall caveman"
+      "uninstall": "claude plugin uninstall caveman",
+      "tested_version_range": {"min": "0d95a81d35a9", "max": "0d95a81d35a9", "tested_on": "2026-08-13"},
+      "hook_footprint": ["SessionStart", "UserPromptSubmit"],
+      "last_reviewed": "2026-08-13"
     },
     {
       "name": "token-saver",
@@ -31,7 +37,10 @@
       "benefit": "compresses noisy shell output before the model reads it",
       "drawback": "compressed output must never stand as evidence where exact text matters; needs Python 3.10+",
       "uninstall": "claude plugin uninstall token-saver",
-      "note": "This is ppgranger's token-saver, a different project from ww-w-ai/claude-code-token-saver."
+      "note": "This is ppgranger's token-saver, a different project from ww-w-ai/claude-code-token-saver.",
+      "tested_version_range": {"min": "2.7.1", "max": "2.7.1", "tested_on": "2026-08-13"},
+      "hook_footprint": ["PreToolUse", "SessionStart"],
+      "last_reviewed": "2026-08-13"
     }
   ],
   "mentions": [
@@ -39,25 +48,29 @@
       "name": "context-mode",
       "repo": "github.com/mksglu/context-mode",
       "reason": "",
-      "status": "not vetted on this machine"
+      "status": "not vetted on this machine",
+      "last_reviewed": "never"
     },
     {
       "name": "claude-dcp",
       "repo": "github.com/exploreborders/claude-dcp",
       "reason": "",
-      "status": "not vetted on this machine"
+      "status": "not vetted on this machine",
+      "last_reviewed": "never"
     },
     {
       "name": "ccusage",
       "repo": "github.com/ccusage/ccusage",
       "reason": "usage accounting for multi-agent users",
-      "status": "not vetted on this machine"
+      "status": "not vetted on this machine",
+      "last_reviewed": "never"
     },
     {
       "name": "claude-code-token-saver",
       "repo": "github.com/ww-w-ai/claude-code-token-saver",
       "reason": "different project from the installed token-saver; compat note only",
-      "status": "not vetted on this machine"
+      "status": "not vetted on this machine",
+      "last_reviewed": "never"
     }
   ]
 }
