@@ -227,8 +227,13 @@ def main(argv):
     if cmd == "advise":
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
+        rest = argv[1:]
+        if "--deep" in rest:
+            rest = [a for a in rest if a != "--deep"]
+            return subprocess.run(
+                [sys.executable, os.path.join(here, "deep_advisor.py")] + rest).returncode
         return subprocess.run(
-            [sys.executable, os.path.join(here, "advisor.py")] + argv[1:]).returncode
+            [sys.executable, os.path.join(here, "advisor.py")] + rest).returncode
     if cmd == "report":
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
