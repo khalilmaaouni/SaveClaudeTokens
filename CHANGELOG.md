@@ -5,6 +5,17 @@ Keep a Changelog. Entries are newest first.
 
 ## Unreleased
 
+- Companion adapter layer (scripts/companions/): one read-only contract with
+  an adapter each for ponytail, caveman and token-saver. Every fact an
+  adapter reports (status, version, modes, activation command, rollback
+  command) is read from data/companions.json plus the discovery state;
+  a registry entry missing an evidence field is REFUSED with the missing
+  field named, never defaulted. No entry currently declares modes, so every
+  adapter reports modes as NO DATA with its reason. Adapters never write.
+- The Python 3.11 gate now descends into package subdirectories under
+  scripts/ (it globbed scripts/*.py only, so scripts/companions/ sat outside
+  the gate CI runs before the suite).
+
 - v1.8 wave 1, part 1: companion registry schema v2 (data/companions.json now
   carries tested_version_range, hook_footprint, and last_reviewed per entry,
   hand-verified against this machine's own claude plugin output), native
