@@ -68,6 +68,23 @@ is not in the curated registry, or a registry entry missing a required
 field, is refused with the exact reason printed: no recipe is ever
 invented. See cmd_recipe() below.
 
+TREATMENT TOURNAMENT
+Each strategy names one "problem_class" (a small, boring enum: cache
+health, startup rent, overbuild, tool output, verbosity, boundaries).
+build_tournaments() groups strategies by that field and, for every class
+with 2 or more members, ranks the whole field deterministically: fit to
+the profile's own measured signal first (the band a strategy's own
+trigger reaches, NO DATA sorting last), then quality_risk ascending, then
+native before a companion install, then the strategy id as a stable
+tiebreak. One winner, the rest as subordinate "also considered" losers,
+each with the exact criterion that decided against it. A class with only
+one strategy has nothing to rank and is left out of the report. This
+never overrides advise()'s own best/alternatives/companion selection
+above: it is a second, independent view of the full field for a problem,
+so it can in principle name a different strategy than `best` when a
+companion legitimately outranks a native one on fit or risk within its
+own class. See build_tournaments() below.
+
 USAGE
   python3 advisor.py
   python3 advisor.py --mode conservative|balanced|aggressive
@@ -100,6 +117,10 @@ PROFILE_LABELS = {"MEASURED", "SIGNAL", "INFERRED", "NO DATA"}
 BANDS = {"HIGH": 3, "MED": 2, "LOW": 1}
 OPS = {">=", "<=", "=="}
 DECISIONS = {"accepted", "rejected", "suppressed"}
+
+# The tournament's second ranking criterion, after fit. Lower risk ranks
+# first, same "ascending" sense the WORK spec names.
+QUALITY_RISK_RANK = {"LOW": 1, "MED": 2, "HIGH": 3}
 
 # The three intent words a non-technical user can say instead of picking
 # strategy ids. Ordered least to most invasive; mode_strategies() below is
@@ -148,7 +169,7 @@ DASHES = ("\u2013", "\u2014")  # en dash, em dash: never allowed in any strategy
 CATEGORY_PRIORITY = ["cache", "startup", "output", "redundancy", "boundaries",
                      "routing", "memory", "verbosity", "overbuild", "companion"]
 
-REQUIRED_FIELDS = ["id", "category", "title", "trigger", "what_it_changes",
+REQUIRED_FIELDS = ["id", "category", "problem_class", "title", "trigger", "what_it_changes",
                    "expected_benefit", "evidence", "drawback", "quality_risk",
                    "reversibility", "how_measured", "if_you_say_no",
                    "alternatives", "companion", "requires_confirmation", "source",
@@ -480,6 +501,112 @@ def _sort_key(entry):
     return (-BANDS[band], cat_rank)
 
 
+def _tournament_candidate(strategy, profile):
+    """One strategy's standing in its problem_class tournament: the band its
+    own trigger reaches against `profile` (reusing _evaluate_trigger, never a
+    second evaluator), or "NO DATA" when the profile cannot answer, or "did
+    not trigger" when it can but the threshold is not met. No new scoring
+    data, only what the trigger and quality_risk fields already carry.
+    """
+    band = _evaluate_trigger(profile, strategy["trigger"])
+    no_data = band is None
+    fit_rank = 0 if no_data else (BANDS[band] if band else 0)
+    fit_label = "NO DATA" if no_data else (band if band else "did not trigger")
+    quality_risk = strategy["quality_risk"]
+    return {
+        "strategy": strategy,
+        "no_data": no_data,
+        "fit_rank": fit_rank,
+        "fit_label": fit_label,
+        "quality_risk": quality_risk,
+        "qr_rank": QUALITY_RISK_RANK.get(quality_risk, 99),
+        "is_companion": strategy["category"] == "companion",
+    }
+
+
+def _tournament_key(candidate):
+    """The ratified tournament order: NO DATA sorts last, then highest fit,
+    then lowest quality_risk, then native before companion, then the
+    strategy id as a stable tiebreak reachable only once everything else
+    ties.
+    """
+    return (candidate["no_data"], -candidate["fit_rank"], candidate["qr_rank"],
+            candidate["is_companion"], candidate["strategy"]["id"])
+
+
+def _deciding_criterion(better, worse):
+    """The first field, in ranking order, where `better` and `worse` differ:
+    the same criterion _tournament_key sorts on, named in plain words rather
+    than left as a tuple. Never invents a reason past what the two
+    candidates' own fields already show.
+    """
+    if better["no_data"] != worse["no_data"]:
+        return "a real signal on this profile beats NO DATA"
+    if better["fit_rank"] != worse["fit_rank"]:
+        return f"fit {better['fit_label']} beats {worse['fit_label']}"
+    if better["qr_rank"] != worse["qr_rank"]:
+        return f"lower quality risk ({better['quality_risk']} vs {worse['quality_risk']})"
+    if better["is_companion"] != worse["is_companion"]:
+        return "a native treatment ranks before a companion install"
+    return f"stable id tiebreak ({better['strategy']['id']} before {worse['strategy']['id']})"
+
+
+def build_tournaments(strategies, profile):
+    """For every problem_class shared by 2 or more of `strategies`, the full
+    ranked field for that problem: one winner and the rest as "also
+    considered" losers, each with the exact criterion that decided against
+    it. A problem_class with only one candidate has nothing to rank and is
+    left out entirely. Groups are examined in alphabetical problem_class
+    order, independent of strategies.json's own ordering, so the report is
+    deterministic. A strategy carrying no problem_class (only possible for
+    synthetic test data built without one) is never grouped, never crashes.
+    """
+    groups = {}
+    for s in strategies:
+        pc = s.get("problem_class")
+        if not pc:
+            continue
+        groups.setdefault(pc, []).append(s)
+
+    tournaments = []
+    for pc in sorted(groups):
+        members = groups[pc]
+        if len(members) < 2:
+            continue
+        candidates = sorted((_tournament_candidate(s, profile) for s in members),
+                             key=_tournament_key)
+        winner, *losers = candidates
+        runner_up = losers[0]
+        if winner["no_data"]:
+            why_won = (f"NO DATA: no candidate for {pc} could be evaluated on this "
+                       "profile; ranked first only by the stable id tiebreak.")
+        else:
+            why_won = _deciding_criterion(winner, runner_up)
+
+        also_considered = []
+        for loser in losers:
+            if loser["no_data"]:
+                metric_name = loser["strategy"]["trigger"]["metric"].split(".")[-1].replace("_", " ")
+                why_lost = f"NO DATA: {metric_name} could not be read from your profile"
+            else:
+                why_lost = _deciding_criterion(winner, loser)
+            also_considered.append({
+                "id": loser["strategy"]["id"],
+                "title": loser["strategy"]["title"],
+                "fit": loser["fit_label"],
+                "why_lost": why_lost,
+            })
+
+        tournaments.append({
+            "problem_class": pc,
+            "winner": {"id": winner["strategy"]["id"], "title": winner["strategy"]["title"],
+                       "fit": winner["fit_label"]},
+            "why_won": why_won,
+            "also_considered": also_considered,
+        })
+    return tournaments
+
+
 def advise(profile, treatments=None, strategies=None, facts=None, today=None):
     """Deterministic advice from a profile. Pure function apart from two
     reads: the ISO string used to compare treatment expiry against, and (when
@@ -549,6 +676,7 @@ def advise(profile, treatments=None, strategies=None, facts=None, today=None):
         "advisor_cost_tokens": 0,
         "insufficient": insufficient,
         "suppressed_by_companion": suppressed_by_companion,
+        "tournaments": build_tournaments(strategies, profile),
     }
     if do_nothing:
         hit = _get_leaf(profile, "usage.cache_hit_ratio_median")
@@ -735,6 +863,21 @@ def _print_card(card):
     print()
 
 
+def _print_tournaments(tournaments):
+    if not tournaments:
+        return
+    print("=== Treatment tournament ===")
+    for t in tournaments:
+        w = t["winner"]
+        print(f"[{t['problem_class']}] winner: {w['title']}  (id: {w['id']}, fit: {w['fit']})")
+        print(f"  why this won: {t['why_won']}")
+        print("  also considered:")
+        for loser in t["also_considered"]:
+            print(f"    - {loser['title']}  (id: {loser['id']}): fit {loser['fit']}, "
+                  f"lost: {loser['why_lost']}")
+        print()
+
+
 def cmd_decide(strategy_id, choice):
     """Handle `advisor.py --decide <strategy-id> <done|not-now|never>`. Maps
     the plain-word dashboard/CLI choice onto the existing accepted/rejected/
@@ -835,6 +978,7 @@ def main(argv=None):
     if result["suppressed_by_companion"]:
         print(f"suppressed {len(result['suppressed_by_companion'])} duplicate card(s): "
               "an installed, active companion already owns that capability")
+    _print_tournaments(result["tournaments"])
     print("Advisor cost: 0 tokens (deterministic)")
     return 0
 

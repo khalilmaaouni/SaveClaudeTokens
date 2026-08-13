@@ -51,14 +51,15 @@ def nest(flat):
 
 
 def strategy(sid, category, metric, op, value, band, evidence="MEASURED", escalate=None,
-             companion=None):
+             companion=None, problem_class=None, quality_risk="LOW"):
     trig = {"metric": metric, "op": op, "value": value, "band": band}
     if escalate:
         trig["escalate"] = escalate
     return {
-        "id": sid, "category": category, "title": f"title {sid}",
+        "id": sid, "category": category, "problem_class": problem_class,
+        "title": f"title {sid}",
         "trigger": trig, "what_it_changes": "x", "expected_benefit": "x",
-        "evidence": evidence, "drawback": "x", "quality_risk": "LOW",
+        "evidence": evidence, "drawback": "x", "quality_risk": quality_risk,
         "reversibility": "x", "how_measured": "x", "if_you_say_no": "x",
         "alternatives": [], "companion": companion, "requires_confirmation": False,
         "source": "A1",
@@ -784,6 +785,93 @@ def test_stale_fact_carries_staleness_to_the_user():
     out = printed.getvalue()
     assert "FACT STALE" in out and "A1" in out, out
     assert "2026-06-30" in out, out
+
+
+def test_tournament_ranks_two_candidates_winner_and_visible_loser():
+    # Two candidates for the same problem, different fit: the higher band
+    # wins deterministically and the loser is still visible, one level
+    # deeper, with the criterion that decided against it.
+    strategies = [
+        strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="cache_health"),
+        strategy("routing.b", "routing", "usage.m1", ">=", 1, "MED", problem_class="cache_health"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    tournaments = result["tournaments"]
+    assert len(tournaments) == 1, tournaments
+    t = tournaments[0]
+    assert t["problem_class"] == "cache_health"
+    assert t["winner"]["id"] == "cache.a", t["winner"]
+    assert "HIGH" in t["why_won"] and "MED" in t["why_won"], t["why_won"]
+    assert len(t["also_considered"]) == 1
+    loser = t["also_considered"][0]
+    assert loser["id"] == "routing.b"
+    assert loser["fit"] == "MED"
+    assert "MED" in loser["why_lost"], loser["why_lost"]
+
+
+def test_tournament_native_before_companion_at_equal_fit():
+    # Calibrated: with the native-before-companion tiebreak inverted
+    # (is_companion sorted before native at equal fit and risk), the
+    # companion wins here instead and this test goes red; restored, native
+    # wins again and it is green.
+    strategies = [
+        strategy("output.native", "output", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
+        strategy("companion.comp", "companion", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    t = result["tournaments"][0]
+    assert t["winner"]["id"] == "output.native", t["winner"]
+    assert "native" in t["why_won"], t["why_won"]
+    assert t["also_considered"][0]["id"] == "companion.comp"
+
+
+def test_tournament_missing_signal_renders_no_data_reason():
+    # A candidate whose own trigger metric is absent from the profile: its
+    # loss is reported as NO DATA, never a guessed comparison.
+    strategies = [
+        strategy("cache.fired", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="cache_health"),
+        strategy("routing.no-signal", "routing", "usage.missing", ">=", 1, "MED",
+                  problem_class="cache_health"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    t = result["tournaments"][0]
+    assert t["winner"]["id"] == "cache.fired"
+    loser = t["also_considered"][0]
+    assert loser["id"] == "routing.no-signal"
+    assert loser["fit"] == "NO DATA", loser["fit"]
+    assert loser["why_lost"].startswith("NO DATA:"), loser["why_lost"]
+    assert "missing" in loser["why_lost"], loser["why_lost"]
+
+
+def test_tournament_skips_single_candidate_problem_classes():
+    strategies = [strategy("cache.solo", "cache", "usage.m1", ">=", 1, "HIGH",
+                            problem_class="cache_health")]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    assert result["tournaments"] == []
+
+
+def test_real_strategies_json_carries_a_problem_class_and_tournaments():
+    real = adv.load_strategies(STRATEGIES_PATH)
+    for s in real:
+        assert s.get("problem_class"), s["id"]
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    result = adv.advise(profile, {}, real)
+    classes = {t["problem_class"] for t in result["tournaments"]}
+    assert "cache_health" in classes, classes
+    cache_health = next(t for t in result["tournaments"] if t["problem_class"] == "cache_health")
+    assert cache_health["winner"]["id"] == "cache.fixed-parent-model"
+    assert any(l["id"] == "routing.subagent-not-switch" for l in cache_health["also_considered"])
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_tournaments(result["tournaments"])
+    out = printed.getvalue()
+    assert "also considered" in out and "cache_health" in out, out
 
 
 if __name__ == "__main__":
