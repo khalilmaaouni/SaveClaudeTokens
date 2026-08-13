@@ -16,6 +16,14 @@ Keep a Changelog. Entries are newest first.
   at all when the rules already decided. The model callable is injected, so
   no test ever makes a live call.
 
+- Update resilience (unit U1): companion discovery now records each
+  companion's version, and the doctor renders a VERSION DRIFT section
+  comparing the live version against the recorded one. A companion with no
+  recorded version is NO DATA, never "no drift". When an experiment is open
+  and a companion version changed inside its window, the doctor prints an
+  explicit spanning-experiment warning, because a companion moving
+  mid-experiment is a confound the result cannot be attributed through.
+
 - Companion adapter layer (scripts/companions/): one read-only contract with
   an adapter each for ponytail, caveman and token-saver. Every fact an
   adapter reports (status, version, modes, activation command, rollback

@@ -34,6 +34,7 @@ import sys
 import time
 
 import discover_companions as dc
+import experiment as ex
 import profile as pf
 import token_shield as ts
 
@@ -189,12 +190,111 @@ def _ownership_lines(companions, state, compat_data):
     return lines
 
 
+def _version_drift_lines(drift):
+    """Render a dc.version_drift() result (drift["no_data"] is False) to
+    print-ready lines: one DRIFT line per companion whose version moved,
+    one NO DATA line per companion the state never recorded a version for.
+    An empty return means neither happened; report() supplies the "no
+    drift" clean line for that case, not this function, so a caller can
+    never mistake "not yet checked" for "checked, found nothing"."""
+    lines = []
+    for d in drift["drifted"]:
+        observed = f" (observed {d['recorded_at']})" if d.get("recorded_at") else ""
+        lines.append(f"  DRIFT: {d['name']}: recorded {d['recorded_version']}"
+                     f"{observed} -> live {d['live_version']}")
+    for m in drift["missing"]:
+        lines.append(f"  NO DATA: {m['name']}: no recorded version to compare "
+                     f"(live {m['live_version']})")
+    return lines
+
+
+def _open_experiments(exp_dir=None):
+    """Every experiment baseline pinned by `experiment.py start`, read from
+    ex.EXP_DIR (the same directory cmd_start writes to and cmd_end reads
+    from): one dict per label, {"label", "started"}. Read only, never
+    writes.
+
+    ponytail: experiment.py never deletes or flags a baseline file once
+    `experiment.py end` has closed it (confirmed by reading cmd_end: no
+    os.remove, no "ended" key written back), so this cannot yet tell a
+    still-running experiment from an already-closed one; it reports every
+    pinned baseline as open. Upgrade path if that starts producing false
+    positives: cross-check ex.LEDGER for a later record with the same
+    label and drop it from this list."""
+    exp_dir = exp_dir or ex.EXP_DIR
+    if not os.path.isdir(exp_dir):
+        return []
+    open_experiments = []
+    for fname in sorted(os.listdir(exp_dir)):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(exp_dir, fname)) as f:
+                baseline = json.load(f)
+        except (OSError, ValueError):
+            continue
+        label = baseline.get("label")
+        started = baseline.get("started")
+        if label and started:
+            open_experiments.append({"label": label, "started": started})
+    return open_experiments
+
+
+def _parse_iso_utc(s):
+    """Epoch seconds for the naive "YYYY-MM-DDTHH:MM:SS" prefix shared by
+    both ISO-UTC formats this codebase writes: discover_companions'
+    "...SSZ" and experiment.py's _iso()'s "...SS+0000". Both name UTC, so
+    the shared 19-character prefix alone is enough to compare them
+    chronologically. Returns None on anything that does not match, never
+    raises."""
+    if not isinstance(s, str) or len(s) < 19:
+        return None
+    try:
+        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+
+
+def _spanning_warning_lines(open_experiments, drifted):
+    """One line per (open experiment, drifted companion) pair where the
+    companion's recorded_at (the last time its now-stale recorded version
+    was itself confirmed current) falls at or after the experiment's own
+    "started" timestamp. The actual version bump happened strictly after
+    recorded_at, so recorded_at >= started guarantees the bump also falls
+    after started, inside the experiment's still-open window: a confound
+    for that experiment's attribution. A drift whose recorded_at predates
+    the experiment start is ambiguous (the bump could equally have
+    happened before the experiment opened) and is never warned about,
+    matching NO DATA beats a guess."""
+    lines = []
+    for exp in open_experiments:
+        started_epoch = _parse_iso_utc(exp.get("started"))
+        if started_epoch is None:
+            continue
+        for d in drifted:
+            recorded_epoch = _parse_iso_utc(d.get("recorded_at"))
+            if recorded_epoch is None or recorded_epoch < started_epoch:
+                continue
+            lines.append(
+                f"  SPANNING EXPERIMENT WARNING: experiment '{exp['label']}' now spans "
+                f"a companion change: {d['name']} moved {d['recorded_version']} -> "
+                f"{d['live_version']} during its window (started {exp['started']}); "
+                f"attribution for this experiment can no longer be trusted.")
+    return lines
+
+
 def report():
     companions_data = ts.load_companions(ts.COMPANIONS_PATH)
     if not companions_data:
         print("NO DATA: data/companions.json not found or unreadable.")
         return 0
     companions = companions_data.get("companions", [])
+
+    # Loaded before _ensure_fresh_state() below, which may overwrite the
+    # state file when it is stale: this is the "recorded" snapshot version
+    # drift compares the live check against, and it must be read before
+    # any refresh could clobber it with the live values.
+    old_state = _load_state()
 
     state = _ensure_fresh_state()
 
@@ -235,6 +335,26 @@ def report():
     else:
         for line in _ownership_lines(companions, state, compat_data):
             print(line)
+    print()
+
+    print("Version drift")
+    live = dc.discover()
+    drift = dc.version_drift([c["name"] for c in companions], live, old_state)
+    if drift["no_data"]:
+        if old_state is None and live is None:
+            print("  NO DATA: no companion state file, and live discovery failed.")
+        elif old_state is None:
+            print("  NO DATA: no companion state file yet (run discover_companions.py "
+                  "once to establish a baseline).")
+        else:
+            print("  NO DATA: live discovery failed (`claude plugin list --json`).")
+    else:
+        lines = _version_drift_lines(drift)
+        for line in (lines or ["  no version drift among curated companions."]):
+            print(line)
+        if drift["drifted"]:
+            for line in _spanning_warning_lines(_open_experiments(), drift["drifted"]):
+                print(line)
     return 0
 
 
