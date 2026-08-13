@@ -850,6 +850,81 @@ def render_experiment_history(rows):
     return "".join(parts)
 
 
+def _cpill(label):
+    """A confidence badge, reusing the cpill classes already styled in CSS:
+    ver (good/green) for VERIFIED, est (warn) for ESTIMATED, and the bare
+    muted cpill for everything else (MEASURED, NO DATA)."""
+    cls = {"VERIFIED": "cpill ver", "ESTIMATED": "cpill est"}.get(label, "cpill")
+    return f'<span class="{cls}">{esc(label)}</span>'
+
+
+def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_result):
+    """Four things a non-technical reader can take in in ten seconds. Every
+    cell reuses a number this render already computed elsewhere on the page
+    (verified_by_label rows, the companion install check render_companions
+    already runs, the ranked prescriptions list, the advisor's own pick);
+    nothing here is re-derived. Confidence label always accompanies the
+    value; an empty proof ledger says NO DATA, never zero.
+    """
+    parts = ['<h2>At a glance</h2>', '<div class="grid topstrip">']
+
+    # 1. Verified improvement: latest VERIFIED record per label, never summed.
+    if not verified:
+        v_label, v_val, v_note = ("NO DATA", "NO DATA",
+                                  "no closed experiment in the proof ledger yet")
+    elif len(verified) == 1:
+        r = verified[0]
+        v_label = "VERIFIED"
+        v_val = f'{r["floor_reduction"]:+,}'
+        v_note = f'startup-floor tokens on {esc(r["label"])}'
+    else:
+        v_label = "VERIFIED"
+        v_val = f'{len(verified)} labels'
+        v_note = "each label's own figure, never summed"
+    parts.append(stat(f'Verified improvement {_cpill(v_label)}', esc(v_val), esc(v_note),
+                      v_label == "NO DATA"))
+
+    # 2. Current stack: installed companion plugins, the same cheap directory
+    # read render_companions() already runs per companion.
+    names = (companions_data or {}).get("companions") or []
+    if not names:
+        s_label, s_val, s_note = "NO DATA", "NO DATA", "data/companions.json not found or empty"
+    else:
+        installed = sum(1 for c in names if _installed_companion(c["name"], cache_root))
+        s_label = "MEASURED"
+        s_val = f'{installed}/{len(names)}'
+        s_note = "companion plugins installed on this machine"
+    parts.append(stat(f'Current stack {_cpill(s_label)}', esc(s_val), esc(s_note),
+                      s_label == "NO DATA"))
+
+    # 3. Largest remaining problem: the dashboard's own top-ranked issue card.
+    if not ranked_rx:
+        p_label, p_val, p_note = ("MEASURED", "None ranked",
+                                  "every measured pattern is inside its healthy range")
+    else:
+        top = ranked_rx[0]
+        p_label, p_val, p_note = "ESTIMATED", top["title"], top["measure"]
+    parts.append(stat(f'Largest remaining problem {_cpill(p_label)}', esc(p_val), esc(p_note),
+                      False))
+
+    # 4. Next best move: the advisor's own top pick when one fired, else the
+    # top issue card's own painkiller line.
+    if advise_result and not advise_result.get("do_nothing") and advise_result.get("best"):
+        best = advise_result["best"]
+        m_label = best.get("evidence") or "ESTIMATED"
+        m_val, m_note = best["title"], best.get("why_selected", "")
+    elif ranked_rx:
+        m_label = "ESTIMATED"
+        m_val, m_note = ranked_rx[0]["painkiller"], f'from "{ranked_rx[0]["title"]}"'
+    else:
+        m_label, m_val, m_note = "NO DATA", "NO DATA", "no profile and no ranked issue to advise on"
+    parts.append(stat(f'Next best move {_cpill(m_label)}', esc(m_val), esc(m_note),
+                      m_label == "NO DATA"))
+
+    parts.append('</div>')
+    return "".join(parts)
+
+
 # ALERTS BAND thresholds. MEASURED triggers: crossing one of these means
 # something is actively costing tokens right now, so they are deliberately
 # stricter than the advisor's own ranking thresholds in data/strategies.json
@@ -1040,10 +1115,12 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     # can act on, not a dollar estimate of Anthropic's own caching.
     pp = pain_points(sessions)
     rx = prescriptions(sm, sessions)
+    ranked_rx = sorted(rx, key=lambda x: -x["saving"])
     total_rx = sum(r["saving"] for r in rx)
     share = sm["first_request_share_median"]
     hit = sm["hit_ratio_median"]
     sub = sm["subagent_output_share"]
+    cache_root = plugin_cache_root or os.path.expanduser("~/.claude/plugins/cache")
 
     parts = [f"<style>{CSS}</style>", '<div class="wrap">']
     parts.append(f'<div class="top">{SHIELD_SVG}<div>'
@@ -1053,6 +1130,11 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                  f'{days:g} days. Every figure is read from the API usage counters, never '
                  f'estimated. Measured on this machine; the method is portable, these numbers '
                  f'are not.</p>')
+
+    # TOP STRIP, above even the alerts band: four things a non-technical
+    # reader can take in in ten seconds. Every cell reuses a number this
+    # render already computed, never a re-derived figure.
+    parts.append(render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_result))
 
     # ALERTS BAND, at the top on purpose: a deterministic threshold crossing
     # is the one thing worth seeing before anything else on the page.
@@ -1071,7 +1153,6 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     # down is something the user can move by acting (a habit, a config edit,
     # a card decision), never a cache mechanic they cannot touch.
     parts.append('<h2>What you can still influence</h2>')
-    cache_root = plugin_cache_root or os.path.expanduser("~/.claude/plugins/cache")
     parts.append(render_next_best_move(advise_result))
     parts.append(render_observed_pattern(profile))
     parts.append(render_recommendation_queue(advise_result, suppressed_n, companion_suppressed_n))
@@ -1109,7 +1190,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                      '<div class="fix">Keep the shield on and re-check monthly.</div></div></div>')
     else:
         pain = ['<div class="pain">']
-        for i, r in enumerate(sorted(rx, key=lambda x: -x["saving"]), 1):
+        for i, r in enumerate(ranked_rx, 1):
             impact = 'HIGH' if i == 1 else 'MEDIUM'
             lt = r.get("longterm", "")
             lt_html = f'<br><b class="lt">Long-term fix.</b> {lt}' if lt else ''
