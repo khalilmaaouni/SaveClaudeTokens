@@ -1,0 +1,24 @@
+[project]
+name = "token-shield-mcp"
+version = "1.7.1"
+description = "Token Shield MCP server: read-only wrapper over the token-shield scripts, wave 1 (nine tools, three resources)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# Pinned to the exact version confirmed present on PyPI at build time (pip
+# index versions mcp, 2026-08-13), not guessed from memory. Held at the
+# latest 1.x release rather than the newly-released mcp 2.0.0: 2.0.0 dropped
+# the FastMCP high-level API this server is built on in favor of an
+# unreleased-at-training-time callback API, too big a surface to hand-roll
+# without its own docs. See the deviation note in the build's closing report.
+dependencies = ["mcp==1.29.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+token-shield-mcp = "token_shield_mcp.server:main"

@@ -3,6 +3,31 @@
 All notable changes to this project are recorded here. The format follows
 Keep a Changelog. Entries are newest first.
 
+## Unreleased
+
+- Token Shield MCP server, wave 1 (`mcp-server/`): an opt-in, separately
+  installed MCP server (stdio transport, official MCP Python SDK) wrapping
+  the existing scripts as a library. Nine tools (`get_profile`,
+  `get_summary`, `get_advice`, `get_monthly_report`, `list_strategies`,
+  `record_decision`, `experiment_start`, `experiment_end`,
+  `get_detailed_report`) and three resources (the dashboard HTML,
+  `docs/METHODOLOGY.md`, `docs/CLAIMS.md`). The plugin itself gains zero
+  dependencies, zero hooks, zero always-on cost. Tested against a seeded
+  sandbox HOME, both write tools round-tripped, the no-blend rule asserted.
+- Consumption Report, schema v1 (`scripts/detail_report.py`): one versioned
+  JSON report answering where tokens go, computed from the same transcript
+  data `profile.py` and `measure_tokens.py` already read (no new data
+  collection). Five sections (startup_floor, subagents, cache, rhythm,
+  habits) plus a bounded `daily_series`; every number carries
+  `{value, label, source}`, labels never blended. Served as the new
+  `get_detailed_report` MCP tool; a dashboard Habits section is out of
+  scope for this change. `scripts/test_detail_report.py` added, wired into
+  CI, calibrated by defect reinjection.
+- Release note: the MCP server and the Consumption Report are implementation
+  only in this change. Per the founder's 2026-08-13 gate amendment, no
+  version tag, release, or plugin/MCP registration happens until the
+  claude-md-diet experiment reaches a verdict; that boundary is unchanged.
+
 ## 1.7.1
 
 - Actionable Advisor: every strategy card (data/strategies.json, schema 2)
