@@ -148,7 +148,7 @@ def main(argv):
         return selftest()
     paths = [a for a in argv if not a.startswith("-")]
     if not paths:
-        paths = sorted(glob.glob(os.path.join(HERE, "*.py")))
+        paths = sorted(glob.glob(os.path.join(HERE, "**", "*.py"), recursive=True))
     hits = 0
     for path in paths:
         for line, msg in check_file(path):
