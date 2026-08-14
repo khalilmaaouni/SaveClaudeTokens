@@ -8,6 +8,19 @@ cli.py: one entry point for Token Shield.
   python3 cli.py experiment start|end <label> [--treats PATH]
   python3 cli.py prices              per-model USD-equivalent of the saving
   python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
+  python3 cli.py prune propose <id> [<id> ...] --bundle-id <bundle-id>
+                                      propose a named bundle of plugins to
+                                      disable (plugin_prune.py)
+  python3 cli.py prune apply <bundle-id>
+                                      apply a proposed prune bundle via
+                                      guided apply (refuses if any experiment
+                                      is open, auto-opens one on success)
+  python3 cli.py trim [--file PATH]  propose trimming the auto-memory index
+                                      back inside its load limit (defaults to
+                                      this project's own index; memory_trim.py)
+  python3 cli.py trim apply          apply the last trim proposal via guided
+                                      apply (same refuse/verify/auto-experiment
+                                      contract as prune above)
   python3 cli.py profile             deterministic session profile (profile.py)
   python3 cli.py advise              ranked next-move cards (advisor.py)
   python3 cli.py advise --decide <strategy-id> <done|not-now|never>
@@ -219,6 +232,16 @@ def main(argv):
         here = os.path.dirname(os.path.abspath(__file__))
         return subprocess.run(
             [sys.executable, os.path.join(here, "optimize.py")] + argv[1:]).returncode
+    if cmd == "prune":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "plugin_prune.py")] + argv[1:]).returncode
+    if cmd == "trim":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            [sys.executable, os.path.join(here, "memory_trim.py")] + argv[1:]).returncode
     if cmd == "profile":
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
