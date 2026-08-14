@@ -269,6 +269,59 @@ def _verified_rows_for_month(records, start_ts, end_ts):
     return ex.aggregate_by_label(month_verified)
 
 
+_DIRECTION_VERDICTS = {"saving": "keep", "regression": "roll back", "flat": "revisit"}
+
+
+def _reverdict(match):
+    """keep / revisit / roll back for one closed experiment, read straight off
+    the ledger record's own confidence and direction fields. experiment.py's
+    build_record already computed both from the before/after counters when
+    the experiment closed; nothing here scores anything new, this only maps
+    those two existing fields to a word. NOT_PROVEN never earns a firm
+    verdict either way, so it reads revisit: NO DATA beats a guess."""
+    if match.get("confidence") != "VERIFIED":
+        return "revisit"
+    return _DIRECTION_VERDICTS.get(match.get("direction"), "revisit")
+
+
+def _treatment_outcomes(records, treatments):
+    """One row per accepted treatment (advisor.record_decision's "accepted"
+    decision), matched to its closed experiment.
+
+    record_decision stamps an accepted strategy with
+    rec["lineage"] = "<strategy_id>-<date>" specifically so "a later
+    experiment can cite the card that caused it" (advisor.py's own TREATMENT
+    MEMORY docstring); a closed experiment cites it by naming that exact
+    string as the ledger record's own "label" (the --label argument to
+    `experiment.py start`). No ledger record names that lineage: "match" is
+    None, so the caller renders NO DATA rather than a guess.
+
+    A label with more than one ledger record collapses to the latest by
+    timestamp, the same "latest record per label wins" rule
+    aggregate_by_label and token_shield.verified_by_label already apply
+    elsewhere in this project.
+    """
+    by_label = {}
+    for r in records:
+        label = r.get("label")
+        if not label:
+            continue
+        ts_v = r.get("timestamp") or ""
+        if label not in by_label or ts_v >= (by_label[label].get("timestamp") or ""):
+            by_label[label] = r
+
+    rows = []
+    for strategy_id, rec in sorted((treatments or {}).items()):
+        if rec.get("decision") != "accepted":
+            continue
+        rows.append({
+            "strategy_id": strategy_id,
+            "accepted_at": rec.get("at"),
+            "match": by_label.get(rec.get("lineage")),
+        })
+    return rows
+
+
 def _what_did_not_work(records, treatments, start_ts, end_ts):
     """Rows for the "What did not work" section, plus a count of companion
     (reason "companion") suppressions excluded from it this month.
@@ -338,6 +391,7 @@ def build_report(year, month, root=None):
     # VERIFIED IMPROVEMENTS
     lines.append("## Verified improvements (VERIFIED)")
     records = _read_ledger()
+    treatments = adv.load_treatments()
     verified_rows = _verified_rows_for_month(records, start_ts, end_ts)
     if not verified_rows:
         lines.append("NO DATA: no VERIFIED experiment ledger record ended inside this month.")
@@ -347,6 +401,26 @@ def build_report(year, month, root=None):
             latest = row["reductions"][-1] if row["reductions"] else None
             lines.append(f"- {label}: {row['verified']} VERIFIED run(s), "
                          f"latest floor reduction {mt.fmt(latest)} tokens/call")
+    lines.append("")
+
+    # TREATMENT OUTCOMES: did an accepted card's own experiment pan out
+    lines.append("## Treatment outcomes (accepted treatments, closed experiments)")
+    outcomes = _treatment_outcomes(records, treatments)
+    if not outcomes:
+        lines.append("NO DATA: no accepted treatment on file.")
+    else:
+        for o in outcomes:
+            match = o["match"]
+            if match is None:
+                lines.append(f"- {o['strategy_id']} (accepted {o['accepted_at']}): "
+                             f"NO DATA, no closed experiment found for this treatment.")
+                continue
+            metric = match.get("target_metric")
+            before = mt.fmt(match.get("metric_before"))
+            after = mt.fmt(match.get("metric_after"))
+            lines.append(f"- {o['strategy_id']} (accepted {o['accepted_at']}): "
+                         f"{metric} {before} -> {after} ({match.get('confidence')}) "
+                         f"-- {_reverdict(match)}")
     lines.append("")
 
     # NATIVE BENEFIT
@@ -364,7 +438,6 @@ def build_report(year, month, root=None):
 
     # TOP ISSUES
     lines.append("## Top issues")
-    treatments = adv.load_treatments()
     month_profile = _month_profile(root, start_ts, end_ts, sessions, sm)
     advice = adv.advise(month_profile, treatments)
     top_cards = advice["queue"][:3]
