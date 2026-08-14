@@ -5,6 +5,7 @@
     {
       "id": "cache.fixed-parent-model",
       "category": "cache",
+      "problem_class": "cache_health",
       "title": "Fix your model and effort at session start",
       "trigger": {
         "metric": "behavior.model_switch_session_share",
@@ -35,6 +36,7 @@
     {
       "id": "startup.floor-ladder",
       "category": "startup",
+      "problem_class": "startup_rent",
       "title": "Shrink the always-loaded startup floor",
       "trigger": {
         "metric": "instruction.startup_floor_share",
@@ -71,6 +73,7 @@
     {
       "id": "routing.subagent-not-switch",
       "category": "routing",
+      "problem_class": "cache_health",
       "title": "Route cheap sub-tasks to a subagent, not a model switch",
       "trigger": {
         "metric": "behavior.model_switch_session_share",
@@ -101,6 +104,7 @@
     {
       "id": "overbuild.git-instructions-off",
       "category": "overbuild",
+      "problem_class": "overbuild",
       "title": "Turn off git instructions you never use",
       "trigger": {
         "metric": "instruction.startup_floor_share",
@@ -129,6 +133,7 @@
     {
       "id": "boundaries.mcp-tool-search",
       "category": "boundaries",
+      "problem_class": "boundaries",
       "title": "Confirm MCP tool search is on",
       "trigger": {
         "metric": "environment.plugin_count",
@@ -157,6 +162,7 @@
     {
       "id": "cache.ttl-idle-gaps",
       "category": "cache",
+      "problem_class": "cache_health",
       "title": "Keep waits under the cache TTL",
       "trigger": {
         "metric": "behavior.idle_gap_shares.5m_to_15m",
@@ -185,6 +191,7 @@
     {
       "id": "memory.fresh-over-compact",
       "category": "memory",
+      "problem_class": "cache_health",
       "title": "Prefer a fresh session at real phase boundaries",
       "trigger": {
         "metric": "usage.cache_hit_ratio_median",
@@ -213,6 +220,7 @@
     {
       "id": "redundancy.bounded-reads",
       "category": "redundancy",
+      "problem_class": "tool_output",
       "title": "Bound reads and search before you read",
       "trigger": {
         "metric": "usage.output_tokens_total",
@@ -241,6 +249,7 @@
     {
       "id": "output.isolate-huge-logs",
       "category": "output",
+      "problem_class": "tool_output",
       "title": "Isolate huge tool output instead of inlining it",
       "trigger": {
         "metric": "usage.output_tokens_total",
@@ -272,6 +281,7 @@
     {
       "id": "memory.claude-md-user-oversize",
       "category": "memory",
+      "problem_class": "startup_rent",
       "title": "Trim an oversize user-level CLAUDE.md",
       "trigger": {
         "metric": "instruction.claude_md_user_bytes",
@@ -303,6 +313,7 @@
     {
       "id": "companion.ponytail",
       "category": "companion",
+      "problem_class": "overbuild",
       "title": "Companion: ponytail (build-the-minimum bias)",
       "trigger": {
         "metric": "instruction.claude_md_project_bytes",
@@ -331,6 +342,7 @@
     {
       "id": "companion.caveman",
       "category": "companion",
+      "problem_class": "verbosity",
       "title": "Companion: caveman (terse narration)",
       "trigger": {
         "metric": "usage.output_tokens_total",
@@ -359,6 +371,7 @@
     {
       "id": "companion.token-saver",
       "category": "companion",
+      "problem_class": "tool_output",
       "title": "Companion: token-saver (detect and measure only)",
       "trigger": {
         "metric": "usage.output_tokens_total",
