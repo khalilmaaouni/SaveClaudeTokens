@@ -840,6 +840,71 @@ def test_waterfall_confidence_labels_never_blend_on_one_line():
         assert not ("VERIFIED" in para and "NOT_PROVEN" in para), para
 
 
+def test_top_strip_shows_confidence_labelled_cells_when_data_is_present():
+    # Calibrated: with render_top_strip's call removed from render(), this
+    # goes red (no "topstrip" marker, no per-cell confidence pills); restored
+    # it is green. Every cell reuses a number render() already computed
+    # elsewhere on the page: verified_by_label rows, the same companion
+    # install check render_companions() runs, the ranked prescriptions list,
+    # and the advisor's own top pick.
+    with tempfile.TemporaryDirectory() as d:
+        profile = shield.load_profile(_write_json(d, "profile.json",
+                                                    _synthetic_profile(switch_share=0.5)))
+        strategies = adv.load_strategies()
+        advise_result = adv.advise(profile, {}, strategies)
+        assert advise_result["best"] is not None  # 0.5 switch share fires a HIGH card
+        best_title = advise_result["best"]["title"]
+
+        companions_data = shield.load_companions(_write_json(d, "companions.json", {
+            "companions": [{"name": "ponytail", "when": "test when",
+                            "benefit": "smaller diffs", "drawback": "can under-build"}],
+            "mentions": [],
+        }))
+        cache_root = os.path.join(d, "plugins", "cache")
+        os.makedirs(os.path.join(cache_root, "claude-community", "ponytail"))
+
+        with open(os.path.join(d, "savings.jsonl"), "w") as f:
+            f.write(json.dumps({"label": "shrink-claude-md", "confidence": "VERIFIED",
+                                "floor_reduction_tokens": 500,
+                                "timestamp": "2026-08-12T10:00:00+0000"}) + "\n")
+        experiment_rows = shield.load_experiment_rows(os.path.join(d, "savings.jsonl"))
+        verified = shield.verified_by_label(experiment_rows)
+
+        sm, sessions = _sm_and_sessions()
+        html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                             verified=verified, profile=profile, advise_result=advise_result,
+                             suppressed_n=0, companions_data=companions_data,
+                             experiment_rows=experiment_rows, plugin_cache_root=cache_root)
+
+    assert 'class="grid topstrip"' in html
+    strip = html.split("<h2>At a glance</h2>")[1].split("<h2>Alerts</h2>")[0]
+    assert "Verified improvement" in strip and "cpill ver" in strip and "+500" in strip
+    assert "Current stack" in strip and "MEASURED" in strip and "1/1" in strip
+    assert "Largest remaining problem" in strip
+    assert ("Switching model mid-session" in strip
+            or "The always-loaded startup floor" in strip), strip
+    assert "Next best move" in strip and best_title in strip
+
+
+def test_top_strip_renders_no_data_never_zero_on_an_empty_ledger():
+    # Calibrated: swapping the "not verified" NO DATA branch in
+    # render_top_strip for a literal "0" (as if summing an empty ledger)
+    # makes this go red; restored to NO DATA text, green.
+    sm = {"read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0,
+          "first_request_median": None, "first_request_share_median": None,
+          "hit_ratio_median": None, "subagent_output_share": None, "output_total": 0}
+    html = shield.render(mt, sm, [], 30, "stamp", include_sessions=False,
+                         verified=None, profile=None, advise_result=None,
+                         companions_data=None, experiment_rows=None)
+    assert 'class="grid topstrip"' in html
+    strip = html.split("<h2>At a glance</h2>")[1].split("<h2>Alerts</h2>")[0]
+    # Verified improvement, current stack, and next best move all have no
+    # source to read from; every one of them must say NO DATA, never 0.
+    assert strip.count("NO DATA") >= 3, strip
+    assert "None ranked" in strip
+    assert '<div class="v">0</div>' not in strip
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
