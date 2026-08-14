@@ -23,6 +23,12 @@ Steps:
 
 If the user wants a deeper diet of a section the tool kept (because it holds a rule), help them do it by hand: keep the rule lines, move the history and rationale, and use the same backup and experiment steps.
 
+## Output discipline (WR+)
+
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/optimize.py --propose-output-discipline` proposes adding ONE static line to `--file`, shown verbatim, worded to cut wordy, restated, over-narrated replies. This is a hard cap, not a starting point: this tool never proposes more than that one hardcoded line, never a generated set, never a growing list.
+
+Show the founder the exact line and the diff. Apply ONLY on an explicit yes: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/optimize.py --apply-output-discipline`. Same guided-apply ceremony as the diet above: backs the original up first, refuses if any experiment is open, verifies the line landed, and on success auto-opens one experiment labeled `output-discipline-guided-<timestamp>`, a separate label from the CLAUDE.md diet's own guided-apply runs.
+
 ## Prune plugins you do not use
 
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py prune propose <id> [<id> ...] --bundle-id <bundle-id>` proposes a named bundle of plugins to disable. This tool never picks the plugins for you: no file in this repo measures per-plugin usage yet, so pass the exact `id` field (`name@marketplace`) from `claude plugin list --json`, the founder's or agent's own choice, never an automatic "looks unused" guess. It writes a review file naming each disable command and its exact matching enable command (the revert) and prints both; never touches a live plugin.

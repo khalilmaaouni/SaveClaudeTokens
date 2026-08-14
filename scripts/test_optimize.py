@@ -13,6 +13,14 @@ def check(name, cond):
     assert cond, name
 
 
+def _point_review_dir_at(td):
+    real = opt.review_dir
+    d = os.path.join(td, "optimize")
+    os.makedirs(d, exist_ok=True)
+    opt.review_dir = lambda: d
+    return real
+
+
 HARD = ("## No attribution\n" + "We NEVER add a Co-Authored-By trailer. " * 30)
 HISTORY = ("## Curation decisions\n" + "On 2026-08-09 the postmortem after the "
            "2026-08-08 runaway ratified the plan. " * 30)
@@ -124,6 +132,75 @@ def test_cmd_guided_apply_refuses_when_experiment_open():
     finally:
         ga.refuse_if_experiment_open = real_refuse
         opt.cmd_apply = real_cmd_apply
+
+
+def test_output_discipline_line_is_a_single_hard_capped_line():
+    # WR+'s hard cap: exactly one static line, never a paragraph or list.
+    check("OUTPUT_DISCIPLINE_LINE carries no newline",
+          "\n" not in opt.OUTPUT_DISCIPLINE_LINE)
+    check("OUTPUT_DISCIPLINE_LINE is non-empty", len(opt.OUTPUT_DISCIPLINE_LINE) > 0)
+
+
+def test_propose_output_discipline_shows_the_line_verbatim_and_is_a_no_op_when_present():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "CLAUDE.md")
+        with open(path, "w") as f:
+            f.write("# Rules\n- an existing rule\n")
+        new_text = opt.propose_output_discipline(path)
+        check("propose_output_discipline proposes the line verbatim",
+              opt.OUTPUT_DISCIPLINE_LINE in new_text)
+        check("propose_output_discipline never writes to path itself",
+              "existing rule" in open(path).read()
+              and opt.OUTPUT_DISCIPLINE_LINE not in open(path).read())
+
+        # Once the line is already present, proposing again is a no-op.
+        with open(path, "w") as f:
+            f.write(new_text)
+        check("propose_output_discipline returns None once the line is already present",
+              opt.propose_output_discipline(path) is None)
+
+
+def test_cmd_apply_output_discipline_never_writes_without_a_prior_propose():
+    with tempfile.TemporaryDirectory() as td:
+        real_review_dir = _point_review_dir_at(td)
+        try:
+            src = os.path.join(td, "CLAUDE.md")
+            original = "# Rules\n- an existing rule\n"
+            with open(src, "w") as f:
+                f.write(original)
+            before = open(src, "rb").read()
+            rc = opt.cmd_apply_output_discipline()
+            check("cmd_apply_output_discipline refuses with NO DATA when nothing "
+                  "was proposed", rc == 2)
+            after = open(src, "rb").read()
+            check("cmd_apply_output_discipline never writes to the source without "
+                  "a prior propose", before == after)
+        finally:
+            opt.review_dir = real_review_dir
+
+
+def test_cmd_guided_apply_output_discipline_refuses_when_experiment_open():
+    real_refuse = ga.refuse_if_experiment_open
+    real_apply_od = opt.cmd_apply_output_discipline
+    ga.refuse_if_experiment_open = lambda: "REFUSED: fixture experiment is open"
+    opt.cmd_apply_output_discipline = lambda: (_ for _ in ()).throw(
+        AssertionError("cmd_apply_output_discipline must never run while an "
+                       "experiment is open"))
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "CLAUDE.md")
+            original = "# Rules\n- an existing rule\n"
+            with open(src, "w") as f:
+                f.write(original)
+            before = open(src, "rb").read()
+            rc = opt.cmd_guided_apply_output_discipline(src)
+            check("cmd_guided_apply_output_discipline refuses with rc 2", rc == 2)
+            after = open(src, "rb").read()
+            check("cmd_guided_apply_output_discipline never writes to the source "
+                  "when refused", before == after)
+    finally:
+        ga.refuse_if_experiment_open = real_refuse
+        opt.cmd_apply_output_discipline = real_apply_od
 
 
 def _split(section_text):
