@@ -5,7 +5,11 @@
 
 Calibrated tests (defect reinjected during development, confirmed red, then
 fixed and confirmed green again): queue cap, RECOMMENDED-in-evidence guard,
-suppression filter, NO DATA exclusion, and token-saver's companion-only rank.
+suppression filter, NO DATA exclusion, token-saver's companion-only rank,
+aggressive mode's curated-registry gate, and the recipe trust boundary
+(disabling cmd_recipe's `result["refused"]` check made
+test_recipe_refuses_a_name_not_in_the_curated_registry crash with a
+KeyError instead of passing; restoring the check made it pass again).
 """
 
 import importlib.util
@@ -47,14 +51,15 @@ def nest(flat):
 
 
 def strategy(sid, category, metric, op, value, band, evidence="MEASURED", escalate=None,
-             companion=None):
+             companion=None, problem_class=None, quality_risk="LOW"):
     trig = {"metric": metric, "op": op, "value": value, "band": band}
     if escalate:
         trig["escalate"] = escalate
     return {
-        "id": sid, "category": category, "title": f"title {sid}",
+        "id": sid, "category": category, "problem_class": problem_class,
+        "title": f"title {sid}",
         "trigger": trig, "what_it_changes": "x", "expected_benefit": "x",
-        "evidence": evidence, "drawback": "x", "quality_risk": "LOW",
+        "evidence": evidence, "drawback": "x", "quality_risk": quality_risk,
         "reversibility": "x", "how_measured": "x", "if_you_say_no": "x",
         "alternatives": [], "companion": companion, "requires_confirmation": False,
         "source": "A1",
@@ -249,6 +254,21 @@ def test_do_nothing_on_a_healthy_profile():
     assert result["best"] is None
     assert result["do_nothing"] is True
     assert "95%" in result["message"] and "5%" in result["message"], result["message"]
+    # Calibrated (finding C2/M2): before the tournament gated on a real
+    # native signal, this profile printed "this profile looks healthy" AND
+    # four tournament winners in the same breath (one of them a
+    # companion.token-saver crown, even though its own card says it is
+    # never offered as a recommended fix), a contradicting second
+    # recommendation with no reconciliation in the rendered text. Fixed, a
+    # profile with nothing real anywhere renders no tournaments at all: the
+    # "do nothing" message stays the only headline.
+    assert result["tournaments"] == [], result["tournaments"]
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_tournaments(result["tournaments"])
+    assert printed.getvalue() == "", printed.getvalue()
 
 
 def test_load_treatments_recovers_from_a_corrupt_file(tmp_path=None):
@@ -552,6 +572,177 @@ def test_companion_suppression_expires_and_card_returns():
 
 
 
+def test_mode_strategies_nested_deterministic_and_aggressive_equals_full_set():
+    # conservative subset of ids <= balanced subset of ids <= aggressive
+    # subset of ids, every call returning the exact same list (same ids,
+    # same order): a non-technical user picking a "bigger" mode must never
+    # lose a card the smaller mode already offered. aggressive == the full,
+    # unfiltered strategy list is the proof that a companion strategy is
+    # only ever added by the top mode, never silently included earlier.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    subsets = {m: adv.mode_strategies(real, m) for m in adv.MODES}
+    assert subsets["conservative"] == adv.mode_strategies(real, "conservative"), "not deterministic"
+
+    cons_ids = [s["id"] for s in subsets["conservative"]]
+    bal_ids = [s["id"] for s in subsets["balanced"]]
+    agg_ids = [s["id"] for s in subsets["aggressive"]]
+    assert set(cons_ids) <= set(bal_ids) <= set(agg_ids), (cons_ids, bal_ids, agg_ids)
+    assert all(s["quality_risk"] == "LOW" and s["category"] != "companion"
+               for s in subsets["conservative"]), subsets["conservative"]
+    assert all(s["category"] != "companion" for s in subsets["balanced"]), subsets["balanced"]
+    assert agg_ids == [s["id"] for s in real], (agg_ids, [s["id"] for s in real])
+
+
+def test_mode_strategies_rejects_an_unknown_mode():
+    try:
+        adv.mode_strategies(adv.load_strategies(STRATEGIES_PATH), "reckless")
+        assert False, "expected a ValueError for an unknown mode"
+    except ValueError as e:
+        assert "reckless" in str(e), str(e)
+
+
+def test_mode_strategies_aggressive_drops_a_companion_not_in_the_curated_registry():
+    # Calibrated: an early draft of mode_strategies gated aggressive mode
+    # only on category == "companion", with no curated-registry check at
+    # all; this test went red (the uncurated strategy stayed in the
+    # aggressive subset); restored to checking the id's companion name
+    # against curated_names, green again.
+    strategies = [
+        strategy("companion.widget", "companion", "usage.m1", ">=", 1, "LOW"),
+        strategy("cache.s1", "cache", "usage.m2", ">=", 1, "LOW"),
+    ]
+    kept = adv.mode_strategies(strategies, "aggressive", curated_names={"other-thing"})
+    ids = [s["id"] for s in kept]
+    assert "companion.widget" not in ids, ids
+    assert "cache.s1" in ids, ids
+    kept2 = adv.mode_strategies(strategies, "aggressive", curated_names={"widget"})
+    assert "companion.widget" in [s["id"] for s in kept2]
+
+
+def test_main_no_mode_never_filters_and_never_prints_a_mode_line():
+    # Calibrated: an early draft always called mode_strategies (defaulting
+    # a bare mode to "conservative" instead of None), so the default,
+    # no-mode CLI path silently narrowed to a subset; this test went red
+    # (mode_strategies raised via the monkeypatch, or "mode:" appeared in
+    # the output); restored to only filtering when --mode is actually
+    # given, green again: today's behavior, unchanged.
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        real_mode_strategies = adv.mode_strategies
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+
+        def _boom(*_a, **_k):
+            raise AssertionError("mode_strategies must not run when --mode is omitted")
+
+        adv.mode_strategies = _boom
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main([])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+            adv.mode_strategies = real_mode_strategies
+    assert rc == 0
+    assert "mode:" not in out, out
+
+
+def test_main_mode_flag_filters_and_prints_the_mode_line():
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main(["--mode", "conservative"])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+    assert rc == 0
+    assert "mode: conservative" in out, out
+
+
+def test_main_rejects_an_unknown_mode_before_touching_the_profile():
+    # No PROFILE_PATH setup: an unknown --mode is refused before any file
+    # is opened, so this runs against whatever PROFILE_PATH is on the box.
+    assert adv.main(["--mode", "reckless"]) == 2
+    assert adv.main(["--mode"]) == 2
+
+
+def test_recipe_refuses_a_name_not_in_the_curated_registry():
+    # UNVETTED PLUGIN REFUSED: this is the trust boundary the recipe
+    # feature exists to enforce. Calibrated (see the module docstring
+    # above): disabling cmd_recipe's `result["refused"]` check made this
+    # test crash with a KeyError instead of passing; restoring the check
+    # makes it pass again.
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("not-a-real-companion-xyz")
+    out = buf.getvalue()
+    assert rc == 2, rc
+    assert "REFUSED" in out, out
+    assert "not-a-real-companion-xyz" in out, out
+
+
+def test_recipe_prints_commands_verbatim_from_the_real_registry():
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        raw = f.read()
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("ponytail")
+    out = buf.getvalue()
+    assert rc == 0, out
+    install_line = [l for l in out.splitlines() if "install:" in l][0]
+    rollback_line = [l for l in out.splitlines() if "rollback:" in l][0]
+    install_cmd = install_line.split("install:", 1)[1].strip()
+    rollback_cmd = rollback_line.split("rollback:", 1)[1].strip()
+    assert install_cmd in raw, install_cmd
+    assert rollback_cmd in raw, rollback_cmd
+
+
+def test_recipe_refuses_when_registry_entry_missing_a_required_field():
+    # Missing-field refusal: a curated entry that names the companion but
+    # is missing "uninstall" must be refused, naming that exact field,
+    # never crash and never fall back to inventing a rollback command.
+    import tempfile
+    real_path = adv.ts.COMPANIONS_PATH
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump({"schema": 2, "mentions": [], "companions": [{
+                "name": "widget", "install": "do it",
+                "tested_version_range": {"min": "1.0.0", "max": "1.0.0",
+                                         "tested_on": "2026-08-13"},
+            }]}, f)
+        adv.ts.COMPANIONS_PATH = path
+        try:
+            buf = io.StringIO()
+            import contextlib
+            with contextlib.redirect_stdout(buf):
+                rc = adv.cmd_recipe("widget")
+        finally:
+            adv.ts.COMPANIONS_PATH = real_path
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "uninstall" in out, out
+
+
 def test_sync_refuses_to_suppress_when_the_metric_cannot_be_read():
     # A suppression whose baseline value is unknown can never be lifted by
     # the regression guard, so the card would stay silent for the whole
@@ -609,6 +800,246 @@ def test_stale_fact_carries_staleness_to_the_user():
     out = printed.getvalue()
     assert "FACT STALE" in out and "A1" in out, out
     assert "2026-06-30" in out, out
+
+
+def test_tournament_ranks_two_candidates_winner_and_visible_loser():
+    # Two candidates for the same problem, different fit: the higher band
+    # wins deterministically and the loser is still visible, one level
+    # deeper, with the criterion that decided against it.
+    strategies = [
+        strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="cache_health"),
+        strategy("routing.b", "routing", "usage.m1", ">=", 1, "MED", problem_class="cache_health"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    tournaments = result["tournaments"]
+    assert len(tournaments) == 1, tournaments
+    t = tournaments[0]
+    assert t["problem_class"] == "cache_health"
+    assert t["winner"]["id"] == "cache.a", t["winner"]
+    assert "HIGH" in t["why_won"] and "MED" in t["why_won"], t["why_won"]
+    assert len(t["also_considered"]) == 1
+    loser = t["also_considered"][0]
+    assert loser["id"] == "routing.b"
+    assert loser["fit"] == "MED"
+    assert "MED" in loser["why_lost"], loser["why_lost"]
+
+
+def test_tournament_native_before_companion_at_equal_fit():
+    # Calibrated: with the companion-exclusion removed from the winner pool
+    # (build_tournaments picking min() over ALL candidates, companions
+    # included), companion.comp wins here instead and this test goes red;
+    # restored, the native wins and the companion is a tagged loser, never
+    # a winner, at any fit or risk.
+    strategies = [
+        strategy("output.native", "output", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
+        strategy("companion.comp", "companion", "usage.m1", ">=", 1, "HIGH", problem_class="tool_output"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    t = result["tournaments"][0]
+    assert t["winner"]["id"] == "output.native", t["winner"]
+    assert t["also_considered"][0]["id"] == "companion.comp"
+    assert t["also_considered"][0]["why_lost"] == "(companion: prescribed through its own card, never crowned over a native)", t["also_considered"][0]
+
+
+def test_tournament_missing_signal_renders_no_data_reason():
+    # A candidate whose own trigger metric is absent from the profile: its
+    # loss is reported as NO DATA, never a guessed comparison.
+    strategies = [
+        strategy("cache.fired", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="cache_health"),
+        strategy("routing.no-signal", "routing", "usage.missing", ">=", 1, "MED",
+                  problem_class="cache_health"),
+    ]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    t = result["tournaments"][0]
+    assert t["winner"]["id"] == "cache.fired"
+    loser = t["also_considered"][0]
+    assert loser["id"] == "routing.no-signal"
+    assert loser["fit"] == "NO DATA", loser["fit"]
+    assert loser["why_lost"].startswith("NO DATA:"), loser["why_lost"]
+    assert "missing" in loser["why_lost"], loser["why_lost"]
+
+
+def test_tournament_skips_single_candidate_problem_classes():
+    strategies = [strategy("cache.solo", "cache", "usage.m1", ">=", 1, "HIGH",
+                            problem_class="cache_health")]
+    profile = nest({"usage.m1": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    assert result["tournaments"] == []
+
+
+def test_real_strategies_json_carries_a_problem_class_and_tournaments():
+    real = adv.load_strategies(STRATEGIES_PATH)
+    for s in real:
+        assert s.get("problem_class"), s["id"]
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    result = adv.advise(profile, {}, real)
+    classes = {t["problem_class"] for t in result["tournaments"]}
+    assert "cache_health" in classes, classes
+    cache_health = next(t for t in result["tournaments"] if t["problem_class"] == "cache_health")
+    assert cache_health["winner"]["id"] == "cache.fixed-parent-model"
+    assert any(l["id"] == "routing.subagent-not-switch" for l in cache_health["also_considered"])
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_tournaments(result["tournaments"])
+    out = printed.getvalue()
+    assert "also considered" in out and "cache_health" in out, out
+
+
+def test_tournament_winner_is_seeded_from_best_even_when_it_would_otherwise_lose():
+    # Calibrated (finding C1): before build_tournaments accepted a
+    # `best_id` to seed the winner, this exact profile produced a
+    # contradiction: result["best"] names cache.a (advise()'s own
+    # band-then-category ranking), but the "p" tournament, ranked purely on
+    # fit and quality_risk within its own class, crowned memory.b instead
+    # (memory.b's LOW quality_risk beats cache.a's HIGH), with no
+    # reconciliation between the two in the rendered text. Fixed, the class
+    # containing best's own strategy always crowns that exact strategy.
+    strategies = [
+        strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH", problem_class="p", quality_risk="HIGH"),
+        strategy("memory.b", "memory", "usage.m2", ">=", 1, "HIGH", problem_class="p", quality_risk="LOW"),
+    ]
+    profile = nest({"usage.m1": leaf(5), "usage.m2": leaf(5)})
+    result = adv.advise(profile, {}, strategies)
+    assert result["best"]["id"] == "cache.a", result["best"]
+    t = next(t for t in result["tournaments"] if t["problem_class"] == "p")
+    assert t["winner"]["id"] == "cache.a", t["winner"]
+    assert t["also_considered"][0]["id"] == "memory.b"
+    # The seeded case never claims a false comparative reason (memory.b, not
+    # cache.a, is the one with lower quality risk here).
+    assert "quality risk" not in t["why_won"], t["why_won"]
+
+
+def test_tournament_never_crowns_a_detect_only_companion_even_when_it_alone_fired():
+    # Calibrated (finding C2/M2): the "detect and measure only, never a
+    # recommended fix" companion.token-saver used to win the tool_output
+    # tournament outright whenever it was the only member of its class with
+    # a real signal, exactly mirroring test_token_saver_entry_can_never_be_best's
+    # profile but for result["tournaments"] instead of best/queue. Fixed,
+    # the same exclusion applies: a companion is never the winner, and the
+    # native did-not-trigger candidates are the only eligible winners, so
+    # this class renders nothing (neither native ever really fired either).
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(250_000)})
+    result = adv.advise(profile, {}, real)
+    for t in result["tournaments"]:
+        assert t["winner"]["id"] != "companion.token-saver", t
+        for loser in t["also_considered"]:
+            if loser["id"] == "companion.token-saver":
+                assert loser["why_lost"] == "(companion: prescribed through its own card, never crowned over a native)", loser
+
+
+def test_all_no_data_problem_class_renders_no_tournament():
+    # The orchestrator's p1_nodata probe: usage.output_tokens_total is
+    # explicitly NO DATA, so every tool_output candidate (all three share
+    # that one metric) is NO DATA. Before the real-native-signal gate, this
+    # rendered a "winner" anyway, printed as "ranked first only by the
+    # stable id tiebreak" even when the sort actually used qr_rank; fixed,
+    # a class with nothing real anywhere is left out of the report.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(None, label="NO DATA")})
+    result = adv.advise(profile, {}, real)
+    classes = {t["problem_class"] for t in result["tournaments"]}
+    assert "tool_output" not in classes, classes
+
+
+def test_load_strategies_rejects_a_bad_problem_class_value():
+    # The orchestrator's p2_typo probe, case A and C: load_strategies must
+    # refuse a mistyped or null problem_class by the exact strategy id, the
+    # same way it already refuses a bad trigger op or band. Before this
+    # check, a typo silently formed its own one-member group (excluded from
+    # every tournament with no error) and a null value was skipped the same
+    # way (`if not pc: continue` in build_tournaments); the strategy just
+    # vanished from the report with nothing telling anyone why.
+    import tempfile
+    real = adv.load_strategies(STRATEGIES_PATH)
+
+    with tempfile.TemporaryDirectory() as d:
+        broken = json.loads(json.dumps({"schema": 2, "strategies": real}))
+        broken["strategies"][0]["problem_class"] = "tool_ouput"
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump(broken, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a mistyped problem_class"
+        except ValueError as e:
+            assert broken["strategies"][0]["id"] in str(e), str(e)
+            assert "problem_class" in str(e), str(e)
+
+    with tempfile.TemporaryDirectory() as d:
+        broken2 = json.loads(json.dumps({"schema": 2, "strategies": real}))
+        broken2["strategies"][0]["problem_class"] = None
+        path = os.path.join(d, "strategies.json")
+        with open(path, "w") as f:
+            json.dump(broken2, f)
+        try:
+            adv.load_strategies(path)
+            assert False, "expected a ValueError for a null problem_class"
+        except ValueError as e:
+            assert broken2["strategies"][0]["id"] in str(e), str(e)
+
+
+def test_deciding_criterion_always_names_the_first_differing_tuple_field():
+    # Finding M1: why_won/why_lost must always derive from the first field
+    # of _tournament_key's own tuple that actually differs between the two
+    # candidates, never a hardcoded guess (the old bug: an all-NO-DATA
+    # winner was always described as "ranked first only by the stable id
+    # tiebreak" even when qr_rank was the real decider). Three constructed
+    # pairs, each differing on a different tuple field, prove the mapping.
+    cand_a = adv._tournament_candidate(
+        strategy("cache.a", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    cand_b_lower_fit = adv._tournament_candidate(
+        strategy("cache.b", "cache", "usage.m", ">=", 1, "MED", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    reason = adv._deciding_criterion(cand_a, cand_b_lower_fit)
+    assert "HIGH" in reason and "MED" in reason, reason
+
+    cand_c_worse_risk = adv._tournament_candidate(
+        strategy("cache.c", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p", quality_risk="MED"),
+        nest({"usage.m": leaf(5)}))
+    reason2 = adv._deciding_criterion(cand_a, cand_c_worse_risk)
+    assert "quality risk" in reason2, reason2
+
+    cand_d_same_everything_higher_id = adv._tournament_candidate(
+        strategy("cache.z", "cache", "usage.m", ">=", 1, "HIGH", problem_class="p"),
+        nest({"usage.m": leaf(5)}))
+    reason3 = adv._deciding_criterion(cand_a, cand_d_same_everything_higher_id)
+    assert "cache.a" in reason3 and "cache.z" in reason3 and "tiebreak" in reason3, reason3
+
+
+def test_main_mode_narrows_tournament_field_and_notes_it():
+    # Finding m1: --mode silently narrowed the tournament's candidate field
+    # with no note. Fixed, the printed header names the mode and the exact
+    # count narrowed away, so the omission is never silent.
+    import contextlib
+    import tempfile
+    profile = nest({"behavior.model_switch_session_share": leaf(0.5)})
+    with tempfile.TemporaryDirectory() as d:
+        profile_path = os.path.join(d, "profile.json")
+        with open(profile_path, "w") as f:
+            json.dump(profile, f)
+        treatments_path = os.path.join(d, "treatments.json")
+        real_profile_path, real_treatments_path = adv.PROFILE_PATH, adv.TREATMENTS_PATH
+        adv.PROFILE_PATH, adv.TREATMENTS_PATH = profile_path, treatments_path
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = adv.main(["--mode", "conservative"])
+            out = buf.getvalue()
+        finally:
+            adv.PROFILE_PATH, adv.TREATMENTS_PATH = real_profile_path, real_treatments_path
+    assert rc == 0
+    real = adv.load_strategies()
+    n = len(adv.mode_strategies(real, "conservative"))
+    m = len(real)
+    assert n < m, (n, m)  # conservative must actually narrow this fixture, or the test proves nothing
+    assert f"field narrowed by mode conservative: {n} of {m} candidates" in out, out
 
 
 if __name__ == "__main__":
