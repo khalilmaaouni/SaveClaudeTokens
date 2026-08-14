@@ -210,3 +210,79 @@ build` refuses with NO DATA rather than push an all-zero row); the one
 exception is `join`'s own registration record, which is honestly a
 registration event with zero counters, not a data day pretending to have
 some.
+
+## `fleet dashboard`: render the org-wide page
+
+`scripts/fleet_dashboard.py` reads a local checkout of the org's fleet store
+(the layout `scripts/fleet.py`'s `push_record()` writes:
+`fleet/<org>/<machine-id>/<date>.json`, one record per machine per calendar
+day) and renders one self-contained HTML page. This phase does not clone or
+pull the store itself; get a local checkout onto disk first (a plain
+`git clone` of the org's store, or `fleet pull` in a later phase), then
+point `--store-dir` at its root.
+
+```
+python3 scripts/fleet_dashboard.py \
+  --store-dir /path/to/local/checkout-of-the-fleet-store \
+  --org acme \
+  --out ~/fleet-dashboard.html
+```
+
+The page shows, reusing the single-machine dashboard's own label rules
+(`scripts/token_shield.py`'s `esc`, `human`, `pct`, `_cpill`) rather than a
+second copy of them:
+
+- **Machines reporting**, one row per record file found. A machine whose
+  record is missing, unreadable, malformed, newer-schema, or otherwise
+  hostile renders its own row with a named reason instead of a number, and
+  never removes or blocks any other machine's row.
+- **Token counters by day**, summed across every machine whose record
+  loaded cleanly, bucketed by model the same way a single machine's record
+  is (today, every counter lands under the bucket key `"unknown"`, per
+  `scripts/fleet.py`'s own documented limit: the local telemetry ledger
+  carries no true model identity yet).
+- **Tokens by team** and **tokens by environment**, the free tags a machine
+  sets at `fleet join` time.
+- **Experiments, latest per label**, gathered across every machine in the
+  org. One row per label, the newest record by timestamp; repeated runs of
+  the same label are never added together, and a regression's measured
+  delta renders exactly as recorded, negative sign included. Confidence
+  values (`VERIFIED`, `NOT_PROVEN` under the current record schema) render
+  through the same badge the single-machine dashboard uses.
+
+The renderer is read-only: it never writes into the store, never runs git,
+and never sends anything anywhere. Every value on the page came from a
+record a machine chose to push; nothing is guessed, and nothing is summed
+across confidence labels.
+
+### A shared store is untrusted input
+
+A fleet store is written to by every machine in the org, so the reader
+treats every file in it as hostile until proven otherwise: ANY failure to
+load one file (unreadable, invalid JSON, invalid UTF-8, a stack-exhausting
+nesting depth, a bare NaN/Infinity number, a negative or missing counter,
+oversized, or a schema this reader does not understand) costs only that one
+machine its own NO DATA row naming the reason, never the rest of the page.
+Concretely:
+
+- **Size cap.** A record file over 1,000,000 bytes is refused by name
+  before it is ever read into memory.
+- **Symlinks are refused, not followed.** A symlink anywhere under
+  `fleet/<org>/` (a whole machine directory, or one record file) is refused
+  rather than followed, so a symlink planted in the store can never make
+  the page render content from outside it.
+- **`--org` is validated**, the same way `fleet init`/`join`/`push` already
+  validate it, before it ever reaches a filesystem path or the page
+  `<title>`.
+- **A record's filename and its own "date" field must agree.** A
+  disagreement is refused as that file's own NO DATA row, so the same
+  record can never render under two different dates on the same page, and a
+  member cannot park tokens on a future day just by writing a different
+  date into the record body.
+- **The store path printed on the page is shortened**, the same way
+  `fleet.py`'s own warnings are, so a shared org artifact never carries the
+  admin's account name.
+
+None of this changes what a healthy record looks like or how it renders;
+it only bounds what a hostile or malformed one can do to the page around
+it.

@@ -1369,9 +1369,16 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
 
 
 def render_standalone(body, title="Token Shield"):
+    # esc() here, not raw interpolation: title is caller-supplied text (the
+    # fleet dashboard builds it from an org name a machine set at join time),
+    # so an unescaped title lets a value like
+    # "acme</title><script>alert(1)</script>" break out of the <title> tag
+    # and inject a live script into the page. `body` is not escaped here on
+    # purpose: every caller already escapes its own body content before
+    # handing it to this function.
     return (f'<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-            f'<title>{title}</title>\n</head>\n<body>\n{body}</body>\n</html>\n')
+            f'<title>{esc(title)}</title>\n</head>\n<body>\n{body}</body>\n</html>\n')
 
 
 def main():
