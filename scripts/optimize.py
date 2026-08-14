@@ -172,6 +172,8 @@ def cmd_propose(path):
         f.write(diff)
     with open(os.path.join(d, "source.txt"), "w") as f:
         f.write(path)
+    with open(os.path.join(d, "source.sha256"), "w") as f:
+        f.write(guided_apply.sha256_text(text))
     print(f"=== proposed CLAUDE.md diet for {path} ===")
     print(f"estimated tokens   {before:,} -> {after:,}  "
           f"({before - after:,} fewer, about {(before - after) / before * 100:.0f}%), ESTIMATED")
@@ -201,10 +203,14 @@ def cmd_propose(path):
 
 
 def cmd_apply():
+    """Returns an int rc: 0 applied, 2 NO DATA/REFUSED and nothing written.
+    This IS a guided-apply mutate_fn (see cmd_guided_apply below), so callers
+    other than main() must treat a nonzero return as "nothing was applied"."""
     d = review_dir()
     src_file = os.path.join(d, "source.txt")
     prop = os.path.join(d, "CLAUDE.md.proposed")
     notes = os.path.join(d, "claude-history.md")
+    hash_file = os.path.join(d, "source.sha256")
     if not (os.path.exists(src_file) and os.path.exists(prop)):
         print("NO DATA: no proposal to apply. Run without --apply first.")
         return 2
@@ -213,23 +219,46 @@ def cmd_apply():
     if not os.path.exists(path):
         print(f"NO DATA: original {path} is gone; not applying.")
         return 2
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{path}.bak-{stamp}"
     with open(path) as f:
         original = f.read()
+    # R8/CRITICAL: refuse a stale proposal. If path changed since this
+    # proposal was computed, applying the stored CLAUDE.md.proposed would
+    # silently roll back whatever changed in between, and the loaded-line
+    # verify would pass anyway (it only checks the count dropped). A missing
+    # hash file (a proposal written before this check existed) is treated the
+    # same as a mismatch: NO DATA beats a guess about freshness.
+    current_hash = guided_apply.sha256_text(original)
+    stored_hash = None
+    if os.path.exists(hash_file):
+        with open(hash_file) as f:
+            stored_hash = f.read().strip()
+    if stored_hash != current_hash:
+        print(f"REFUSED: {path} changed since this proposal was made; applying it "
+              f"now would silently roll back whatever changed in between. "
+              f"Re-propose against the current file: python3 {os.path.basename(__file__)} "
+              f"--file {path}")
+        return 2
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = f"{path}.bak-{stamp}"
     with open(backup, "w") as f:
         f.write(original)
     notes_dest = os.path.join(os.path.dirname(path), "claude-history.md")
     with open(notes) as f:
         notes_text = f.read()
-    with open(notes_dest, "w") as f:
+    # M4: never clobber a hand-written or earlier claude-history.md. Back any
+    # existing one up first, then append: earlier content survives in place,
+    # not only inside a backup nobody reads.
+    history_backup = guided_apply.backup_if_exists(notes_dest)
+    with open(notes_dest, "a") as f:
         f.write(notes_text)
     with open(prop) as f:
         new_text = f.read()
     with open(path, "w") as f:
         f.write(new_text)
     print(f"applied. original backed up to {backup}")
-    print(f"history moved to {notes_dest}")
+    if history_backup:
+        print(f"existing history backed up to {history_backup}")
+    print(f"history appended to {notes_dest}")
     print(f"revert with: cp {backup} {path}")
     print("Note: a CLAUDE.md edit does not apply until your next /clear, /compact, or "
           "restart. Prove the saving with experiment mode across that boundary.")
@@ -253,12 +282,34 @@ def verify_diet(original_text, path):
 
 
 def cmd_guided_apply(path):
-    """The wave R entry point. Reads path's current text (for verify_diet's
-    before count), then calls guided_apply.apply(label, treats=path,
-    mutate_fn=cmd_apply, verify_fn=lambda: verify_diet(original, path))."""
+    """The wave R entry point. Checks the open-experiment interlock FIRST,
+    the same gate guided_apply.apply itself leads with, so "an experiment is
+    already open" always wins and is always named correctly, regardless of
+    any stale proposal sitting in the review directory. R2/R10/CRITICAL:
+    only once that is clear, refuses outright, naming both paths, when path
+    (named at apply time) does not match the stored proposal's own target
+    (source.txt), so a guided apply can never mutate one file while
+    verifying and excluding a different one. The mismatch check is only run
+    when a proposal actually exists; a missing proposal falls through to
+    cmd_apply's own NO DATA path (propagated by guided_apply.apply). Reads
+    path's current text (for verify_diet's before count), then calls
+    guided_apply.apply(label, treats=path, mutate_fn=cmd_apply,
+    verify_fn=lambda: verify_diet(original, path))."""
     if not os.path.exists(path):
         print(f"NO DATA: {path} does not exist.")
         return 2
+    refusal = guided_apply.refuse_if_experiment_open()
+    if refusal:
+        print(refusal)
+        return 2
+    src_file = os.path.join(review_dir(), "source.txt")
+    if os.path.exists(src_file):
+        with open(src_file) as f:
+            stored_path = f.read().strip()
+        mismatch = guided_apply.refuse_if_target_mismatch(path, stored_path)
+        if mismatch:
+            print(mismatch)
+            return 2
     with open(path) as f:
         original = f.read()
     label = f"claude-md-diet-guided-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -315,6 +366,8 @@ def cmd_propose_output_discipline(path):
         f.write(diff)
     with open(os.path.join(d, "output-discipline-source.txt"), "w") as f:
         f.write(path)
+    with open(os.path.join(d, "output-discipline-source.sha256"), "w") as f:
+        f.write(guided_apply.sha256_text(original))
     print(f"=== proposed output-discipline line for {path} ===")
     print("This ONE line, shown verbatim, is the whole proposal (a hard cap; "
           "this tool never proposes more than one line):")
@@ -327,10 +380,14 @@ def cmd_propose_output_discipline(path):
 def cmd_apply_output_discipline():
     """WR+. Reads the review files cmd_propose_output_discipline wrote, backs
     the original up via guided_apply.backup_file, writes the proposed text.
-    This IS the mutate_fn passed to guided_apply.apply."""
+    This IS the mutate_fn passed to guided_apply.apply, so it returns an int
+    rc: 0 applied, 2 NO DATA/REFUSED and nothing written.
+    R8/CRITICAL: refuses when path changed since this proposal was made (same
+    staleness guard as cmd_apply's, see there for why)."""
     d = review_dir()
     src_file = os.path.join(d, "output-discipline-source.txt")
     prop = os.path.join(d, "output-discipline.proposed")
+    hash_file = os.path.join(d, "output-discipline-source.sha256")
     if not (os.path.exists(src_file) and os.path.exists(prop)):
         print("NO DATA: no output-discipline proposal to apply. Run without "
               "--apply-output-discipline first.")
@@ -339,6 +396,19 @@ def cmd_apply_output_discipline():
         path = f.read().strip()
     if not os.path.exists(path):
         print(f"NO DATA: original {path} is gone; not applying.")
+        return 2
+    with open(path) as f:
+        current = f.read()
+    current_hash = guided_apply.sha256_text(current)
+    stored_hash = None
+    if os.path.exists(hash_file):
+        with open(hash_file) as f:
+            stored_hash = f.read().strip()
+    if stored_hash != current_hash:
+        print(f"REFUSED: {path} changed since this proposal was made; applying it "
+              f"now would silently roll back whatever changed in between. "
+              f"Re-propose against the current file: python3 optimize.py "
+              f"--propose-output-discipline --file {path}")
         return 2
     backup = guided_apply.backup_file(path)
     with open(prop) as f:
@@ -364,7 +434,23 @@ def cmd_guided_apply_output_discipline(path):
     cmd_guided_apply above: treats=path (this proposal edits path itself, so
     the same --treats exclusion applies), label
     output-discipline-guided-<timestamp>, a separate label from both the diet
-    guided apply and a plain --apply run, so the three never collide."""
+    guided apply and a plain --apply run, so the three never collide.
+    Checks the open-experiment interlock FIRST (see cmd_guided_apply above
+    for why), then the R2/R10/CRITICAL file-target-mismatch refusal, checked
+    against output-discipline-source.txt."""
+    refusal = guided_apply.refuse_if_experiment_open()
+    if refusal:
+        print(refusal)
+        return 2
+    d = review_dir()
+    src_file = os.path.join(d, "output-discipline-source.txt")
+    if os.path.exists(src_file):
+        with open(src_file) as f:
+            stored_path = f.read().strip()
+        mismatch = guided_apply.refuse_if_target_mismatch(path, stored_path)
+        if mismatch:
+            print(mismatch)
+            return 2
     label = f"output-discipline-guided-{time.strftime('%Y%m%d-%H%M%S')}"
     rc, msg = guided_apply.apply(label, path, cmd_apply_output_discipline,
                                  lambda: verify_output_discipline(path))

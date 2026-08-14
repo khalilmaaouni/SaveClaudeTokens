@@ -893,6 +893,49 @@ def test_list_open_experiments_matches_by_label_and_cohort_end():
     ex.EXP_DIR, ex.LEDGER = saved_exp_dir, saved_ledger
 
 
+def test_list_open_experiments_fails_closed_on_unreadable_or_corrupt_baseline():
+    # R3/R3b/CRITICAL, calibrated red-then-green: list_open_experiments used
+    # to `continue` (skip) past a baseline file it could not open or parse,
+    # so a genuinely open experiment whose write got interrupted (a crash
+    # mid json.dump, or a permission-denied file) silently read as "not
+    # open". It must fail CLOSED instead: come back as an entry the caller
+    # can see, marked unreadable, naming the file.
+    saved_exp_dir, saved_ledger = ex.EXP_DIR, ex.LEDGER
+    with tempfile.TemporaryDirectory() as d:
+        ex.EXP_DIR = os.path.join(d, "experiments")
+        ex.LEDGER = os.path.join(d, "savings.jsonl")
+        os.makedirs(ex.EXP_DIR)
+        try:
+            truncated = os.path.join(ex.EXP_DIR, "truncated.json")
+            with open(truncated, "w") as f:
+                f.write('{"label": "live", "cohort_end_ts": 100')  # invalid JSON
+            open_now = ex.list_open_experiments()
+            check("a truncated baseline still counts as open",
+                  any(o.get("_unreadable") == truncated for o in open_now))
+
+            os.remove(truncated)
+            stray = os.path.join(ex.EXP_DIR, "stray.json")
+            with open(stray, "w") as f:
+                f.write("[]")  # valid JSON, not a dict: baseline.get() would crash
+            open_now2 = ex.list_open_experiments()
+            check("a non-dict JSON value counts as open, not a crash",
+                  any(o.get("_unreadable") == stray for o in open_now2))
+
+            os.remove(stray)
+            unreadable = os.path.join(ex.EXP_DIR, "noperm.json")
+            with open(unreadable, "w") as f:
+                f.write('{"label": "live", "cohort_end_ts": 100.0, "started": "x"}')
+            os.chmod(unreadable, 0o000)
+            try:
+                open_now3 = ex.list_open_experiments()
+                check("a permission-denied baseline counts as open",
+                      any(o.get("_unreadable") == unreadable for o in open_now3))
+            finally:
+                os.chmod(unreadable, 0o600)
+        finally:
+            ex.EXP_DIR, ex.LEDGER = saved_exp_dir, saved_ledger
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):

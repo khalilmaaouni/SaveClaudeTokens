@@ -678,6 +678,15 @@ def list_open_experiments(exp_dir=None, ledger=None):
     Returns a list of the raw baseline dicts (label, started, fingerprint_start,
     treats, ...), sorted by started ascending, [] when nothing is open.
 
+    Fails CLOSED, not open: a .json in exp_dir that cannot be read (permission
+    denied, truncated mid-write by a crash) or does not parse as a JSON object
+    (corrupt, or a stray non-dict value) is not skipped. It is impossible to
+    tell such a file apart from a genuinely open experiment whose baseline
+    write got interrupted, and a skip-on-unreadable rule would let an apply
+    run unchallenged right through that gap. It comes back instead as a
+    marker dict carrying "_unreadable" (the file's path) and no "label", so a
+    caller can name the file directly rather than pretend to know its label.
+
     exp_dir/ledger default to the module globals EXP_DIR/LEDGER, looked up at
     call time (not bound as default-argument values), so a test that
     monkeypatches ex.EXP_DIR/ex.LEDGER before calling with no arguments is
@@ -706,6 +715,10 @@ def list_open_experiments(exp_dir=None, ledger=None):
                 with open(fp) as f:
                     baseline = json.load(f)
             except (OSError, json.JSONDecodeError):
+                open_baselines.append({"label": None, "started": None, "_unreadable": fp})
+                continue
+            if not isinstance(baseline, dict):
+                open_baselines.append({"label": None, "started": None, "_unreadable": fp})
                 continue
             pair = (baseline.get("label"), baseline.get("cohort_end_ts"))
             if pair not in closed:

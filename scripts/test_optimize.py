@@ -203,6 +203,91 @@ def test_cmd_guided_apply_output_discipline_refuses_when_experiment_open():
         opt.cmd_apply_output_discipline = real_apply_od
 
 
+def test_cmd_guided_apply_refuses_when_the_named_file_differs_from_the_proposal():
+    # R2/R10/CRITICAL, calibrated red-then-green: the mutation used to apply
+    # to the file recorded in the PROPOSAL, while verify and --treats used
+    # the file named on the command line. Propose against A, apply naming B:
+    # A got rewritten (from the stale stored proposal), B was verified and
+    # excluded. Neither file should be touched here; the mismatch must
+    # refuse before mutate_fn (cmd_apply) ever runs.
+    with tempfile.TemporaryDirectory() as td:
+        real_review_dir = _point_review_dir_at(td)
+        try:
+            a = os.path.join(td, "A-CLAUDE.md")
+            b = os.path.join(td, "B-CLAUDE.md")
+            with open(a, "w") as f:
+                f.write(HARD + "\n" + HISTORY + "\n")
+            with open(b, "w") as f:
+                f.write("# B, a different file entirely\n")
+            opt.cmd_propose(a)
+            before_a = open(a, "rb").read()
+            before_b = open(b, "rb").read()
+            rc = opt.cmd_guided_apply(b)
+            check("cmd_guided_apply refuses with rc 2 on a target mismatch", rc == 2)
+            check("A (the proposal's real target) is never touched",
+                  open(a, "rb").read() == before_a)
+            check("B (named on the command line) is never touched either",
+                  open(b, "rb").read() == before_b)
+        finally:
+            opt.review_dir = real_review_dir
+
+
+def test_cmd_apply_refuses_a_stale_proposal_and_keeps_what_changed_since():
+    # R8/CRITICAL, calibrated red-then-green: a proposal computed earlier
+    # used to apply over a file that changed since propose, silently rolling
+    # back whatever was added in between, with verify passing anyway (it
+    # only checks the loaded line count dropped). Calibrated to the exact R8
+    # shape: propose, then append a new rule directly to the file, then
+    # apply must refuse and the new rule must survive untouched.
+    with tempfile.TemporaryDirectory() as td:
+        real_review_dir = _point_review_dir_at(td)
+        try:
+            src = os.path.join(td, "CLAUDE.md")
+            with open(src, "w") as f:
+                f.write(HARD + "\n" + HISTORY + "\n")
+            opt.cmd_propose(src)
+            with open(src, "a") as f:
+                f.write("\n## Spend cap\nNEVER exceed the session token ceiling. "
+                        "This rule was added after the proposal was made.\n")
+            before = open(src, "rb").read()
+            rc = opt.cmd_apply()
+            check("cmd_apply refuses a stale proposal instead of applying it",
+                  rc == 2)
+            check("the file is untouched: the new rule survives byte for byte",
+                  open(src, "rb").read() == before)
+            check("the new rule text is still there",
+                  "NEVER exceed the session token ceiling" in open(src).read())
+        finally:
+            opt.review_dir = real_review_dir
+
+
+def test_cmd_apply_backs_up_and_appends_to_an_existing_claude_history():
+    # M4-adjacent, calibrated red-then-green: cmd_apply used to overwrite an
+    # existing claude-history.md next to CLAUDE.md with no backup, silently
+    # destroying anything hand-written there. It must back the existing file
+    # up first, then append (never overwrite), so earlier content survives
+    # both in the backup and in place.
+    with tempfile.TemporaryDirectory() as td:
+        real_review_dir = _point_review_dir_at(td)
+        try:
+            src = os.path.join(td, "CLAUDE.md")
+            hist = os.path.join(td, "claude-history.md")
+            with open(hist, "w") as f:
+                f.write("# my own hand written history notes\n")
+            with open(src, "w") as f:
+                f.write(HARD + "\n" + HISTORY + "\n")
+            opt.cmd_propose(src)
+            rc = opt.cmd_apply()
+            check("cmd_apply succeeds", rc == 0)
+            check("the hand-written history survives in place",
+                  "hand written history notes" in open(hist).read())
+            check("a backup of the earlier history file was written",
+                  any(f.startswith("claude-history.md.bak")
+                      for f in os.listdir(td)))
+        finally:
+            opt.review_dir = real_review_dir
+
+
 def _split(section_text):
     blocks = opt.split_sections(section_text)
     # the section is the last block (after any preamble)

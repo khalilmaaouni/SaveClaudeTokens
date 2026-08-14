@@ -45,16 +45,23 @@ import optimize
 
 def propose_trim(path, keep_lines=None):
     """keep_lines defaults to context_lint.MEMORY_MAX_LINES (200). Reads path,
-    calls context_lint.truncation_report on its loaded_content to find the
-    real cut point (None if the file is already within its limit: nothing to
-    propose; returns None). Parses bullet lines via context_lint.BULLET.
-    Moves bullets starting from the ones AT OR PAST the reported cut_at_line
-    first (they already never load, so moving them costs nothing
-    behaviorally), working backward from the end of the file, until the
-    remaining index (plus the one pointer line this trim adds) fits within
-    keep_lines. Returns (new_text, archive_text, moved, before_lines,
-    after_lines), or None when there is nothing to move (either the file
-    already fits, or it holds no bullet lines to move)."""
+    calls context_lint.truncation_report on its loaded_content to find out
+    whether the file is over EITHER its documented line limit or its
+    documented byte limit (None if neither: nothing to propose; returns
+    None). Parses bullet lines via context_lint.BULLET, matched against the
+    RAW file (frontmatter and block HTML comments included, in their
+    original lines) so a moved bullet is the only kind of line that ever
+    leaves the index: frontmatter and comment blocks stay exactly where they
+    were, never archived, never dropped (M4). Moves bullets working backward
+    from the end of the file, growing the move count one bullet at a time
+    and re-measuring with context_lint.truncation_report on the candidate
+    result until BOTH the line limit and the byte limit are satisfied (M8: a
+    file that is under the line limit but over the 25KB byte limit, e.g. few
+    lines that are each very long, used to compute a move count of zero from
+    line count alone and wrongly report NO DATA). Returns (new_text,
+    archive_text, moved, before_lines, after_lines), or None when there is
+    nothing to move (either the file already fits, or it holds no bullet
+    lines to move)."""
     keep_lines = context_lint.MEMORY_MAX_LINES if keep_lines is None else keep_lines
     with open(path) as f:
         raw = f.read()
@@ -62,33 +69,36 @@ def propose_trim(path, keep_lines=None):
     if t is None:
         return None
 
-    lines = context_lint.loaded_content(raw).splitlines()
-    before_lines = len(lines)
-    bullet_idx = [i for i, ln in enumerate(lines) if context_lint.BULLET.match(ln)]
-
-    # +1 accounts for the single pointer line this trim adds once anything
-    # moves; a move that removed exactly enough bullets but added no pointer
-    # would undercount. Clamped to the bullets actually available: a file
-    # with too few bullets to reach the target still moves everything it can.
-    need_to_move = max(0, before_lines + 1 - keep_lines)
-    to_move = sorted(list(reversed(bullet_idx))[:min(need_to_move, len(bullet_idx))])
-    if not to_move:
+    raw_lines = raw.splitlines()
+    before_lines = len(context_lint.loaded_content(raw).splitlines())
+    bullet_idx = [i for i, ln in enumerate(raw_lines) if context_lint.BULLET.match(ln)]
+    if not bullet_idx:
         return None
 
-    moved = [lines[i] for i in to_move]
-    move_set = set(to_move)
-    kept_lines = [ln for i, ln in enumerate(lines) if i not in move_set]
-    pointer = (f"- {len(moved)} item(s) moved to memory-archive.md to fit the "
-              f"{keep_lines}-line load limit. See that file for the detail.")
-    new_lines = kept_lines + [pointer]
-    new_text = "\n".join(new_lines) + "\n"
+    ordered = list(reversed(bullet_idx))
+    need_to_move = max(0, before_lines + 1 - keep_lines)
+    move_count = max(1, min(need_to_move, len(bullet_idx)))
+    while True:
+        to_move = sorted(ordered[:move_count])
+        move_set = set(to_move)
+        moved = [raw_lines[i] for i in to_move]
+        kept_lines = [ln for i, ln in enumerate(raw_lines) if i not in move_set]
+        pointer = (f"- {len(moved)} item(s) moved to memory-archive.md to fit the "
+                  f"{keep_lines}-line load limit. See that file for the detail.")
+        new_text = "\n".join(kept_lines + [pointer]) + "\n"
+        if (context_lint.truncation_report(new_text, keep_lines, context_lint.MEMORY_MAX_BYTES)
+                is None or move_count >= len(bullet_idx)):
+            break
+        move_count += 1
+
     archive_text = ("# Memory index archive\n\n"
                     "Moved out of the auto-memory index by Token Shield to fit its "
                     "documented load limit. Every item here either already fell past "
                     "that limit and was never loading, or was moved to make room for "
                     "one that had; kept here for the record.\n\n" +
                     "\n".join(moved) + "\n")
-    return new_text, archive_text, moved, before_lines, len(new_lines)
+    after_lines = len(context_lint.loaded_content(new_text).splitlines())
+    return new_text, archive_text, moved, before_lines, after_lines
 
 
 def cmd_propose(path):
@@ -115,6 +125,8 @@ def cmd_propose(path):
         f.write(diff)
     with open(os.path.join(d, "memory-trim-source.txt"), "w") as f:
         f.write(path)
+    with open(os.path.join(d, "memory-trim-source.sha256"), "w") as f:
+        f.write(guided_apply.sha256_text(original))
     print(f"=== proposed memory index trim for {path} ===")
     print(f"loaded lines   {before:,} -> {after:,}")
     print(f"{len(moved)} bullet(s) proposed to move to memory-archive.md")
@@ -125,13 +137,20 @@ def cmd_propose(path):
 
 def cmd_apply():
     """Reads the review files cmd_propose wrote. Backs path up via
-    guided_apply.backup_file, writes new_text to path and archive_text to
-    memory-archive.md beside it. This IS the mutate_fn passed to
-    guided_apply.apply."""
+    guided_apply.backup_file, writes new_text to path and appends
+    archive_text to memory-archive.md beside it. This IS the mutate_fn
+    passed to guided_apply.apply, so it returns an int rc: 0 applied, 2 NO
+    DATA/REFUSED and nothing written.
+    R8/CRITICAL: refuses when path changed since this proposal was made
+    (same staleness guard as optimize.cmd_apply's, see there for why).
+    M4: an existing memory-archive.md beside path is backed up first, then
+    appended to rather than overwritten, so earlier archived content is
+    never silently destroyed."""
     d = optimize.review_dir()
     src_file = os.path.join(d, "memory-trim-source.txt")
     prop = os.path.join(d, "memory-trim.proposed")
     archive = os.path.join(d, "memory-archive.md")
+    hash_file = os.path.join(d, "memory-trim-source.sha256")
     if not (os.path.exists(src_file) and os.path.exists(prop)):
         print("NO DATA: no proposal to apply. Run without apply first.")
         return 2
@@ -139,6 +158,19 @@ def cmd_apply():
         path = f.read().strip()
     if not os.path.exists(path):
         print(f"NO DATA: original {path} is gone; not applying.")
+        return 2
+    with open(path) as f:
+        current = f.read()
+    current_hash = guided_apply.sha256_text(current)
+    stored_hash = None
+    if os.path.exists(hash_file):
+        with open(hash_file) as f:
+            stored_hash = f.read().strip()
+    if stored_hash != current_hash:
+        print(f"REFUSED: {path} changed since this proposal was made; applying it "
+              f"now would silently roll back whatever changed in between. "
+              f"Re-propose against the current file: python3 memory_trim.py "
+              f"--file {path}")
         return 2
     backup = guided_apply.backup_file(path)
     with open(prop) as f:
@@ -148,10 +180,13 @@ def cmd_apply():
     archive_dest = os.path.join(os.path.dirname(path), "memory-archive.md")
     with open(archive) as f:
         archive_text = f.read()
-    with open(archive_dest, "w") as f:
+    archive_backup = guided_apply.backup_if_exists(archive_dest)
+    with open(archive_dest, "a") as f:
         f.write(archive_text)
     print(f"applied. original backed up to {backup}")
-    print(f"archive written to {archive_dest}")
+    if archive_backup:
+        print(f"existing archive backed up to {archive_backup}")
+    print(f"archive appended at {archive_dest}")
     print(f"revert with: cp {backup} {path}")
     return 0
 
@@ -182,15 +217,36 @@ def verify_trim(original_text, path):
 
 
 def cmd_guided_apply_trim(path):
-    """The wave R entry point. Reads path's current text (for verify_trim's
-    before count), then calls guided_apply.apply(label, treats=None,
-    mutate_fn=cmd_apply, verify_fn=lambda: verify_trim(original, path)).
+    """The wave R entry point. Checks the open-experiment interlock FIRST,
+    the same gate guided_apply.apply itself leads with, so "an experiment is
+    already open" always wins and is always named correctly, regardless of
+    any stale proposal sitting in the review directory. R2/R10/CRITICAL:
+    only once that is clear, refuses outright, naming both paths, when path
+    (named at apply time) does not match the stored proposal's own target
+    (memory-trim-source.txt). The mismatch check is only run when a proposal
+    actually exists; a missing proposal falls through to cmd_apply's own NO
+    DATA path (propagated by guided_apply.apply).
+    Reads path's current text (for verify_trim's before count), then calls
+    guided_apply.apply(label, treats=None, mutate_fn=cmd_apply,
+    verify_fn=lambda: verify_trim(original, path)).
     treats=None: fingerprint_files() never includes any MEMORY.md path, so a
     memory trim cannot trip the confounder guard at all and needs no
     exclusion."""
     if not os.path.exists(path):
         print(f"NO DATA: {path} does not exist.")
         return 2
+    refusal = guided_apply.refuse_if_experiment_open()
+    if refusal:
+        print(refusal)
+        return 2
+    src_file = os.path.join(optimize.review_dir(), "memory-trim-source.txt")
+    if os.path.exists(src_file):
+        with open(src_file) as f:
+            stored_path = f.read().strip()
+        mismatch = guided_apply.refuse_if_target_mismatch(path, stored_path)
+        if mismatch:
+            print(mismatch)
+            return 2
     with open(path) as f:
         original = f.read()
     label = f"memory-trim-guided-{time.strftime('%Y%m%d-%H%M%S')}"
