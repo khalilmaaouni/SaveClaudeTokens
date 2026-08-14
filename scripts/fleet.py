@@ -87,9 +87,51 @@ is newer than SCHEMA_VERSION, stating so, rather than guessing at fields it
 has never seen. This is the same refusal discipline measure_tokens.py and
 experiment.py already apply to their own schema fields.
 
+PHASE F2: INIT, JOIN, LEAVE, THE MDM ONE-LINER
+-------------------------------------------------
+F2 adds the admin and machine side of joining a fleet, still against the
+same git store adapter F1 built:
+
+  - `fleet init` (admin, once) prints the exact data-sharing disclosure
+    BEFORE touching the store, then clones it, refuses to clobber an
+    existing org-profile.json without --force, and pushes
+    org-profile.json (org, salt, default_mode, telemetry, push_cadence)
+    plus a fleet/ directory placeholder. Every answer (store, org, salt,
+    default_mode) is also a flag, so init runs with no TTY at all (MDM,
+    tests); only when a flag is missing AND stdin is a real terminal does
+    it fall back to asking.
+  - `fleet join <store-url>` writes the local fleet config (org, salt,
+    hostname, team, environment, store) straight from flags: no step in
+    join ever depends on the store being reachable, so the "an unreachable
+    store never blocks a developer" rule (see the design doc) holds for
+    join itself, not only for push. It then builds a REGISTRATION record
+    (build_registration_record, below) and pushes it through F1's own
+    push_record, so an unreachable store still queues the registration
+    locally with one warning rather than failing the join.
+  - `fleet leave` deletes the local fleet config; cmd_build and cmd_push
+    already refuse with NO DATA when it is absent, so leaving needs no
+    other code path to "stop pushes".
+  - scripts/fleet-join.sh is the thin POSIX sh wrapper MDM/Jamf deploys as
+    one line: it shells out to `python3 fleet.py join` with the org's
+    values read from environment variables.
+
+WHY A SEPARATE "REGISTRATION" RECORD
+--------------------------------------
+build_record (F1) is NO DATA on purpose when a day has no counters and no
+experiments, so a brand new machine with an empty telemetry ledger would
+never push anything on join, and would never appear on a fleet dashboard
+at all. Joining is itself the event worth recording, so
+build_registration_record always returns a record (counters={},
+experiments=[]) for the day, still whitelisted through the exact same
+frozen schema as every other record; it just never applies build_record's
+"nothing to report" refusal.
+
 USAGE
   python3 fleet.py build [--day YYYY-MM-DD] [--config PATH] [--telemetry-ledger PATH] [--experiment-ledger PATH] [--config-fingerprint STR] [--token-shield-version STR]
   python3 fleet.py push --store URL [--day YYYY-MM-DD] [--config PATH] [--telemetry-ledger PATH] [--experiment-ledger PATH] [--config-fingerprint STR] [--token-shield-version STR] [--queue-dir PATH]
+  python3 fleet.py init <store-url> --org NAME --salt SALT --default-mode conservative|balanced|aggressive [--force]
+  python3 fleet.py join <store-url> --org NAME --salt SALT [--team TAG] [--environment TAG] [--hostname HOST] [--day YYYY-MM-DD] [--config PATH] [--queue-dir PATH]
+  python3 fleet.py leave [--config PATH]
 """
 
 import argparse
@@ -114,6 +156,24 @@ SCHEMA_VERSION = 1
 
 DEFAULT_FLEET_CONFIG = os.path.expanduser("~/.token-shield/fleet-config.json")
 LOCAL_QUEUE_DIR = os.path.expanduser("~/.token-shield/fleet-queue/")
+
+ORG_PROFILE_FILENAME = "org-profile.json"
+ORG_PROFILE_SCHEMA_VERSION = 1
+VALID_DEFAULT_MODES = ("conservative", "balanced", "aggressive")
+
+# Printed by `fleet init`, unconditionally, before any file is created or
+# any commit made: exactly the "deliberately absent" list the design doc
+# names, restated as what IS shared so an admin never has to infer it.
+DISCLOSURE_TEXT = """\
+DATA THIS FLEET WILL SHARE, PER MACHINE, PER PUSH:
+  - token counters (input, output, cache read, cache write), bucketed by day
+  - labeled experiment results (VERIFIED or NOT_PROVEN) with their fingerprints
+  - this machine's config fingerprint and installed token-shield version
+  - the team and environment tags set at join time
+  - a machine id: a one-way hash of the hostname and this org's salt, never
+    the raw hostname
+NEVER SHARED, by design: prompts, file contents, repo names, session
+transcripts, or user names."""
 
 
 class FleetSchemaError(ValueError):
@@ -169,6 +229,27 @@ def _read_local_config(path):
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _write_local_config(path, config):
+    """Write `fleet join`'s local fleet config as JSON, private to this
+    account: parent dir at 0700, file at 0600. Never raises on a chmod
+    that fails (some filesystems do not support the bits), matching the
+    same best-effort permission discipline _queue_locally already applies
+    to queued records."""
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+    with open(path, "wb") as f:
+        f.write((json.dumps(config, sort_keys=True, indent=2) + "\n").encode("utf-8"))
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _day_counters(ledger_path, day):
@@ -318,6 +399,48 @@ def build_record(telem_ledger, exp_ledger, day, local_config,
     return sig._project(_load_schema(), candidate)
 
 
+def build_registration_record(day, local_config, config_fingerprint=None,
+                              token_shield_version=None):
+    """The minimal record `fleet join` pushes so a machine appears on the
+    fleet dashboard immediately, even before any telemetry ledger row
+    exists for `day`. Unlike build_record, this never returns None for an
+    empty day: registering is itself the event being recorded, not a data
+    day, so counters={} and experiments=[] are the honest content, not a
+    NO DATA case. Still whitelisted through the exact same frozen schema
+    as every other record (sig._project), so it can never carry more than
+    those two constants plus the identity and version fields every other
+    record carries (machine_id, team, environment, config_fingerprint,
+    token_shield_version)."""
+    local_config = local_config or {}
+    candidate = {
+        "schema": SCHEMA_VERSION,
+        "date": day,
+        "counters": {},
+        "experiments": [],
+    }
+
+    hostname = local_config.get("hostname")
+    salt = local_config.get("salt")
+    if isinstance(hostname, str) and hostname and isinstance(salt, str) and salt:
+        candidate["machine_id"] = compute_machine_id(hostname, salt)
+
+    team = local_config.get("team")
+    if isinstance(team, str) and team:
+        candidate["team"] = team
+    environment = local_config.get("environment")
+    if isinstance(environment, str) and environment:
+        candidate["environment"] = environment
+
+    if isinstance(config_fingerprint, str) and config_fingerprint:
+        candidate["config_fingerprint"] = config_fingerprint
+
+    version = token_shield_version or _plugin_version()
+    if isinstance(version, str) and version:
+        candidate["token_shield_version"] = version
+
+    return sig._project(_load_schema(), candidate)
+
+
 def load_record(path):
     """Parse and validate one fleet record file. Refuses (raises
     FleetSchemaError) a record whose "schema" int is newer than
@@ -462,6 +585,186 @@ def _last_line(text):
 
 # --- CLI ---------------------------------------------------------------------
 
+def _maybe_prompt(value, prompt_text):
+    """Return `value` unchanged whenever it is already set, or whenever
+    stdin is not a real terminal (MDM, a test harness, a CI runner): every
+    answer `fleet init` needs is also a flag, so a missing flag in a
+    non-interactive context stays missing and is reported by the caller's
+    own validation, never guessed. Only prompts (input()) when a human is
+    actually there to answer. Never raises on EOF or Ctrl-C mid-prompt;
+    both just leave `value` as it was."""
+    if value:
+        return value
+    if not sys.stdin.isatty():
+        return value
+    try:
+        entered = input(prompt_text)
+    except (EOFError, KeyboardInterrupt):
+        return value
+    entered = entered.strip()
+    return entered or value
+
+
+def cmd_init(store, org, salt, default_mode, force):
+    store = _maybe_prompt(store, "Fleet store git URL: ")
+    org = _maybe_prompt(org, "Org name: ")
+    salt = _maybe_prompt(
+        salt, "Org salt (every machine that joins must use this exact "
+        "value): ")
+    default_mode = _maybe_prompt(
+        default_mode, f"Default mode ({'/'.join(VALID_DEFAULT_MODES)}): ")
+
+    missing = [name for name, v in (("store", store), ("--org", org),
+                                    ("--salt", salt),
+                                    ("--default-mode", default_mode))
+              if not v]
+    if missing:
+        print(f"refused: missing required value(s): {', '.join(missing)}",
+              file=sys.stderr)
+        return 2
+    if default_mode not in VALID_DEFAULT_MODES:
+        print(f"refused: --default-mode must be one of "
+              f"{', '.join(VALID_DEFAULT_MODES)} (got {default_mode!r})",
+              file=sys.stderr)
+        return 2
+
+    # Printed before any git operation, so an admin sees exactly what will
+    # be shared even if the clone below fails.
+    print(DISCLOSURE_TEXT)
+
+    with tempfile.TemporaryDirectory(prefix="fleet-init-") as tmp:
+        clone_dir = os.path.join(tmp, "store")
+        ok, _out, err = _run_git(["clone", "--quiet", store, clone_dir])
+        if not ok:
+            reason = _last_line(err) or "could not clone the fleet store"
+            print(f"refused: {reason}", file=sys.stderr)
+            return 2
+
+        profile_path = os.path.join(clone_dir, ORG_PROFILE_FILENAME)
+        if os.path.isfile(profile_path) and not force:
+            print(f"refused: {ORG_PROFILE_FILENAME} already exists in "
+                  f"{store}; pass --force to overwrite", file=sys.stderr)
+            return 2
+
+        profile = {
+            "schema": ORG_PROFILE_SCHEMA_VERSION,
+            "org": org,
+            "salt": salt,
+            "default_mode": default_mode,
+            "telemetry": "counters_only",
+            "push_cadence": "manual",
+        }
+        with open(profile_path, "wb") as f:
+            f.write((json.dumps(profile, sort_keys=True, indent=2) + "\n")
+                    .encode("utf-8"))
+
+        fleet_dir = os.path.join(clone_dir, "fleet")
+        os.makedirs(fleet_dir, exist_ok=True)
+        keep_path = os.path.join(fleet_dir, ".gitkeep")
+        if not os.path.isfile(keep_path):
+            open(keep_path, "wb").close()
+
+        ok, _out, err = _run_git(
+            ["add", ORG_PROFILE_FILENAME, os.path.join("fleet", ".gitkeep")],
+            cwd=clone_dir)
+        if not ok:
+            reason = _last_line(err) or "could not stage the org profile"
+            print(f"refused: {reason}", file=sys.stderr)
+            return 2
+
+        staged = _has_staged_changes(clone_dir)
+        if staged is None:
+            print("refused: could not tell whether the org profile changed",
+                  file=sys.stderr)
+            return 2
+        if not staged:
+            print(f"nothing to do: {ORG_PROFILE_FILENAME} in {store} "
+                  f"already matches.")
+            return 0
+
+        ok, _out, err = _run_git([
+            "-c", "user.email=fleet@token-shield.local",
+            "-c", "user.name=token-shield-fleet",
+            "commit", "--quiet", "-m", f"fleet: init {org}",
+        ], cwd=clone_dir)
+        if not ok:
+            reason = _last_line(err) or "could not commit the org profile"
+            print(f"refused: {reason}", file=sys.stderr)
+            return 2
+
+        ok, _out, err = _run_git(["push", "--quiet"], cwd=clone_dir)
+        if not ok:
+            reason = _last_line(err) or "could not push the org profile"
+            print(f"refused: {reason}", file=sys.stderr)
+            return 2
+
+    print(f"initialized fleet store: org={org} default_mode={default_mode} "
+          f"store={store}")
+    return 0
+
+
+def cmd_join(store, org, salt, team, environment, hostname, day,
+             config_path, queue_dir, config_fingerprint,
+             token_shield_version):
+    missing = [name for name, v in (("store", store), ("--org", org),
+                                    ("--salt", salt))
+              if not v]
+    if missing:
+        print(f"refused: missing required value(s): {', '.join(missing)}",
+              file=sys.stderr)
+        return 2
+
+    hostname = hostname or platform.node()
+    if not hostname:
+        print("refused: could not determine this machine's hostname; "
+              "pass --hostname", file=sys.stderr)
+        return 2
+
+    config_path = config_path or DEFAULT_FLEET_CONFIG
+    local_config = {"org": org, "salt": salt, "hostname": hostname,
+                    "store": store}
+    if team:
+        local_config["team"] = team
+    if environment:
+        local_config["environment"] = environment
+    _write_local_config(config_path, local_config)
+
+    machine_id = compute_machine_id(hostname, salt)
+    if config_fingerprint is None:
+        try:
+            config_fingerprint = exp.compute_fingerprint()
+        except Exception:
+            config_fingerprint = None
+
+    day = day or time.strftime("%Y-%m-%d")
+    record = build_registration_record(day, local_config,
+                                       config_fingerprint=config_fingerprint,
+                                       token_shield_version=token_shield_version)
+    # Never blocks the join: an unreachable store queues the registration
+    # locally with one warning (push_record's own contract), the same
+    # rule that already protects a routine `fleet push`.
+    pushed = push_record(record, store, org, machine_id, day,
+                         queue_dir=queue_dir)
+
+    print(f"joined fleet: org={org} machine_id={machine_id} "
+          f"team={team or '(none)'} environment={environment or '(none)'}")
+    if not pushed:
+        print("this machine will appear on the dashboard once the queued "
+              "record reaches the store.")
+    return 0
+
+
+def cmd_leave(config_path):
+    config_path = config_path or DEFAULT_FLEET_CONFIG
+    if not os.path.isfile(config_path):
+        print(f"not joined: no local fleet config at "
+              f"{_display_path(config_path)}")
+        return 0
+    os.remove(config_path)
+    print(f"left the fleet: removed {_display_path(config_path)}")
+    return 0
+
+
 def cmd_build(day, config_path, telem_ledger, exp_ledger, config_fingerprint,
               token_shield_version):
     day = day or time.strftime("%Y-%m-%d")
@@ -540,13 +843,48 @@ def main():
     p_push.add_argument("--store", required=True, help="git remote URL of the org's fleet store")
     p_push.add_argument("--queue-dir", default=None)
 
+    p_init = sub.add_parser("init", help="admin, once: create the org profile in the fleet store")
+    p_init.add_argument("store", nargs="?", default=None,
+                        help="git URL of the org's fleet store")
+    p_init.add_argument("--org", default=None, help="org name")
+    p_init.add_argument("--salt", default=None,
+                        help="org salt; every machine that joins must use this exact value")
+    p_init.add_argument("--default-mode", default=None,
+                        help="conservative, balanced, or aggressive")
+    p_init.add_argument("--force", action="store_true",
+                        help="overwrite an existing org-profile.json in the store")
+
+    p_join = sub.add_parser("join", help="each machine, one line: register and push once immediately")
+    p_join.add_argument("store", help="git URL of the org's fleet store")
+    p_join.add_argument("--org", default=None, help="org name (from `fleet init`)")
+    p_join.add_argument("--salt", default=None, help="org salt (from `fleet init`)")
+    p_join.add_argument("--team", default=None, help="free team tag")
+    p_join.add_argument("--environment", default=None, help="free environment tag")
+    p_join.add_argument("--hostname", default=None, help="default: this machine's hostname")
+    p_join.add_argument("--day", default=None, help="YYYY-MM-DD, default today")
+    p_join.add_argument("--config", default=None, help="local fleet config path")
+    p_join.add_argument("--queue-dir", default=None)
+    p_join.add_argument("--config-fingerprint", default=None)
+    p_join.add_argument("--token-shield-version", default=None)
+
+    p_leave = sub.add_parser("leave", help="remove local fleet config; stops all future pushes")
+    p_leave.add_argument("--config", default=None, help="local fleet config path")
+
     a = ap.parse_args()
     if a.action == "build":
         return cmd_build(a.day, a.config, a.telemetry_ledger, a.experiment_ledger,
                          a.config_fingerprint, a.token_shield_version)
-    return cmd_push(a.day, a.config, a.telemetry_ledger, a.experiment_ledger,
-                    a.config_fingerprint, a.token_shield_version, a.store,
-                    a.queue_dir)
+    if a.action == "push":
+        return cmd_push(a.day, a.config, a.telemetry_ledger, a.experiment_ledger,
+                        a.config_fingerprint, a.token_shield_version, a.store,
+                        a.queue_dir)
+    if a.action == "init":
+        return cmd_init(a.store, a.org, a.salt, a.default_mode, a.force)
+    if a.action == "join":
+        return cmd_join(a.store, a.org, a.salt, a.team, a.environment, a.hostname,
+                        a.day, a.config, a.queue_dir, a.config_fingerprint,
+                        a.token_shield_version)
+    return cmd_leave(a.config)
 
 
 if __name__ == "__main__":

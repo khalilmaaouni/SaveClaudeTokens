@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Self-check for fleet.py, Fleet F1. No framework, no fixtures.
+"""Self-check for fleet.py, Fleet F1 and F2. No framework, no fixtures.
 
     python3 scripts/test_fleet.py
 
 Every test runs on fixture ledgers, fixture git repos, and fixture queue
 dirs under a temp dir, never the real ~/.claude/ or ~/.token-shield/.
+
+F2 (init, join, leave, the registration record) is covered from the section
+marked "F2:" onward, below the F1 tests it was appended to.
 """
 
 import io
@@ -15,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 import fleet as fl
 
@@ -127,16 +131,30 @@ def _capture_stderr(fn, *args, **kwargs):
     return result, buf.getvalue()
 
 
+def _capture_stdout(fn, *args, **kwargs):
+    real_stdout = sys.stdout
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        result = fn(*args, **kwargs)
+    finally:
+        sys.stdout = real_stdout
+    return result, buf.getvalue()
+
+
 def _git(args, cwd):
     subprocess.run(["git"] + args, cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def _make_bare_store(d):
+def _make_bare_store(d, org_profile=None):
     """A local bare git repo that stands in for the org's fleet store, plus
     one working clone used only to seed an initial commit (an empty bare
     repo with nothing on its default branch cannot be cloned into a usable
     working tree by `git clone` alone in the exact same way; seeding one
-    commit keeps the fixture boring and realistic)."""
+    commit keeps the fixture boring and realistic). When `org_profile` is
+    given (a dict), it is committed alongside README as org-profile.json at
+    the store root in the same seed commit, so a `fleet init` test can
+    start from an already-initialized store without a separate init push."""
     bare = os.path.join(d, "store.git")
     os.makedirs(bare)
     _git(["init", "--quiet", "--bare"], bare)
@@ -145,9 +163,22 @@ def _make_bare_store(d):
     with open(os.path.join(seed, "README"), "w") as f:
         f.write("fleet store\n")
     _git(["add", "README"], seed)
+    if org_profile is not None:
+        with open(os.path.join(seed, "org-profile.json"), "w") as f:
+            json.dump(org_profile, f)
+        _git(["add", "org-profile.json"], seed)
     _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "seed"], seed)
     _git(["push", "--quiet"], seed)
     return bare
+
+
+def _commit_count(repo_dir):
+    """Number of commits reachable from HEAD in `repo_dir` (bare or not);
+    used by the join idempotency tests to prove a second join adds no new
+    commit to the store."""
+    proc = subprocess.run(["git", "log", "--oneline"], cwd=repo_dir,
+                          capture_output=True, text=True, check=True)
+    return len([l for l in proc.stdout.splitlines() if l.strip()])
 
 
 # (a) record builder correctness ---------------------------------------------
@@ -491,6 +522,371 @@ def test_cmd_push_refuses_without_org_or_salt():
                                   os.path.join(d, "nonexistent.git"), None)
     assert rc == 2
     assert "refused" in err
+
+
+# --- F2: build_registration_record --------------------------------------------
+
+def test_build_registration_record_is_never_none_even_for_an_empty_day():
+    record = fl.build_registration_record("2026-08-10", LOCAL_CONFIG,
+                                          config_fingerprint="fp-1",
+                                          token_shield_version="1.8.0")
+    assert record is not None
+    assert record["schema"] == fl.SCHEMA_VERSION
+    assert record["date"] == "2026-08-10"
+    assert record["counters"] == {}
+    assert record["experiments"] == []
+    assert record["team"] == "ios"
+    assert record["environment"] == "ci"
+    assert record["machine_id"] == fl.compute_machine_id("khalils-mbp.local", "org-salt-xyz")
+    assert record["config_fingerprint"] == "fp-1"
+    assert record["token_shield_version"] == "1.8.0"
+
+
+def test_build_registration_record_projection_strips_a_smuggled_field():
+    # Same discipline as F1's test_projection_strips_a_smuggled_field: bolt
+    # a field the schema never names onto the candidate the way a careless
+    # edit might, and prove sig._project (not luck) is what removes it.
+    real_project = fl.sig._project
+
+    def _smuggling_project(schema, candidate):
+        candidate["user_name"] = "khalil"
+        return real_project(schema, candidate)
+
+    fl.sig._project = _smuggling_project
+    try:
+        record = fl.build_registration_record("2026-08-10", LOCAL_CONFIG)
+    finally:
+        fl.sig._project = real_project
+    assert "user_name" not in record
+
+
+# --- F2: fleet init -------------------------------------------------------------
+
+DEFAULT_ORG_PROFILE = {"schema": 1, "org": "acme", "salt": "org-salt-xyz",
+                       "default_mode": "conservative", "telemetry": "counters_only",
+                       "push_cadence": "manual"}
+
+
+def test_init_writes_org_profile_and_prints_the_disclosure():
+    if not GIT_AVAILABLE:
+        _skip("test_init_writes_org_profile_and_prints_the_disclosure", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        rc, out = _capture_stdout(fl.cmd_init, bare, "acme", "org-salt-xyz", "balanced", False)
+        assert rc == 0
+        assert "NEVER SHARED" in out
+        assert "prompts" in out
+        assert "initialized fleet store" in out
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        with open(os.path.join(check, "org-profile.json")) as f:
+            profile = json.load(f)
+        assert profile["org"] == "acme"
+        assert profile["salt"] == "org-salt-xyz"
+        assert profile["default_mode"] == "balanced"
+        assert profile["telemetry"] == "counters_only"
+        assert os.path.isfile(os.path.join(check, "fleet", ".gitkeep"))
+
+
+def test_init_disclosure_prints_even_when_the_store_is_unreachable():
+    # Calibrates the "disclosure prints before anything is created"
+    # ordering: if a future edit moved the print(DISCLOSURE_TEXT) call
+    # after the clone succeeded, this goes red the moment the store cannot
+    # be reached at all, because the disclosure would never print. During
+    # development this was proven by moving the print call after the
+    # clone's ok check, confirming this assertion fails, then restoring it.
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        rc, out = _capture_stdout(fl.cmd_init, unreachable, "acme", "salt-x", "balanced", False)
+    assert rc == 2
+    assert "NEVER SHARED" in out
+    assert "prompts" in out
+
+
+def test_init_refuses_to_overwrite_existing_profile_without_force():
+    if not GIT_AVAILABLE:
+        _skip("test_init_refuses_to_overwrite_existing_profile_without_force", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d, org_profile=DEFAULT_ORG_PROFILE)
+        rc, err = _capture_stderr(fl.cmd_init, bare, "acme", "new-salt", "balanced", False)
+        assert rc == 2
+        assert "force" in err
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        with open(os.path.join(check, "org-profile.json")) as f:
+            stored = json.load(f)
+    assert stored == DEFAULT_ORG_PROFILE
+
+
+def test_init_with_force_overwrites_existing_profile():
+    if not GIT_AVAILABLE:
+        _skip("test_init_with_force_overwrites_existing_profile", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d, org_profile=DEFAULT_ORG_PROFILE)
+        rc, _out = _capture_stdout(fl.cmd_init, bare, "acme", "new-salt", "aggressive", True)
+        assert rc == 0
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        with open(os.path.join(check, "org-profile.json")) as f:
+            stored = json.load(f)
+    assert stored["salt"] == "new-salt"
+    assert stored["default_mode"] == "aggressive"
+
+
+def test_init_refuses_an_invalid_default_mode():
+    with tempfile.TemporaryDirectory() as d:
+        unused_store = os.path.join(d, "unused.git")
+        rc, err = _capture_stderr(fl.cmd_init, unused_store, "acme", "salt-x", "chaotic", False)
+        assert rc == 2
+        assert "--default-mode" in err
+        assert not os.path.exists(unused_store)  # refused before ever touching the store
+
+
+class _FakeNonTtyStdin:
+    def isatty(self):
+        return False
+
+
+def test_init_refuses_missing_required_values_without_a_tty():
+    real_stdin = sys.stdin
+    sys.stdin = _FakeNonTtyStdin()
+    try:
+        rc, err = _capture_stderr(fl.cmd_init, None, None, None, None, False)
+    finally:
+        sys.stdin = real_stdin
+    assert rc == 2
+    assert "refused" in err
+    assert "store" in err
+
+
+# --- F2: fleet join ---------------------------------------------------------------
+
+def _join_args(store, config_path, queue_dir, team="ios", environment="ci",
+               hostname="test-host", day="2026-08-14"):
+    return (store, "acme", "org-salt-xyz", team, environment, hostname, day,
+           config_path, queue_dir, "fp-1", "1.8.0")
+
+
+def test_join_writes_local_config_and_lands_the_registration_in_a_bare_repo():
+    if not GIT_AVAILABLE:
+        _skip("test_join_writes_local_config_and_lands_the_registration_in_a_bare_repo", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        rc, out = _capture_stdout(fl.cmd_join, *_join_args(bare, config_path, queue_dir))
+        assert rc == 0
+        assert "joined fleet" in out
+
+        with open(config_path) as f:
+            local_config = json.load(f)
+        assert local_config["org"] == "acme"
+        assert local_config["salt"] == "org-salt-xyz"
+        assert local_config["hostname"] == "test-host"
+        assert local_config["team"] == "ios"
+        assert local_config["environment"] == "ci"
+        assert local_config["store"] == bare
+
+        machine_id = fl.compute_machine_id("test-host", "org-salt-xyz")
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        landed = os.path.join(check, "fleet", "acme", machine_id, "2026-08-14.json")
+        assert os.path.isfile(landed)
+        with open(landed) as f:
+            record = json.load(f)
+    assert record["machine_id"] == machine_id
+    assert record["team"] == "ios"
+    assert record["environment"] == "ci"
+    assert record["counters"] == {}
+    assert record["experiments"] == []
+    assert record["config_fingerprint"] == "fp-1"
+    assert record["token_shield_version"] == "1.8.0"
+
+
+def test_join_writes_config_with_restrictive_permissions():
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        config_path = os.path.join(d, "nested", "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        _capture_stdout(fl.cmd_join, *_join_args(unreachable, config_path, queue_dir))
+        dir_mode = stat.S_IMODE(os.stat(os.path.dirname(config_path)).st_mode)
+        file_mode = stat.S_IMODE(os.stat(config_path).st_mode)
+    assert dir_mode == 0o700, oct(dir_mode)
+    assert file_mode == 0o600, oct(file_mode)
+
+
+def test_join_to_an_unreachable_store_still_writes_config_and_never_blocks():
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        rc, err = _capture_stderr(fl.cmd_join, *_join_args(unreachable, config_path, queue_dir))
+        assert rc == 0  # never blocked by an unreachable store
+        assert os.path.isfile(config_path)
+        warn_lines = [l for l in err.strip().splitlines() if l.strip()]
+        assert len(warn_lines) == 1
+        assert warn_lines[0].startswith("warning:")
+        assert os.path.isdir(queue_dir)
+        assert len(os.listdir(queue_dir)) == 1
+
+
+def test_join_refuses_missing_org_or_salt():
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "fleet-config.json")
+        rc, err = _capture_stderr(fl.cmd_join, "https://example.invalid/store.git",
+                                  None, None, None, None, "host", "2026-08-14",
+                                  config_path, None, "fp", "1.8.0")
+        assert rc == 2
+        assert "refused" in err
+        assert not os.path.isfile(config_path)
+
+
+def test_join_twice_is_idempotent_one_commit_in_the_store():
+    if not GIT_AVAILABLE:
+        _skip("test_join_twice_is_idempotent_one_commit_in_the_store", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        args = _join_args(bare, config_path, queue_dir)
+
+        rc1, _ = _capture_stdout(fl.cmd_join, *args)
+        commits_after_first = _commit_count(bare)
+        rc2, err2 = _capture_stderr(fl.cmd_join, *args)
+        commits_after_second = _commit_count(bare)
+        # A genuine no-op re-join never falls back to the local queue: it
+        # recognizes nothing changed before ever attempting a commit. A
+        # regression that removed that early check still leaves the commit
+        # count unchanged (git itself refuses an empty commit), but it
+        # would start queuing and warning on every idempotent re-join,
+        # which this catches.
+        assert err2 == ""
+        assert not os.path.isdir(queue_dir) or not os.listdir(queue_dir)
+    assert rc1 == 0 and rc2 == 0
+    assert commits_after_second == commits_after_first  # one registration, second join changes nothing
+
+
+def test_join_idempotency_guard_calibrated_break_then_restore():
+    # Calibration: temporarily breaks the exact guard (_has_staged_changes)
+    # that makes a second join a no-op at the git level, proving this test
+    # suite would catch a regression that reintroduced a duplicate
+    # registration commit. Forcing _has_staged_changes to lie ("changed")
+    # is not enough on its own: git's own `commit` refuses an empty commit,
+    # so a second, independent safety net still saves an otherwise-broken
+    # guard. The commit call is forced to `--allow-empty` too, the same way
+    # a real regression might (a future edit adds --allow-empty for some
+    # unrelated flaky-diff reason and only then exposes the missing guard),
+    # so this calibration actually reaches the duplicate-commit failure it
+    # claims to catch. Both fakes are restored in a `finally`, so no other
+    # test observes either one broken.
+    if not GIT_AVAILABLE:
+        _skip("test_join_idempotency_guard_calibrated_break_then_restore", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        args = _join_args(bare, config_path, queue_dir)
+
+        real_has_staged_changes = fl._has_staged_changes
+        real_run_git = fl._run_git
+
+        def _fake_run_git(git_args, cwd=None, timeout=30):
+            if "commit" in git_args:
+                idx = git_args.index("commit")
+                git_args = git_args[:idx + 1] + ["--allow-empty"] + git_args[idx + 1:]
+            return real_run_git(git_args, cwd=cwd, timeout=timeout)
+
+        fl._has_staged_changes = lambda clone_dir: True  # BROKEN: always claims "changed"
+        fl._run_git = _fake_run_git  # BROKEN: lets an empty commit through anyway
+        try:
+            _capture_stdout(fl.cmd_join, *args)
+            commits_after_first = _commit_count(bare)
+            _capture_stdout(fl.cmd_join, *args)
+            commits_after_second_broken = _commit_count(bare)
+        finally:
+            fl._has_staged_changes = real_has_staged_changes
+            fl._run_git = real_run_git
+
+        # RED: with the guard broken, the second join added a duplicate commit.
+        assert commits_after_second_broken == commits_after_first + 1
+
+        # GREEN: with the real guard restored, a third join changes nothing.
+        _capture_stdout(fl.cmd_join, *args)
+        commits_after_restored = _commit_count(bare)
+    assert commits_after_restored == commits_after_second_broken
+
+
+def test_join_default_day_is_today():
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")  # keep it offline and fast
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        rc, _out = _capture_stdout(
+            fl.cmd_join, unreachable, "acme", "org-salt-xyz", None, None, "test-host",
+            None,  # no --day: must default to today
+            config_path, queue_dir, "fp-1", "1.8.0")
+        assert rc == 0
+        today = time.strftime("%Y-%m-%d")
+        queued = os.listdir(queue_dir)
+        assert len(queued) == 1
+        assert queued[0].endswith(f"__{today}.json")
+
+
+# --- F2: fleet leave --------------------------------------------------------------
+
+def test_leave_removes_the_local_config():
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "fleet-config.json")
+        with open(config_path, "w") as f:
+            json.dump({"org": "acme"}, f)
+        rc, out = _capture_stdout(fl.cmd_leave, config_path)
+        assert rc == 0
+        assert not os.path.isfile(config_path)
+        assert "left the fleet" in out
+
+
+def test_leave_when_never_joined_is_a_harmless_noop():
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "does-not-exist.json")
+        rc, out = _capture_stdout(fl.cmd_leave, config_path)
+        assert rc == 0
+        assert not os.path.isfile(config_path)
+        assert "not joined" in out
+
+
+def test_leave_then_join_reregisters():
+    if not GIT_AVAILABLE:
+        _skip("test_leave_then_join_reregisters", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        args = _join_args(bare, config_path, queue_dir)
+
+        _capture_stdout(fl.cmd_join, *args)
+        assert os.path.isfile(config_path)
+
+        fl.cmd_leave(config_path)
+        assert not os.path.isfile(config_path)
+
+        rc, out = _capture_stdout(fl.cmd_join, *args)
+        assert rc == 0
+        assert "joined fleet" in out
+        assert os.path.isfile(config_path)
+        with open(config_path) as f:
+            cfg = json.load(f)
+        assert cfg["org"] == "acme"
+        assert cfg["hostname"] == "test-host"
 
 
 if __name__ == "__main__":
