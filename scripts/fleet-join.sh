@@ -12,10 +12,17 @@
 #   FLEET_ORG    org name (from `fleet init`)
 #   FLEET_SALT   org salt (from `fleet init`); every machine must use the
 #                exact same value or machine ids stop matching across the
-#                fleet
+#                fleet. Passed to fleet.py join THROUGH THE ENVIRONMENT,
+#                never as a command-line argument: a command-line argument
+#                is world-readable via /proc/PID/cmdline on Linux for as
+#                long as the process runs, an environment variable is not
+#                exposed that way.
 # Optional:
 #   FLEET_TEAM         free team tag, for example "ios"
 #   FLEET_ENVIRONMENT  free environment tag, for example "ci"
+#   FLEET_HOSTNAME      stable hostname to register under; default: macOS
+#                       "scutil --get ComputerName" when available,
+#                       otherwise fleet.py's own hostname fallback
 #   FLEET_PYTHON       python3 interpreter to use (default: python3)
 #
 # Usage (MDM/Jamf, one line):
@@ -28,6 +35,7 @@ set -eu
 : "${FLEET_ORG:?FLEET_ORG is required (org name, from fleet init)}"
 : "${FLEET_SALT:?FLEET_SALT is required (the org salt, from fleet init)}"
 FLEET_PYTHON="${FLEET_PYTHON:-python3}"
+FLEET_HOSTNAME="${FLEET_HOSTNAME:-}"
 
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 FLEET_PY="$SCRIPT_DIR/fleet.py"
@@ -42,7 +50,18 @@ if ! command -v "$FLEET_PYTHON" >/dev/null 2>&1; then
     exit 1
 fi
 
-set -- "$FLEET_PY" join "$FLEET_STORE" --org "$FLEET_ORG" --salt "$FLEET_SALT"
+if [ -z "$FLEET_HOSTNAME" ] && command -v scutil >/dev/null 2>&1; then
+    FLEET_HOSTNAME=$(scutil --get ComputerName 2>/dev/null || true)
+fi
+
+# FLEET_SALT is never appended to argv: it stays in the environment, which
+# `exec` (replacing this process, keeping its environment) hands straight
+# to fleet.py's own process below.
+export FLEET_SALT
+set -- "$FLEET_PY" join "$FLEET_STORE" --org "$FLEET_ORG"
+if [ -n "$FLEET_HOSTNAME" ]; then
+    set -- "$@" --hostname "$FLEET_HOSTNAME"
+fi
 if [ -n "${FLEET_TEAM:-}" ]; then
     set -- "$@" --team "$FLEET_TEAM"
 fi
