@@ -90,6 +90,31 @@ def _write_exp_ledger(path, rows):
 LOCAL_CONFIG = {"org": "acme", "team": "ios", "environment": "ci",
                 "hostname": "khalils-mbp.local", "salt": "org-salt-xyz"}
 
+# fleet.py's `import experiment as exp` is the same cached module object
+# test_experiment.py imports as `ex` (sys.modules keys by module name, not
+# by import site), so its proven _point_paths_at/_restore_paths pattern
+# (repoint every module-global path compute_fingerprint reads at a temp
+# dir, restore after) works unchanged here to keep cmd_build/cmd_push's
+# real compute_fingerprint() call off the actual machine's ~/.claude/*.
+_EXP_PATH_ATTRS = ("CLAUDE_MD_PATH", "SETTINGS_PATH", "CLAUDE_JSON_PATH",
+                   "SKILLS_DIR", "PLUGINS_CACHE")
+_EXP_PATH_LEAVES = ("CLAUDE.md", "settings.json", "claude.json", "skills",
+                    os.path.join("plugins", "cache"))
+
+
+def _point_exp_paths_at(td):
+    saved = tuple(getattr(fl.exp, k) for k in _EXP_PATH_ATTRS)
+    for attr, leaf in zip(_EXP_PATH_ATTRS, _EXP_PATH_LEAVES):
+        setattr(fl.exp, attr, os.path.join(td, leaf))
+    os.makedirs(os.path.join(td, "skills"), exist_ok=True)
+    os.makedirs(os.path.join(td, "plugins", "cache"), exist_ok=True)
+    return saved
+
+
+def _restore_exp_paths(saved):
+    for attr, value in zip(_EXP_PATH_ATTRS, saved):
+        setattr(fl.exp, attr, value)
+
 
 def _capture_stderr(fn, *args, **kwargs):
     real_stderr = sys.stderr
@@ -379,6 +404,53 @@ def test_compute_machine_id_is_stable_and_salt_dependent():
     assert a == b
     assert a != c
     assert len(a) == 64  # sha256 hex digest
+
+
+def test_cmd_build_falls_back_to_real_compute_fingerprint_off_a_fixture_config():
+    # Exercises cmd_build's "no --config-fingerprint given" branch, which
+    # calls the real exp.compute_fingerprint() in production. Safe here
+    # only because _point_exp_paths_at repoints every module-global path
+    # that function reads at a temp dir first (the same technique
+    # test_experiment.py already uses on the same, cached module object),
+    # so this never hashes the real machine's ~/.claude/*.
+    with tempfile.TemporaryDirectory() as d:
+        saved = _point_exp_paths_at(d)
+        try:
+            with open(fl.exp.CLAUDE_MD_PATH, "w") as f:
+                f.write("fixture claude.md\n")
+            with open(fl.exp.SETTINGS_PATH, "w") as f:
+                f.write("{}")
+
+            config_path = os.path.join(d, "fleet-config.json")
+            with open(config_path, "w") as f:
+                json.dump(LOCAL_CONFIG, f)
+            ledger = os.path.join(d, "ledger.jsonl")
+            _write_ledger(ledger, [_telem_row("2026-08-10T09:00:00", input=100, cache_read=900)])
+            exp_ledger = os.path.join(d, "savings.jsonl")
+
+            real_stdout = sys.stdout
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = fl.cmd_build("2026-08-10", config_path, ledger, exp_ledger,
+                                  None, "1.8.0")  # config_fingerprint=None -> real call
+            finally:
+                sys.stdout = real_stdout
+            # Same fixture dir, same paths, still repointed: proves the
+            # fixture files' content (not the real machine's) drove the
+            # hash, since compute_fingerprint's manifest includes the
+            # path string itself (a file move changes the hash on
+            # purpose), so a replay must reuse these exact paths.
+            replay = fl.exp.compute_fingerprint()
+            printed = buf.getvalue()
+        finally:
+            _restore_exp_paths(saved)
+
+    assert rc == 0
+    record = json.loads(printed)
+    assert isinstance(record.get("config_fingerprint"), str)
+    assert len(record["config_fingerprint"]) > 0
+    assert replay == record["config_fingerprint"]
 
 
 # --- CLI-level NO DATA / refusal paths ----------------------------------------
