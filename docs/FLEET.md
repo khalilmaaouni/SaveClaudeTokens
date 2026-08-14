@@ -254,3 +254,35 @@ The renderer is read-only: it never writes into the store, never runs git,
 and never sends anything anywhere. Every value on the page came from a
 record a machine chose to push; nothing is guessed, and nothing is summed
 across confidence labels.
+
+### A shared store is untrusted input
+
+A fleet store is written to by every machine in the org, so the reader
+treats every file in it as hostile until proven otherwise: ANY failure to
+load one file (unreadable, invalid JSON, invalid UTF-8, a stack-exhausting
+nesting depth, a bare NaN/Infinity number, a negative or missing counter,
+oversized, or a schema this reader does not understand) costs only that one
+machine its own NO DATA row naming the reason, never the rest of the page.
+Concretely:
+
+- **Size cap.** A record file over 1,000,000 bytes is refused by name
+  before it is ever read into memory.
+- **Symlinks are refused, not followed.** A symlink anywhere under
+  `fleet/<org>/` (a whole machine directory, or one record file) is refused
+  rather than followed, so a symlink planted in the store can never make
+  the page render content from outside it.
+- **`--org` is validated**, the same way `fleet init`/`join`/`push` already
+  validate it, before it ever reaches a filesystem path or the page
+  `<title>`.
+- **A record's filename and its own "date" field must agree.** A
+  disagreement is refused as that file's own NO DATA row, so the same
+  record can never render under two different dates on the same page, and a
+  member cannot park tokens on a future day just by writing a different
+  date into the record body.
+- **The store path printed on the page is shortened**, the same way
+  `fleet.py`'s own warnings are, so a shared org artifact never carries the
+  admin's account name.
+
+None of this changes what a healthy record looks like or how it renders;
+it only bounds what a hostile or malformed one can do to the page around
+it.
