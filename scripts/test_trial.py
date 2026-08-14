@@ -210,6 +210,25 @@ def test_lever_line_present_with_enough_data():
     assert "github.com/khalilmaaouni/token-shield" in text
 
 
+def test_follow_on_command_points_at_a_cli_that_actually_exists():
+    """The README tells a stranger to clone and run the trial from the
+    directory ABOVE the checkout, so a hardcoded "scripts/cli.py" prints a
+    command that fails from the only place they could be standing. The
+    printed path is resolved from this file's real location instead, so
+    whatever it names has to exist on disk from the caller's directory."""
+    with tempfile.TemporaryDirectory() as d:
+        recs = [_rec(f"2026-08-12T10:{i:02d}:00Z") for i in range(5)]
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+    assert rc == 0, rc
+    line = [ln for ln in text.splitlines() if "Full plugin" in ln]
+    assert len(line) == 1, line
+    printed = line[0].split("python3 ", 1)[1].split(" summary", 1)[0]
+    assert os.path.isfile(printed), (
+        f"trial.py printed 'python3 {printed} summary' but no such file "
+        f"exists from the caller's working directory")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

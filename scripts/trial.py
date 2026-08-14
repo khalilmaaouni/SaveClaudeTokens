@@ -99,9 +99,20 @@ def run(root, days, out=None):
     print(f"\nBiggest lever: {title}", file=out)
     print(f"  {detail}", file=out)
 
-    print("\nFull plugin, more views, and a way to prove a fix worked: "
-          "python3 scripts/cli.py summary "
-          "(github.com/khalilmaaouni/token-shield)", file=out)
+    # The follow-on command is built from where this file actually sits, not
+    # from a hardcoded "scripts/cli.py". A stranger who ran the README's clone
+    # command is standing one directory above the checkout, so a bare relative
+    # path would print a command that fails from the only place they could be.
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+    try:
+        rel = os.path.relpath(cli)
+        if len(rel) < len(cli):
+            cli = rel
+    except ValueError:
+        pass
+    print(f"\nFull plugin, more views, and a way to prove a fix worked: "
+          f"python3 {cli} summary "
+          f"(github.com/khalilmaaouni/token-shield)", file=out)
     return 0
 
 
