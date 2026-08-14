@@ -34,6 +34,9 @@ import os
 import re
 import time
 
+import context_lint
+import guided_apply
+
 # A section matching ANY of these is a hard rule and is never moved. The list is
 # deliberately broad: keeping too much is a nuisance, dropping a rule is a
 # failure, so the guard errs hard toward keeping.
@@ -215,12 +218,50 @@ def cmd_apply():
     return 0
 
 
+def verify_diet(original_text, path):
+    """Re-runs context_lint.check(path, is_memory_index=False) after an apply
+    and confirms the loaded line count actually dropped from original_text's.
+    Returns (ok, report)."""
+    before_lines = len(context_lint.loaded_content(original_text).splitlines())
+    findings, stats = context_lint.check(path, is_memory_index=False)
+    if not stats:
+        return False, f"cannot re-read {path} to verify ({findings})"
+    after_lines = stats["loaded_lines"]
+    ok = after_lines < before_lines
+    report = f"loaded lines {before_lines} -> {after_lines}"
+    if not ok:
+        report += " (no drop; nothing safe was moved, so nothing to verify)"
+    return ok, report
+
+
+def cmd_guided_apply(path):
+    """The wave R entry point. Reads path's current text (for verify_diet's
+    before count), then calls guided_apply.apply(label, treats=path,
+    mutate_fn=cmd_apply, verify_fn=lambda: verify_diet(original, path))."""
+    if not os.path.exists(path):
+        print(f"NO DATA: {path} does not exist.")
+        return 2
+    with open(path) as f:
+        original = f.read()
+    label = f"claude-md-diet-guided-{time.strftime('%Y%m%d-%H%M%S')}"
+    rc, msg = guided_apply.apply(label, path, cmd_apply,
+                                 lambda: verify_diet(original, path))
+    print(msg)
+    return rc
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--file", default=os.path.expanduser("~/.claude/CLAUDE.md"))
     ap.add_argument("--apply", action="store_true",
                     help="apply the last proposal, backing up the original first")
+    ap.add_argument("--guided-apply", action="store_true",
+                    help="apply the last proposal via wave R's guided-apply contract: "
+                         "refuses if any experiment is open, verifies the diet actually "
+                         "dropped loaded lines, and auto-opens one experiment to prove it")
     a = ap.parse_args()
+    if a.guided_apply:
+        return cmd_guided_apply(a.file)
     if a.apply:
         return cmd_apply()
     return cmd_propose(a.file)

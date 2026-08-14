@@ -4,6 +4,7 @@ never classified movable, even when it also looks like history."""
 import os
 import tempfile
 
+import guided_apply as ga
 import optimize as opt
 
 
@@ -71,6 +72,58 @@ def test_cmd_propose_never_writes_the_source_claude_md():
         check("cmd_propose returns success", rc == 0)
         after = open(src, "rb").read()
         check("cmd_propose never writes to the source CLAUDE.md path", before == after)
+
+
+def test_verify_diet_reports_the_line_count_drop():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "CLAUDE.md")
+        before_text = "\n".join(f"line {i}" for i in range(50))
+        after_text = "\n".join(f"line {i}" for i in range(10))
+        with open(path, "w") as f:
+            f.write(after_text)
+        ok, report = opt.verify_diet(before_text, path)
+        check("verify_diet reports ok when the loaded line count dropped", ok)
+        check("verify_diet's report names the before and after line counts",
+              "50" in report and "10" in report)
+
+        # A "diet" that did not actually shrink the file must not verify ok:
+        # writing the same content back must not read as a successful diet.
+        with open(path, "w") as f:
+            f.write(before_text)
+        ok2, report2 = opt.verify_diet(before_text, path)
+        check("verify_diet reports not-ok when the line count did not drop", not ok2)
+
+
+def test_cmd_guided_apply_refuses_when_experiment_open():
+    # The never-lose-work contract, extended to the guided-apply path: a
+    # refused apply must never touch the source file at all, mirroring
+    # test_cmd_propose_never_writes_the_source_claude_md above but for
+    # cmd_guided_apply instead of cmd_propose. cmd_apply is stubbed too (not
+    # just the refusal), so that even a regressed guard can never fall
+    # through to the real cmd_apply and its real ~/.token-shield/optimize/
+    # review directory: the stub marks the source dirty if it ever runs,
+    # which the before/after check below would catch exactly like a real
+    # unwanted write would.
+    real_refuse = ga.refuse_if_experiment_open
+    real_cmd_apply = opt.cmd_apply
+    ga.refuse_if_experiment_open = lambda: "REFUSED: fixture experiment is open"
+    opt.cmd_apply = lambda: (_ for _ in ()).throw(
+        AssertionError("cmd_apply must never run while an experiment is open"))
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "CLAUDE.md")
+            original = HARD + "\n" + HISTORY + "\n" + SHORT
+            with open(src, "w") as f:
+                f.write(original)
+            before = open(src, "rb").read()
+            rc = opt.cmd_guided_apply(src)
+            check("cmd_guided_apply refuses with rc 2", rc == 2)
+            after = open(src, "rb").read()
+            check("cmd_guided_apply never writes to the source CLAUDE.md when refused",
+                  before == after)
+    finally:
+        ga.refuse_if_experiment_open = real_refuse
+        opt.cmd_apply = real_cmd_apply
 
 
 def _split(section_text):

@@ -19,4 +19,6 @@ Steps:
 
 5. Remind them: a CLAUDE.md edit does not take effect until the next `/clear`, `/compact`, or restart, and the real saving is proven by running an experiment across that boundary (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py experiment start "claude-md-diet"`), not by the estimate.
 
+4a. Guided apply (wave R): instead of step 4's plain `--apply`, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/optimize.py --guided-apply` does the same backup-then-write, but through the shared guided-apply contract: it refuses outright if any experiment is already open (an apply changes the config fingerprint and would force that open experiment to NOT_PROVEN), verifies afterward that the loaded line count actually dropped, and on success auto-opens one experiment for you, labeled `claude-md-diet-guided-<timestamp>`. Look for that label prefix in `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py experiment report` to find your own guided runs; it is a separate label from a plain `--apply` run, so the two never collide.
+
 If the user wants a deeper diet of a section the tool kept (because it holds a rule), help them do it by hand: keep the rule lines, move the history and rationale, and use the same backup and experiment steps.
