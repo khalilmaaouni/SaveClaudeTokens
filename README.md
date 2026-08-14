@@ -11,6 +11,14 @@ Token Shield continuously finds the cheapest high-quality way for you to use Cla
 - Shows tokens and API-equivalent dollars, priced per model, or NO PRICE DATA instead of a wrong price.
 - Local only. No account, no cloud. No prompt or file content leaves your machine.
 
+## Try it now, zero install
+
+```bash
+git clone https://github.com/khalilmaaouni/token-shield.git && python3 token-shield/scripts/trial.py
+```
+
+Nothing is installed, no plugin, no MCP server, no config file. It reads your existing local Claude Code transcripts, prints a short honest read of where your tokens went, and exits. Nothing leaves your machine. If it finds too little data, it says NO DATA plainly instead of guessing.
+
 ## Install
 
 ```bash
