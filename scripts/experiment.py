@@ -62,6 +62,41 @@ EXP_SCHEMA = 2  # ledger record schema. v1 records never carried a "schema" key
                 # at all, so its absence on an old record means schema 1; this
                 # is a different axis than mt.SCHEMA, which is the meter's own.
 
+# The metric build_record judges VERIFIED/NOT_PROVEN by, when a baseline
+# carries no target_metric of its own. Every baseline pinned before this
+# unit existed is missing the key entirely, and reads as this same default,
+# so nothing about the legacy path changes.
+DEFAULT_METRIC = "first_request_median"
+
+# Every summarize() key this unit accepts as a declared --metric, and which
+# way "better" points for each: "down" for a token/cost count that a real
+# saving shrinks, "up" for a ratio that a real saving grows. This is also the
+# validation set (M2): --metric refuses at start against anything not listed
+# here, because a typo pinned for a 30 day experiment can only fail at the
+# end. DEFAULT_METRIC is in this mapping, so "the mapping's keys" already
+# covers "the mapping's keys plus the default".
+METRIC_DIRECTIONS = {
+    "first_request_median": "down",
+    "first_request_mean": "down",
+    "first_request_p90": "down",
+    "first_request_share_median": "down",
+    "output_total": "down",
+    "normalized_input_total": "down",
+    "input_total": "down",
+    "write_5m_total": "down",
+    "write_1h_total": "down",
+    "write_unsplit_total": "down",
+    "subagent_output_total": "down",
+    "hit_ratio_median": "up",
+}
+
+
+def _is_numeric(v):
+    """True for a real int/float, never a bool (which is a bool subtype of
+    int in Python and would otherwise sail through this check)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 # The keys a v2 baseline snapshot must carry for the v2 guards to have anything
 # to check. A v1.6 snapshot has none of them, and every v2 guard is written as
 # "downgrade if this moved", which a missing key silently passes.
@@ -311,6 +346,13 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
       - window length differs (different windows hold different sessions);
       - too few sessions on EITHER side to measure a floor honestly, because a
         one-session before cohort is exactly as thin as a one-session after;
+      - the baseline's declared target_metric (a summarize() key; defaults to
+        first_request_median when the baseline names none, which is every
+        baseline pinned before this field existed) is absent from either
+        cohort's summary: "metric not measured", never a guess;
+      - the declared metric is present on both sides but not numeric (a model
+        name, a list of models): "metric not comparable (non-numeric)",
+        naming the key, instead of the TypeError a subtraction would raise;
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
         mover was not the file named at start's --treats;
@@ -377,21 +419,57 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
                 f"dominant model changed during experiment window "
                 f"(before {dominant_before!r}, after {dominant_after!r})")
 
+    # first_request_before/after always read the startup floor, regardless of
+    # which metric is declared, so a record's existing consumers see the
+    # exact values they always have. floor_reduction_tokens is different: it
+    # is a TOKEN COUNT, and only the default metric ever measured the floor,
+    # so a non-default experiment (C2) must not populate it, or a hit-ratio
+    # experiment reads on the dashboard as a proven token saving it never
+    # measured. first_request_before/after stay for context either way.
     fr_before = b.get("first_request_median")
     fr_after = after_sm.get("first_request_median")
-    if fr_before is None or fr_after is None:
-        reasons.append("no first-request median on one side")
+
+    # The verdict itself, and direction, are judged on the DECLARED metric: a
+    # baseline naming no target_metric reads as DEFAULT_METRIC, which makes
+    # metric_before/after literally the same values as fr_before/fr_after
+    # above, so nothing about a legacy or metric-less record's verdict moves.
+    metric = baseline.get("target_metric") or DEFAULT_METRIC
+    metric_before = b.get(metric)
+    metric_after = after_sm.get(metric)
+    if metric_before is None or metric_after is None:
+        reasons.append("no first-request median on one side" if metric == DEFAULT_METRIC
+                       else f"metric not measured: '{metric}' missing from one side")
+    elif not (_is_numeric(metric_before) and _is_numeric(metric_after)):
+        # M1. A present-but-non-numeric value (a model name, a list of
+        # models) cannot be subtracted; the old code crashed here instead of
+        # refusing. NO DATA beats a guess, so this downgrades by name rather
+        # than raising.
+        reasons.append(f"metric not comparable (non-numeric): '{metric}'")
 
     verified = not reasons
+    metric_delta = None
+    if _is_numeric(metric_before) and _is_numeric(metric_after):
+        # Raw delta, always before minus after (positive = the number went
+        # down). Whether that is a saving depends on which way the metric's
+        # own "better" points, which direction below works out separately.
+        metric_delta = metric_before - metric_after
+
     floor_reduction = None
-    if fr_before is not None and fr_after is not None:
+    if metric == DEFAULT_METRIC and fr_before is not None and fr_after is not None:
         floor_reduction = fr_before - fr_after
 
     direction = None
-    if floor_reduction is not None:
-        if floor_reduction > 0:
+    if metric_delta is not None:
+        # C1. metric_delta alone cannot say "saving": for a down-is-better
+        # count a positive delta is the win, but for an up-is-better ratio
+        # (hit_ratio_median) a positive delta (before minus after > 0) means
+        # the ratio FELL, which is the regression, not the saving. Flip the
+        # sign by the metric's own declared direction before reading it.
+        sense = METRIC_DIRECTIONS.get(metric, "down")
+        improvement = metric_delta if sense == "down" else -metric_delta
+        if improvement > 0:
             direction = "saving"
-        elif floor_reduction < 0:
+        elif improvement < 0:
             direction = "regression"
         else:
             direction = "flat"
@@ -418,6 +496,10 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         "first_request_after": fr_after,
         "floor_reduction_tokens": floor_reduction,
         "direction": direction,
+        "target_metric": metric,
+        "metric_before": metric_before,
+        "metric_after": metric_after,
+        "metric_delta": metric_delta,
         "sessions_before": b.get("parent_sessions"),
         "sessions_after": after_sm.get("parent_sessions"),
         "dispersion_before": p90_before,
@@ -495,7 +577,16 @@ def print_excluded(excluded):
           "this treatment.")
 
 
-def cmd_start(label, root, days, now_ts, treats):
+def cmd_start(label, root, days, now_ts, treats, metric=None):
+    if metric and metric not in METRIC_DIRECTIONS:
+        # M2. Nothing checked this before: a typo'd --metric pinned a 30 day
+        # experiment that could only fail at `end`, long after the baseline
+        # window closed. The valid set is exactly METRIC_DIRECTIONS' keys,
+        # which already includes DEFAULT_METRIC.
+        valid = ", ".join(sorted(METRIC_DIRECTIONS))
+        print(f"NO DATA: '{metric}' is not a metric this experiment can judge. "
+              f"Valid metrics: {valid}.")
+        return 2
     os.makedirs(EXP_DIR, exist_ok=True)
     before_start_ts = now_ts - days * 86400
     before_end_ts = now_ts
@@ -506,12 +597,17 @@ def cmd_start(label, root, days, now_ts, treats):
             "schema": mt.SCHEMA, "cohort_start_ts": before_start_ts,
             "cohort_end_ts": before_end_ts, "fingerprint_start": fingerprint_start,
             "treats": treats, "fingerprint_excluded": excluded, "summary": sm}
+    if metric:
+        snap["target_metric"] = metric
     path = os.path.join(EXP_DIR, label.replace("/", "_") + ".json")
     with open(path, "w") as f:
         json.dump(snap, f, indent=2)
     fr = sm.get("first_request_median")
     print(f"baseline pinned for '{label}': first-request median "
           f"{mt.fmt(fr)} tokens over {days:g} days.")
+    if metric and metric != DEFAULT_METRIC:
+        print(f"target metric for this experiment: '{metric}' "
+              f"(baseline value {mt.fmt(sm.get(metric))})")
     print_excluded(excluded)
     print("Make ONE change now (for example diet CLAUDE.md), work normally, then run: "
           f"python3 experiment.py end \"{label}\"")
@@ -554,10 +650,22 @@ def cmd_end(label, root, days, now_ts):
         print("NOT PROVEN, so nothing is claimed as verified. Reasons:")
         for r in rec["reasons"]:
             print(f"  - {r}")
+    # Words, never a bare signed number: a signed delta reads as "went up" /
+    # "went down" with no hint of whether that is good, and for an
+    # up-is-better metric (hit_ratio_median) a positive delta is the
+    # regression, which a bare "+0.12" invites the reader to misread as a win.
     fr_b, fr_a = rec["first_request_before"], rec["first_request_after"]
     if fr_b is not None and fr_a is not None:
-        print(f"first-request median  {mt.fmt(fr_b)} -> {mt.fmt(fr_a)} tokens "
-              f"({rec['floor_reduction_tokens']:+,} per call)")
+        floor_word = ("improved" if fr_a < fr_b
+                      else "worsened" if fr_a > fr_b else "did not move")
+        print(f"first-request median {floor_word}: {mt.fmt(fr_b)} -> {mt.fmt(fr_a)} "
+              f"tokens per call")
+    if rec["target_metric"] != DEFAULT_METRIC:
+        mb, ma = rec["metric_before"], rec["metric_after"]
+        if mb is not None and ma is not None and rec["direction"] is not None:
+            metric_word = {"saving": "improved", "regression": "worsened",
+                           "flat": "did not move"}[rec["direction"]]
+            print(f"{rec['target_metric']} {metric_word}: {mt.fmt(mb)} -> {mt.fmt(ma)}")
     print_excluded(rec["fingerprint_excluded"])
     print(f"one record appended to {LEDGER}")
     return 0
@@ -600,6 +708,9 @@ def main():
     ap.add_argument("--treats", default=None,
                     help="path excluded from the config fingerprint (the file "
                          "this experiment's own treatment edits); start only")
+    ap.add_argument("--metric", default=None,
+                    help="summarize() field this experiment is judged on (start "
+                         "only); defaults to first_request_median when omitted")
     a = ap.parse_args()
 
     if a.action == "report":
@@ -612,7 +723,7 @@ def main():
         return 2
     now_ts = time.time()
     if a.action == "start":
-        return cmd_start(a.label, a.root, a.days, now_ts, a.treats)
+        return cmd_start(a.label, a.root, a.days, now_ts, a.treats, a.metric)
     return cmd_end(a.label, a.root, a.days, now_ts)
 
 
