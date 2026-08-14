@@ -71,15 +71,19 @@ def test_cmd_propose_never_writes_the_source_claude_md():
     # pure propose() function above, which never touches a filesystem path at
     # all and so cannot prove this claim.
     with tempfile.TemporaryDirectory() as d:
-        src = os.path.join(d, "CLAUDE.md")
-        original = HARD + "\n" + HISTORY + "\n" + SHORT
-        with open(src, "w") as f:
-            f.write(original)
-        before = open(src, "rb").read()
-        rc = opt.cmd_propose(src)
-        check("cmd_propose returns success", rc == 0)
-        after = open(src, "rb").read()
-        check("cmd_propose never writes to the source CLAUDE.md path", before == after)
+        real_review_dir = _point_review_dir_at(d)
+        try:
+            src = os.path.join(d, "CLAUDE.md")
+            original = HARD + "\n" + HISTORY + "\n" + SHORT
+            with open(src, "w") as f:
+                f.write(original)
+            before = open(src, "rb").read()
+            rc = opt.cmd_propose(src)
+            check("cmd_propose returns success", rc == 0)
+            after = open(src, "rb").read()
+            check("cmd_propose never writes to the source CLAUDE.md path", before == after)
+        finally:
+            opt.review_dir = real_review_dir
 
 
 def test_verify_diet_reports_the_line_count_drop():
@@ -297,9 +301,19 @@ def _split(section_text):
 
 if __name__ == "__main__":
     import sys
+    # The real review dir must be byte-for-byte untouched by this suite: every
+    # test that reaches a CLI entry point points review_dir at a temp dir. This
+    # guard is what turns a future unisolated test into a red run instead of
+    # silent droppings in the user's real store.
+    real_dir = opt.review_dir()
+    before_listing = sorted(os.listdir(real_dir)) if os.path.isdir(real_dir) else None
     n = 0
     for name in sorted(dir(sys.modules[__name__])):
         if name.startswith("test_"):
             globals()[name]()
             n += 1
+    after_listing = sorted(os.listdir(real_dir)) if os.path.isdir(real_dir) else None
+    assert before_listing == after_listing, (
+        "the suite wrote the real review dir %s: before %r, after %r"
+        % (real_dir, before_listing, after_listing))
     print(f"\n{n} passed")
