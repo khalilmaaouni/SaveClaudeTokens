@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/khalilmaaouni/token-shield/data/signals.schema.json",
+  "title": "Token Shield Signals report v1",
+  "description": "Frozen, public, versioned whitelist. Anything a Signals report may ever carry off the machine is named here, by construction: scripts/signals.py builds a report by walking THIS schema and copying only what it names, never by taking a larger internal object and deleting the bad parts. A field cannot be added without a schema_version bump, which re-asks every contributor's consent (docs/superpowers/specs/2026-08-14-token-shield-signals-design.md). additionalProperties is false everywhere on purpose. No free text, no file paths, no repo or user names, no stable machine id, no timestamp finer than a day.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_date"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Bumped whenever a field is added, removed, or reinterpreted. A schema change re-asks consent."
+    },
+    "report_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Day resolution only, one report per machine per calendar day. Never a timestamp with hour, minute, or second."
+    },
+    "submission_id": {
+      "type": "string",
+      "description": "A fresh random id, generated at SEND time only (S2), never at rollup time, never stored locally after send, never reused. S1 builds no send path, so this key never appears in an S1 report; it is named here only because the schema is the whole frozen contract, not a promise the field is populated yet."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["mac", "linux", "windows", "unknown"]
+        },
+        "claude_code_minor_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "maxLength": 8,
+          "description": "Coarse minor version string, for example \"1.8\". No patch, no build id. Not populated by S1 (no local source of truth yet); reserved for a later phase. A non-conforming value is omitted, never sent."
+        },
+        "model_family_mix": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-z0-9_-]+$": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "multipleOf": 5,
+              "description": "Share of calls on this model family, quantized to a 5 percent bucket. Never an exact count."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Not populated by S1 (the ledger records a distinct-model count, not model family names); reserved for a later phase."
+        },
+        "token_shield_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "maxLength": 16,
+          "description": "This machine's installed token-shield plugin version, for example \"1.8.0\". A non-conforming value (a dev, fork, or prerelease string) is omitted, never sent."
+        }
+      }
+    },
+    "waste_shares": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Share of the day's tokens attributed to each waste class, each independently quantized to a 5 percent bucket. Buckets need not sum to 100: quantization is per-bucket, not distributed. unknown absorbs whatever cannot be attributed to a specific class; it is never redistributed into the others.",
+      "properties": {
+        "tool_output_noise": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "duplicate_reads": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "verbose_output": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "startup_rent": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "cache_cold_rebuilds": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "overbuild": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "routing_mismatch": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5},
+        "unknown": {"type": "integer", "minimum": 0, "maximum": 100, "multipleOf": 5}
+      }
+    },
+    "error_classes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Counts by coded class, banded, never an exact count. Not populated by S1: the local ledger this rollup reads carries no error, retry, or correction counters yet; a real basis is a later phase, and reporting a fabricated \"0\" band here would claim zero errors happened, which is a guess this schema refuses to make.",
+      "properties": {
+        "tool_failure": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]},
+        "retry_loop": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]},
+        "correction_turn": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]},
+        "abandoned_task": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]}
+      }
+    },
+    "overspend_markers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Counts by coded class, banded, never an exact count. Not populated by S1, same reason as error_classes: no local basis yet.",
+      "properties": {
+        "model_switch_rebuild": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]},
+        "oversized_read": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]},
+        "repeated_transcript_scan": {"type": "string", "enum": ["0", "1-5", "6-20", "21+"]}
+      }
+    },
+    "treatment_outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Keyed by public treatment registry id (a coded string, never free text). Only registry ids may appear; a private or unknown treatment reports as \"other\". Not populated by S1: no public treatment registry exists yet to match against.",
+      "patternProperties": {
+        "^[a-z0-9_.-]+$": {
+          "type": "string",
+          "enum": ["helped", "no_change", "regressed", "rolled_back", "other"]
+        }
+      }
+    }
+  }
+}

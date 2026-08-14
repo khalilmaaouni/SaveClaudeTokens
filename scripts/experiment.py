@@ -671,6 +671,62 @@ def cmd_end(label, root, days, now_ts):
     return 0
 
 
+def list_open_experiments(exp_dir=None, ledger=None):
+    """Every baseline snapshot in exp_dir with no matching close in the ledger.
+    cmd_end never deletes or marks the file it reads, so this is the only way
+    to tell 'started, never ended' from 'started, ended, file just still there'.
+    Returns a list of the raw baseline dicts (label, started, fingerprint_start,
+    treats, ...), sorted by started ascending, [] when nothing is open.
+
+    Fails CLOSED, not open: a .json in exp_dir that cannot be read (permission
+    denied, truncated mid-write by a crash) or does not parse as a JSON object
+    (corrupt, or a stray non-dict value) is not skipped. It is impossible to
+    tell such a file apart from a genuinely open experiment whose baseline
+    write got interrupted, and a skip-on-unreadable rule would let an apply
+    run unchallenged right through that gap. It comes back instead as a
+    marker dict carrying "_unreadable" (the file's path) and no "label", so a
+    caller can name the file directly rather than pretend to know its label.
+
+    exp_dir/ledger default to the module globals EXP_DIR/LEDGER, looked up at
+    call time (not bound as default-argument values), so a test that
+    monkeypatches ex.EXP_DIR/ex.LEDGER before calling with no arguments is
+    honored rather than silently reading the real machine's paths."""
+    exp_dir = EXP_DIR if exp_dir is None else exp_dir
+    ledger = LEDGER if ledger is None else ledger
+    closed = set()
+    if os.path.exists(ledger):
+        with open(ledger, errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                label = rec.get("label")
+                end = (rec.get("cohort_before") or {}).get("end")
+                if label is not None and end is not None:
+                    closed.add((label, end))
+    open_baselines = []
+    if os.path.isdir(exp_dir):
+        for fp in sorted(glob.glob(os.path.join(exp_dir, "*.json"))):
+            try:
+                with open(fp) as f:
+                    baseline = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                open_baselines.append({"label": None, "started": None, "_unreadable": fp})
+                continue
+            if not isinstance(baseline, dict):
+                open_baselines.append({"label": None, "started": None, "_unreadable": fp})
+                continue
+            pair = (baseline.get("label"), baseline.get("cohort_end_ts"))
+            if pair not in closed:
+                open_baselines.append(baseline)
+    open_baselines.sort(key=lambda b: b.get("started") or "")
+    return open_baselines
+
+
 def cmd_report():
     if not os.path.exists(LEDGER):
         print(f"NO DATA: no ledger at {LEDGER} yet.")
