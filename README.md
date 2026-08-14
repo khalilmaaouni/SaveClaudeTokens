@@ -149,6 +149,17 @@ first 200 lines or 25KB, whichever comes first) to the content that actually
 loads, with frontmatter and HTML comments stripped the way Claude Code strips
 them, and tells you exactly which lines are falling off the end unread.
 
+**Guided apply** (`optimize.py`, `plugin_prune.py`, `memory_trim.py`) proposes
+a change, shows the diff, and applies it only on your explicit yes: the
+CLAUDE.md diet (`optimize.py --guided-apply`), a named bundle of plugins to
+disable (`cli.py prune`), and trimming the auto-memory index back inside its
+load limit (`cli.py trim`), plus one hardcoded output-discipline line
+(`optimize.py --apply-output-discipline`). Every guided apply refuses outright
+while any experiment is open and auto-opens its own experiment on success, so
+the saving it claims is always proven, not asserted; see Pillar R of
+`docs/superpowers/specs/2026-08-13-solid-core-design.md` for the full
+contract.
+
 **`session_end_telemetry.py`** appends one line of counters per session to a
 local JSONL ledger, so you accumulate history without paying a model to
 measure. It writes no conversation text, no file contents, and no prompts:

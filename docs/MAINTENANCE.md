@@ -36,7 +36,12 @@ Read them in this order:
 - **Manual (a judgment call, always reversible):** disabling a plugin
   (`claude plugin disable <name>`, re-enable with `enable`), removing an MCP
   server (back up `~/.claude.json` first), dieting CLAUDE.md, quieting a hook.
-  These change what loads, so a human makes the call and records it.
+  These change what loads, so a human makes the call and records it. For a
+  named bundle of plugins, `python3 scripts/cli.py prune propose <id> ... --bundle-id <id>`
+  then `prune apply <id>` is the reviewed, guided-apply way to do the same
+  disable by hand: it shows the exact commands (and their revert) before you
+  say yes, refuses while any experiment is open, and auto-opens one to prove
+  the result. It does not replace the manual path above, which stays valid.
 
 The linter never deletes and the audit never changes config on purpose. A
 cleanup tool that decided on its own what a rule was worth would eventually
