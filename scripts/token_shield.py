@@ -60,6 +60,22 @@ def load_measure():
     return mod
 
 
+def load_experiment():
+    """experiment.py, loaded by explicit path like load_measure() loads
+    measure_tokens.py, so it works regardless of the caller's cwd. Used only
+    for its compute_fingerprint()/EXP_SCHEMA, to check whether a VERIFIED
+    record's evidence still matches the environment right now (see
+    _historical_check). A load failure is the caller's to catch; this
+    function never swallows one, so it never hides a real bug behind a
+    silent NO DATA."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "experiment", os.path.join(here, "experiment.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def esc(s):
     """HTML-escape anything that came from outside this file before it enters
     the page. Experiment labels are typed by the user, profile bases carry
@@ -302,7 +318,51 @@ def load_experiment_rows(path):
     return rows
 
 
-def verified_by_label(rows):
+def _historical_check(record, exp_mod):
+    """(is_historical, reason) for one VERIFIED ledger record, checked
+    against the environment right now, not the ledger: the record itself is
+    never rewritten, this only decides how a render labels it.
+
+    Absence of evidence is not evidence of drift: a record with no
+    fingerprint_end (a hand-built fixture, or one predating the v2
+    fingerprint guard) always comes back (False, None), never a guessed
+    HISTORICAL. Same when exp_mod is None (experiment.py could not be
+    loaded): there is nothing to compare against, so the check is skipped
+    rather than assumed either way.
+
+    fingerprint_end is recomputed with the SAME --treats exclusion the
+    record itself used (record["treats"]), so the one file the experiment
+    edited stays excluded on both sides of the comparison, exactly as it was
+    when the record was verified. compute_fingerprint() is a sha256 over a
+    handful of local files plus a plugin-dir listing, no network, so this is
+    cheap to run on every render.
+
+    Also checked: the ledger schema the record was written under
+    (record["schema"]) against experiment.EXP_SCHEMA, the schema this
+    install writes today. That is the "token-shield version context" half
+    of drift; there is no separate Claude Code version field on a record to
+    check, so this is the only version-shaped signal grounded in real code.
+    """
+    fp_end = record.get("fingerprint_end")
+    if fp_end is None or exp_mod is None:
+        return False, None
+    try:
+        current_fp = exp_mod.compute_fingerprint(record.get("treats"))
+    except OSError:
+        return False, None
+    if current_fp != fp_end:
+        return True, ("the config fingerprint has moved since this record was "
+                      "verified (CLAUDE.md, settings.json, ~/.claude.json, a "
+                      "skill, or an installed plugin changed)")
+    schema = record.get("schema")
+    current_schema = getattr(exp_mod, "EXP_SCHEMA", None)
+    if schema is not None and current_schema is not None and schema != current_schema:
+        return True, (f"the token-shield ledger schema moved from {schema} to "
+                      f"{current_schema} since this record was verified")
+    return False, None
+
+
+def verified_by_label(rows, exp_mod=None):
     """One VERIFIED row per experiment label, newest record wins.
 
     The contract, shared with the CLI summary and with
@@ -318,6 +378,15 @@ def verified_by_label(rows):
 
     Ledger order is the tiebreak (the file is append-only), and a parsable
     timestamp beats file order when both records carry one.
+
+    Each row also carries "historical" and "historical_reason" (see
+    _historical_check): True plus a one-line reason when the record's own
+    config fingerprint or ledger schema no longer matches the environment
+    right now, so a render can say HISTORICAL instead of a bare VERIFIED.
+    exp_mod is the loaded experiment module (load_experiment()); pass None
+    to skip the check entirely, which callers do when they have no real
+    environment to check against (tests pass a fixture double instead, so
+    the check never depends on this machine's actual ~/.claude files).
     """
     by_label = {}
     newest = {}
@@ -332,9 +401,12 @@ def verified_by_label(rows):
         if label in newest and (ts, i) < newest[label]:
             continue
         newest[label] = (ts, i)
+        historical, reason = _historical_check(r, exp_mod)
         by_label[label] = {"label": label, "floor_reduction": delta,
                            "timestamp": r.get("timestamp"),
-                           "direction": r.get("direction")}
+                           "direction": r.get("direction"),
+                           "historical": historical,
+                           "historical_reason": reason}
     return [by_label[k] for k in sorted(by_label)]
 
 
@@ -806,15 +878,28 @@ def render_verified_hero(verified_rows):
     labels there are and every label is listed with its own figure, because
     a single headline number across labels would be exactly the cross-label
     total the rest of this page refuses to compute.
+
+    A row whose "historical" flag is set (verified_by_label /
+    _historical_check: its config fingerprint or ledger schema no longer
+    matches the environment right now) renders HISTORICAL with its one-line
+    reason instead of a bare VERIFIED number. The ledger record itself is
+    never rewritten; this is rendering only.
     """
     if not verified_rows:
         return ('<span class="big muted">NONE YET</span>',
                 'No verified saving yet. Apply one recommendation, then run an experiment '
                 'to measure the before and after.')
-    items = "; ".join(f'{esc(r["label"])} {r["floor_reduction"]:+,}'
-                      for r in verified_rows)
+    items = "; ".join(
+        f'{esc(r["label"])} {r["floor_reduction"]:+,}' + (' [HISTORICAL]' if r.get("historical") else '')
+        for r in verified_rows)
     if len(verified_rows) == 1:
         r = verified_rows[0]
+        if r.get("historical"):
+            big = f'<span class="big muted">HISTORICAL</span>'
+            under = (f'{human(r["floor_reduction"])} fewer startup tokens per call was '
+                     f'verified on <b>{esc(r["label"])}</b>, but {esc(r["historical_reason"])}. '
+                     f'Re-run the experiment to confirm it still holds.')
+            return big, under
         cls = "g" if r["floor_reduction"] >= 0 else "w"
         big = f'<span class="big {cls}">{human(r["floor_reduction"])}</span>'
         under = (f'fewer startup tokens per call on <b>{esc(r["label"])}</b>, proven by a '
@@ -822,8 +907,12 @@ def render_verified_hero(verified_rows):
                  f'never clipped.')
         return big, under
     big = f'<span class="big muted">{len(verified_rows)} LABELS</span>'
+    hist_n = sum(1 for r in verified_rows if r.get("historical"))
+    hist_note = (f' {hist_n} of {len(verified_rows)} are HISTORICAL: their evidence no '
+                f'longer matches the environment.' if hist_n else '')
     under = (f'proven per experiment label, never summed across them: {items}. '
-             f'A repeated label shows its latest run, and a regression stays negative.')
+             f'A repeated label shows its latest run, and a regression stays negative.'
+             f'{hist_note}')
     return big, under
 
 
@@ -852,9 +941,12 @@ def render_experiment_history(rows):
 
 def _cpill(label):
     """A confidence badge, reusing the cpill classes already styled in CSS:
-    ver (good/green) for VERIFIED, est (warn) for ESTIMATED, and the bare
-    muted cpill for everything else (MEASURED, NO DATA)."""
-    cls = {"VERIFIED": "cpill ver", "ESTIMATED": "cpill est"}.get(label, "cpill")
+    ver (good/green) for VERIFIED, est (warn) for ESTIMATED and HISTORICAL
+    (a warning, not a proof failure: it was proven once, the environment
+    just moved since), and the bare muted cpill for everything else
+    (MEASURED, NO DATA)."""
+    cls = {"VERIFIED": "cpill ver", "ESTIMATED": "cpill est",
+          "HISTORICAL": "cpill est"}.get(label, "cpill")
     return f'<span class="{cls}">{esc(label)}</span>'
 
 
@@ -869,18 +961,29 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
     parts = ['<h2>At a glance</h2>', '<div class="grid topstrip">']
 
     # 1. Verified improvement: latest VERIFIED record per label, never summed.
+    # A HISTORICAL label (verified_by_label's own check) means the config
+    # fingerprint or ledger schema moved since that record was verified: the
+    # figure was true once, not necessarily now.
     if not verified:
         v_label, v_val, v_note = ("NO DATA", "NO DATA",
                                   "no closed experiment in the proof ledger yet")
     elif len(verified) == 1:
         r = verified[0]
-        v_label = "VERIFIED"
-        v_val = f'{r["floor_reduction"]:+,}'
-        v_note = f'startup-floor tokens on {esc(r["label"])}'
+        if r.get("historical"):
+            v_label = "HISTORICAL"
+            v_val = f'{r["floor_reduction"]:+,}'
+            v_note = f'on {esc(r["label"])}: {esc(r["historical_reason"])}'
+        else:
+            v_label = "VERIFIED"
+            v_val = f'{r["floor_reduction"]:+,}'
+            v_note = f'startup-floor tokens on {esc(r["label"])}'
     else:
-        v_label = "VERIFIED"
+        hist_n = sum(1 for r in verified if r.get("historical"))
+        v_label = "HISTORICAL" if hist_n == len(verified) else "VERIFIED"
         v_val = f'{len(verified)} labels'
         v_note = "each label's own figure, never summed"
+        if hist_n:
+            v_note += f'; {hist_n} of {len(verified)} historical'
     parts.append(stat(f'Verified improvement {_cpill(v_label)}', esc(v_val), esc(v_note),
                       v_label == "NO DATA"))
 
@@ -1321,7 +1424,12 @@ def main():
 
     ledger = os.path.expanduser("~/.claude/token-shield/savings.jsonl")
     experiment_rows = load_experiment_rows(ledger)
-    verified = verified_by_label(experiment_rows)
+    try:
+        exp_mod = load_experiment()
+    except (OSError, ValueError, ImportError) as e:
+        exp_mod = None
+        print(f"note: historical-drift check skipped ({e})", file=sys.stderr)
+    verified = verified_by_label(experiment_rows, exp_mod)
 
     # v1.7 advisor surfaces: profile, advice, and the companion registry. Each
     # degrades to None on any failure, rather than take the whole render down.

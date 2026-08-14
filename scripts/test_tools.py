@@ -905,6 +905,78 @@ def test_top_strip_renders_no_data_never_zero_on_an_empty_ledger():
     assert '<div class="v">0</div>' not in strip
 
 
+class _FakeExpMod:
+    """Fixture double for experiment.py: a fixed "current" fingerprint and
+    schema, so verified_by_label's historical check is deterministic here
+    and never touches this machine's real ~/.claude files."""
+    EXP_SCHEMA = 2
+
+    def compute_fingerprint(self, treats=None):
+        return "current-fp"
+
+
+def test_verified_row_with_matching_fingerprint_renders_verified_not_historical():
+    exp_mod = _FakeExpMod()
+    rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000",
+             "fingerprint_end": "current-fp", "schema": 2, "treats": None}]
+    verified = shield.verified_by_label(rows, exp_mod)
+    assert verified[0]["historical"] is False, verified
+    assert verified[0]["historical_reason"] is None, verified
+
+    big, under = shield.render_verified_hero(verified)
+    assert "HISTORICAL" not in big, big
+    assert "5.0K" in big, big
+
+    strip = shield.render_top_strip(verified, None, "/nonexistent-cache-root", [], None)
+    assert "HISTORICAL" not in strip, strip
+
+
+def test_verified_row_with_differing_fingerprint_renders_historical_with_reason():
+    # Calibrated: with the fingerprint comparison in _historical_check
+    # short-circuited to always return (False, None) (drift ignored), this
+    # goes red, since neither render carries HISTORICAL or a reason for a
+    # record whose fingerprint plainly does not match "current-fp"; restored,
+    # green.
+    exp_mod = _FakeExpMod()
+    rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000",
+             "fingerprint_end": "stale-fp-from-last-week", "schema": 2, "treats": None}]
+    verified = shield.verified_by_label(rows, exp_mod)
+    assert verified[0]["historical"] is True, verified
+    assert verified[0]["historical_reason"], verified
+    assert "moved" in verified[0]["historical_reason"], verified
+
+    big, under = shield.render_verified_hero(verified)
+    assert "HISTORICAL" in big, big
+    assert "moved" in under, under
+    assert "5.0K" in under, under  # the figure stays visible, never hidden
+
+    strip = shield.render_top_strip(verified, None, "/nonexistent-cache-root", [], None)
+    assert "HISTORICAL" in strip, strip
+    assert "moved" in strip, strip
+
+
+def test_verified_row_with_no_fingerprint_stays_verified_never_false_historical():
+    # Absence of evidence of drift is not evidence of drift: a record with
+    # no fingerprint_end at all (a legacy record, or a fixture that predates
+    # the guard) must never be guessed into HISTORICAL.
+    exp_mod = _FakeExpMod()
+    rows = [{"label": "legacy-label", "confidence": "VERIFIED",
+             "floor_reduction_tokens": 3000, "timestamp": "2026-08-01T10:00:00+0000"}]
+    verified = shield.verified_by_label(rows, exp_mod)
+    assert verified[0]["historical"] is False, verified
+    assert verified[0]["historical_reason"] is None, verified
+
+    big, _ = shield.render_verified_hero(verified)
+    assert "HISTORICAL" not in big, big
+
+    # Same guarantee with exp_mod entirely absent (the default), the shape
+    # every existing caller in this file already uses.
+    verified_no_mod = shield.verified_by_label(rows)
+    assert verified_no_mod[0]["historical"] is False, verified_no_mod
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
