@@ -175,6 +175,24 @@ def _validate_record_shape(record):
     return None
 
 
+def _scrub_paths(message):
+    """Shorten any home-directory prefix inside a message to "~".
+
+    Error rows are built from exception text, and the exceptions raised while
+    reading a store carry absolute paths (fleet's symlink refusal names the
+    offending path in full). This page is a SHARED org artifact, so an
+    unscrubbed message publishes the admin's account name to everyone who
+    opens it. fl._display_path only handles a string that IS a path; these are
+    sentences with a path inside them, so the home prefix is replaced wherever
+    it appears rather than only at position zero. Applied at the single point
+    where an error reaches HTML, not at each site that builds one, so a future
+    error row cannot forget it."""
+    if not message:
+        return message
+    home = os.path.expanduser("~")
+    return message.replace(home, "~") if home and home != "/" else message
+
+
 def _load_one(path):
     """Load and validate one fleet record file. Returns (record, error):
     exactly one of the two is None. Never raises: a missing or unreadable
@@ -460,7 +478,7 @@ def render_machines_table(rows, empty_machines):
         if r["error"] is not None:
             rowlist.append(
                 f'<tr><td>{mid}</td><td>{date}</td><td class="nodata">NO DATA</td>'
-                f'<td>{ts.esc(r["error"])}</td></tr>')
+                f'<td>{ts.esc(_scrub_paths(r["error"]))}</td></tr>')
             continue
         rec = r["record"]
         team = ts.esc(rec.get("team") or "(untagged)")

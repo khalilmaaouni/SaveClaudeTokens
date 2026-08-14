@@ -12,6 +12,7 @@ read-only by design; nothing here spawns a subprocess).
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -591,6 +592,38 @@ def test_symlink_record_pointing_outside_store_is_refused():
         body = fd.render(d, "acme", "stamp")
         assert "should-never-be-read" not in body
         assert "healthy" in body
+
+
+def test_error_rows_never_publish_the_admins_home_path_to_the_org():
+    """This page is a SHARED org artifact, and error rows are built from
+    exception text carrying absolute paths (the symlink refusal names the
+    offending path in full). Unscrubbed, opening the page tells every member
+    of the org the admin's account name. The store therefore has to live
+    UNDER the home directory for this test to mean anything: a store in a
+    temp directory has no home prefix to leak, which is exactly why the
+    original finding survived a suite whose fixtures all used tempfile."""
+    home = os.path.expanduser("~")
+    d = os.path.join(home, ".token-shield-test-store-scrub")
+    with tempfile.TemporaryDirectory() as outside:
+        try:
+            secret_path = os.path.join(outside, "secret.json")
+            _write(secret_path, json.dumps(
+                _healthy_record("2026-08-10", "b" * 64)))
+            machine_dir = os.path.join(d, "fleet", "acme", "sym-machine")
+            os.makedirs(machine_dir)
+            os.symlink(secret_path, os.path.join(machine_dir, "2026-08-10.json"))
+            _write_record(d, "acme", "healthy", "2026-08-10",
+                          _healthy_record("2026-08-10", "healthy"))
+            body = fd.render(d, "acme", "stamp")
+            # RED before the scrub: the symlink refusal reached the row as
+            # "refusing to read: ... at /Users/<account>/.token-shield-..."
+            assert home not in body, (
+                "the rendered page carries the admin's home path, which "
+                "publishes their account name to the whole org")
+            assert "NO DATA" in body
+            assert "healthy" in body
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
