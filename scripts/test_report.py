@@ -25,6 +25,9 @@ Calibrated (defect reinjected, confirmed red, then reverted to green):
     the ledger path is absent; the NO DATA test caught the crash.
   - file-write path: hardcoded the output path instead of honoring --out; the
     file-written test caught the mismatch.
+  - treatment outcome verdict: made _reverdict return "keep" for every
+    VERIFIED record regardless of direction, so a regression re-advised
+    "keep"; the roll-back test caught it.
 """
 
 import json
@@ -182,6 +185,106 @@ def test_verified_section_lists_only_verified_records_ended_in_the_month():
     check("the NOT_PROVEN label from the same month is not in the Verified section",
           "prune-plugins" not in verified)
     check("the VERIFIED label from the prior month is excluded", "earlier-experiment" not in verified)
+
+
+def _run_report_with(root, ledger_records, treatments):
+    d = os.path.dirname(root)
+    ledger = os.path.join(d, "savings.jsonl")
+    if ledger_records:
+        with open(ledger, "w") as f:
+            for r in ledger_records:
+                f.write(json.dumps(r) + "\n")
+
+    orig_ledger, orig_load = ex.LEDGER, adv.load_treatments
+    ex.LEDGER, adv.load_treatments = ledger, (lambda: treatments)
+    try:
+        return rp.build_report(2026, 8, root=root)
+    finally:
+        ex.LEDGER, adv.load_treatments = orig_ledger, orig_load
+
+
+def test_treatment_outcome_lists_verified_before_after_and_keep_verdict():
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [_usage_rec("2026-08-10T00:00:00+00:00")])
+        treatments = {"cache.s2": {"decision": "accepted", "at": "2026-07-01T00:00:00",
+                                   "lineage": "cache.s2-20260701", "note": "did it"}}
+        records = [{"label": "cache.s2-20260701", "confidence": "VERIFIED",
+                   "timestamp": "2026-08-05T00:00:00+00:00",
+                   "target_metric": "first_request_median",
+                   "metric_before": 90000, "metric_after": 60000, "direction": "saving"}]
+        report = _run_report_with(root, records, treatments)
+
+    outcomes = _section(report, "Treatment outcomes")
+    check("the accepted strategy id is listed", "cache.s2" in outcomes)
+    check("when it was accepted is shown", "2026-07-01" in outcomes)
+    check("the declared metric's before value is shown", "90,000" in outcomes)
+    check("the declared metric's after value is shown", "60,000" in outcomes)
+    check("the experiment's own confidence label prints", "VERIFIED" in outcomes)
+    check("a VERIFIED saving re-advises keep", "keep" in outcomes)
+
+
+def test_treatment_outcome_regression_reads_roll_back():
+    # Calibrated: _reverdict returning the literal "keep" for every VERIFIED
+    # record, ignoring direction, made this test fail (RED); reading
+    # direction through _DIRECTION_VERDICTS fixed it (GREEN).
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [_usage_rec("2026-08-10T00:00:00+00:00")])
+        treatments = {"cache.s2": {"decision": "accepted", "at": "2026-07-01T00:00:00",
+                                   "lineage": "cache.s2-20260701"}}
+        records = [{"label": "cache.s2-20260701", "confidence": "VERIFIED",
+                   "timestamp": "2026-08-05T00:00:00+00:00",
+                   "target_metric": "first_request_median",
+                   "metric_before": 60000, "metric_after": 90000, "direction": "regression"}]
+        report = _run_report_with(root, records, treatments)
+
+    outcomes = _section(report, "Treatment outcomes")
+    check("a VERIFIED regression re-advises roll back", "roll back" in outcomes)
+    check("never the word keep on a regression's line",
+          not any("keep" in line for line in outcomes.splitlines() if "cache.s2" in line))
+
+
+def test_treatment_outcome_not_proven_reads_revisit_never_a_guess():
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [_usage_rec("2026-08-10T00:00:00+00:00")])
+        treatments = {"startup.s1": {"decision": "accepted", "at": "2026-07-02T00:00:00",
+                                     "lineage": "startup.s1-20260702"}}
+        # direction present but confidence NOT_PROVEN: a guess off direction
+        # alone would wrongly print "keep" here.
+        records = [{"label": "startup.s1-20260702", "confidence": "NOT_PROVEN",
+                   "timestamp": "2026-08-06T00:00:00+00:00",
+                   "target_metric": "first_request_median",
+                   "metric_before": 50000, "metric_after": 40000, "direction": "saving",
+                   "reasons": ["only 2 sessions after the change, need 5"]}]
+        report = _run_report_with(root, records, treatments)
+
+    outcomes = _section(report, "Treatment outcomes")
+    check("the experiment's own NOT_PROVEN label prints", "NOT_PROVEN" in outcomes)
+    check("NOT_PROVEN re-advises revisit, not a guessed keep", "revisit" in outcomes)
+    check("never the word keep anywhere in this section", "keep" not in outcomes)
+
+
+def test_accepted_treatment_with_no_closed_experiment_is_no_data():
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        _write(os.path.join(root, "s.jsonl"), [_usage_rec("2026-08-10T00:00:00+00:00")])
+        treatments = {"overbuild.s3": {"decision": "accepted", "at": "2026-08-01T00:00:00",
+                                       "lineage": "overbuild.s3-20260801"}}
+        report = _run_report_with(root, [], treatments)
+
+    outcomes = _section(report, "Treatment outcomes")
+    check("the accepted strategy with no matching experiment is listed",
+          "overbuild.s3" in outcomes)
+    check("no closed experiment renders NO DATA, never a guessed verdict",
+          "NO DATA" in outcomes)
+    check("no guessed verdict word appears for it",
+          not any(w in outcomes for w in ("keep", "roll back", "revisit")))
 
 
 def test_addressable_opportunity_uses_required_wording_never_could_have_saved():
