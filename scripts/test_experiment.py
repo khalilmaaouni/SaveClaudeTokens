@@ -855,6 +855,44 @@ def test_cli_summary_reports_verified_per_label_and_never_sums():
         check("the regression is called what it is", "regression" in r.stdout)
 
 
+def test_list_open_experiments_matches_by_label_and_cohort_end():
+    # The interlock wave R's guided apply depends on: a baseline is "open"
+    # only if no ledger record closes that EXACT (label, cohort_end_ts) pair,
+    # never by label alone (a later re-run must not read as closing an
+    # earlier, still-open start of the same label).
+    saved_exp_dir, saved_ledger = ex.EXP_DIR, ex.LEDGER
+    with tempfile.TemporaryDirectory() as d:
+        ex.EXP_DIR = os.path.join(d, "experiments")
+        ex.LEDGER = os.path.join(d, "savings.jsonl")
+        os.makedirs(ex.EXP_DIR)
+        _write(os.path.join(ex.EXP_DIR, "open-one.json"),
+              json.dumps({"label": "open-one", "cohort_end_ts": 100.0,
+                          "started": "2026-08-01T00:00:00"}))
+        _write(os.path.join(ex.EXP_DIR, "closed-one.json"),
+              json.dumps({"label": "closed-one", "cohort_end_ts": 200.0,
+                          "started": "2026-08-02T00:00:00"}))
+        _write(os.path.join(ex.EXP_DIR, "rerun.json"),
+              json.dumps({"label": "rerun", "cohort_end_ts": 400.0,
+                          "started": "2026-08-04T00:00:00"}))
+        with open(ex.LEDGER, "w") as f:
+            f.write(json.dumps({"label": "closed-one",
+                                "cohort_before": {"end": 200.0}}) + "\n")
+            # Same label as "rerun", but this ledger record closes a
+            # DIFFERENT start (end 300.0, not the 400.0 baseline above), the
+            # way a later re-run of the same label would.
+            f.write(json.dumps({"label": "rerun",
+                                "cohort_before": {"end": 300.0}}) + "\n")
+        open_now = ex.list_open_experiments()
+        labels = sorted(o["label"] for o in open_now)
+        check("a baseline with no ledger entry at all is open",
+              "open-one" in labels)
+        check("a baseline whose (label, end) has a matching ledger record is closed",
+              "closed-one" not in labels)
+        check("same label but a different cohort_end_ts (a later re-run) stays open",
+              "rerun" in labels)
+    ex.EXP_DIR, ex.LEDGER = saved_exp_dir, saved_ledger
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):
