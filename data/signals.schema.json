@@ -31,7 +31,9 @@
         },
         "claude_code_minor_version": {
           "type": "string",
-          "description": "Coarse minor version string, for example \"1.8\". No patch, no build id. Not populated by S1 (no local source of truth yet); reserved for a later phase."
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "maxLength": 8,
+          "description": "Coarse minor version string, for example \"1.8\". No patch, no build id. Not populated by S1 (no local source of truth yet); reserved for a later phase. A non-conforming value is omitted, never sent."
         },
         "model_family_mix": {
           "type": "object",
@@ -49,7 +51,9 @@
         },
         "token_shield_version": {
           "type": "string",
-          "description": "This machine's installed token-shield plugin version, for example \"1.8.0\"."
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "maxLength": 16,
+          "description": "This machine's installed token-shield plugin version, for example \"1.8.0\". A non-conforming value (a dev, fork, or prerelease string) is omitted, never sent."
         }
       }
     },

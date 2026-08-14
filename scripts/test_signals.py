@@ -7,8 +7,10 @@ Every test runs on a fixture ledger under a temp dir, never the real
 ~/.claude/ or ~/.token-shield/.
 """
 
+import datetime
 import json
 import os
+import stat
 import tempfile
 
 import signals as sig
@@ -170,9 +172,20 @@ def test_two_overlapping_day_reports_share_no_linking_value():
 
 # (d) outbox cap: the 91st entry evicts the oldest ---------------------------
 
+_FIXTURE_EPOCH = datetime.date(2026, 1, 1)
+
+
+def _fixture_day(n):
+    """A distinct calendar day per n (epoch + n days). Distinct on purpose:
+    finding 7 makes queue_report replace same-day files instead of adding a
+    second one, so an outbox-capacity fixture needs one file per n to stay
+    a capacity test rather than a same-day-replacement test."""
+    return (_FIXTURE_EPOCH + datetime.timedelta(days=n)).isoformat()
+
+
 def _fixture_report(n):
-    return {"schema_version": 1, "report_date": f"2026-01-{(n % 28) + 1:02d}",
-            "waste_shares": {"unknown": 100}, "_n": n}
+    return {"schema_version": 1, "report_date": _fixture_day(n),
+            "waste_shares": {"unknown": 100}}
 
 
 def test_outbox_evicts_oldest_past_the_cap():
@@ -198,8 +211,8 @@ def test_outbox_evicts_oldest_past_the_cap():
             oldest_left = json.loads(f.read())
         with open(files[-1], "rb") as f:
             newest = json.loads(f.read())
-        assert oldest_left["_n"] == 1
-        assert newest["_n"] == sig.OUTBOX_CAP
+        assert oldest_left["report_date"] == _fixture_day(1)
+        assert newest["report_date"] == _fixture_day(sig.OUTBOX_CAP)
 
 
 def test_outbox_stays_at_cap_when_filled_exactly():
@@ -231,6 +244,22 @@ def _capture_preview(outbox_dir):
     finally:
         sys.stdout = real_stdout
     return rc, buf.getvalue()
+
+
+def _capture_stderr(fn, *args, **kwargs):
+    """Run fn(*args, **kwargs) with sys.stderr swapped for an in-memory text
+    buffer; return (result, captured_text). Mirrors _capture_preview above,
+    for the refusal-line assertions below."""
+    import io
+    import sys
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        result = fn(*args, **kwargs)
+    finally:
+        sys.stderr = real_stderr
+    return result, buf.getvalue()
 
 
 def test_preview_prints_exact_stored_bytes():
@@ -313,6 +342,218 @@ def test_startup_rent_and_cache_cold_rebuilds_computed_from_ledger_fields():
     assert ws["startup_rent"] == 20
     assert ws["cache_cold_rebuilds"] == 20
     assert ws["unknown"] == 60
+
+
+# (g) value-level checks in _project, finding 1 -------------------------------
+
+def test_non_conforming_leaf_values_are_dropped_not_copied_or_guessed():
+    schema = sig._load_schema()
+    candidate = {
+        "schema_version": 2,               # wrong: const is 1
+        "report_date": "08/10/2026",       # wrong: pattern mismatch
+        "environment": {
+            "platform": "windows98",       # wrong: not in enum
+        },
+        "waste_shares": {
+            "startup_rent": 23,            # wrong: not a multiple of 5
+            "unknown": 150,                # wrong: over the maximum
+            "cache_cold_rebuilds": 40,     # valid: should survive
+        },
+    }
+    projected = sig._project(schema, candidate)
+    assert "schema_version" not in projected
+    assert "report_date" not in projected
+    assert "platform" not in projected["environment"]
+    assert "startup_rent" not in projected["waste_shares"]
+    assert "unknown" not in projected["waste_shares"]
+    assert projected["waste_shares"]["cache_cold_rebuilds"] == 40
+
+
+def test_dict_or_list_under_a_scalar_typed_key_is_dropped():
+    schema = sig._load_schema()
+    candidate = {
+        "schema_version": {"nested": "dict, not the required integer"},
+        "report_date": ["a", "list", "not", "a", "string"],
+    }
+    projected = sig._project(schema, candidate)
+    assert "schema_version" not in projected
+    assert "report_date" not in projected
+
+
+# (h) fail closed on schema shape, finding 2 -----------------------------------
+
+def test_object_node_recognized_without_explicit_type_annotation():
+    schema = json.loads(json.dumps(sig._load_schema()))  # deep copy
+    assert schema["properties"]["environment"]["type"] == "object"
+    del schema["properties"]["environment"]["type"]
+    candidate = {
+        "schema_version": 1,
+        "report_date": "2026-08-10",
+        "environment": {"platform": "mac", "leak_me": "should not survive"},
+    }
+    projected = sig._project(schema, candidate)
+    assert "leak_me" not in projected["environment"]
+    assert projected["environment"]["platform"] == "mac"
+
+
+# (i) schema tightening on version fields, finding 3 ---------------------------
+
+def test_schema_tightened_version_fields_drop_when_non_conforming():
+    schema = sig._load_schema()
+    candidate = {
+        "schema_version": 1,
+        "report_date": "2026-08-10",
+        "environment": {
+            "platform": "mac",
+            "token_shield_version": "1.8.0-dev",     # not X.Y.Z
+            "claude_code_minor_version": "1.8-beta",  # not X.Y
+        },
+    }
+    projected = sig._project(schema, candidate)
+    assert "token_shield_version" not in projected["environment"]
+    assert "claude_code_minor_version" not in projected["environment"]
+
+    candidate["environment"]["token_shield_version"] = "1.8.0"
+    candidate["environment"]["claude_code_minor_version"] = "1.8"
+    projected = sig._project(schema, candidate)
+    assert projected["environment"]["token_shield_version"] == "1.8.0"
+    assert projected["environment"]["claude_code_minor_version"] == "1.8"
+
+
+# (j) cmd_rollup refuses a non-conforming --day, finding 4 --------------------
+
+def test_rollup_refuses_the_literal_bad_day_from_the_done_check():
+    with tempfile.TemporaryDirectory() as d:
+        outbox = os.path.join(d, "outbox")
+        rc, err = _capture_stderr(sig.cmd_rollup, "not-a-date", "/dev/null", outbox)
+    assert rc == 2
+    assert "not-a-date" in err
+    assert not os.path.isdir(outbox)  # refused before the outbox was ever touched
+
+
+def test_rollup_refuses_a_path_like_day_instead_of_crashing_in_queue_report():
+    # RED calibration: pre-fix, a day string containing a slash sails past
+    # cmd_rollup unchecked, reaches build_candidate (which matches ledger
+    # rows on recorded_at[:10] == day, slash and all), produces a real
+    # candidate, and queue_report then embeds the raw day in a filename
+    # ("00000000-2026/08/10.json"), which raises FileNotFoundError because
+    # the "00000000-2026" path component does not exist as a directory.
+    with tempfile.TemporaryDirectory() as d:
+        ledger = os.path.join(d, "ledger.jsonl")
+        bad_day = "2026/08/10"
+        _write_ledger(ledger, [
+            _row(bad_day + "T09:00:00", input=100, cache_read=900,
+                 first_request=100, calls=5),
+        ])
+        outbox = os.path.join(d, "outbox")
+        rc, err = _capture_stderr(sig.cmd_rollup, bad_day, ledger, outbox)
+    assert rc == 2
+    assert bad_day in err
+
+
+# (k) non-finite ledger constants and computed shares, finding 5 --------------
+
+def test_ledger_row_with_infinity_or_nan_token_is_skipped_like_malformed():
+    with tempfile.TemporaryDirectory() as d:
+        ledger = os.path.join(d, "ledger.jsonl")
+        with open(ledger, "w") as f:
+            f.write(json.dumps(_row("2026-08-10T09:00:00", input=100,
+                                     cache_read=900, first_request=100, calls=5)) + "\n")
+            # json.loads accepts a literal Infinity/NaN token by default
+            # (not standard JSON); pre-fix these rows silently join the
+            # aggregate and corrupt total_raw with a non-finite value.
+            f.write('{"recorded_at": "2026-08-10T10:00:00", "input": Infinity, '
+                     '"cache_read": 100, "first_request": 10, "calls": 1}\n')
+            f.write('{"recorded_at": "2026-08-10T11:00:00", "input": NaN, '
+                     '"cache_read": 100, "first_request": 10, "calls": 1}\n')
+        rows = list(sig._day_rows(ledger, "2026-08-10"))
+    assert len(rows) == 1
+    assert rows[0]["input"] == 100
+
+
+def test_non_finite_computed_share_is_absent_not_quantized():
+    assert sig._share_or_absent(float("nan")) is None
+    assert sig._share_or_absent(float("inf")) is None
+    assert sig._share_or_absent(float("-inf")) is None
+    assert sig._share_or_absent(0.2) == 20
+    assert sig._share_or_absent(0.0) == 0
+
+
+# (l) cmd_preview validates the stored file before printing, finding 6 --------
+
+def test_preview_refuses_a_stored_file_that_fails_schema_projection():
+    with tempfile.TemporaryDirectory() as d:
+        # Bypass queue_report entirely: write a payload straight to the
+        # outbox the way corruption, or a future bug, might.
+        bad = {"schema_version": 1, "report_date": "2026-08-10",
+               "waste_shares": {"unknown": 40}, "leaked_field": "should not print"}
+        path = os.path.join(d, "00000000-2026-08-10.json")
+        with open(path, "wb") as f:
+            f.write(sig.serialize(bad))
+        rc, printed = _capture_preview(d)
+    assert rc == 1
+    assert printed == b""
+
+
+def test_preview_accepts_a_stored_file_that_matches_its_projection():
+    with tempfile.TemporaryDirectory() as d:
+        report = {"schema_version": 1, "report_date": "2026-08-10",
+                  "waste_shares": {"unknown": 40}}
+        sig.queue_report(report, outbox_dir=d)
+        rc, printed = _capture_preview(d)
+    assert rc == 0
+    assert printed == sig.serialize(report)
+
+
+# (m) duplicate days replace, finding 7 ----------------------------------------
+
+def test_queueing_same_day_twice_replaces_not_duplicates():
+    with tempfile.TemporaryDirectory() as d:
+        report1 = {"schema_version": 1, "report_date": "2026-03-01",
+                   "waste_shares": {"unknown": 40}}
+        report2 = {"schema_version": 1, "report_date": "2026-03-01",
+                   "waste_shares": {"unknown": 60}}
+        sig.queue_report(report1, outbox_dir=d)
+        sig.queue_report(report2, outbox_dir=d)
+        files = sig._outbox_files(d)
+        assert len(files) == 1
+        with open(files[0], "rb") as f:
+            stored = json.loads(f.read())
+        assert stored["waste_shares"]["unknown"] == 60
+
+
+# (n) outbox hygiene: restrictive permissions, finding 8 -----------------------
+
+def test_outbox_dir_and_files_have_restrictive_permissions():
+    with tempfile.TemporaryDirectory() as d:
+        outbox = os.path.join(d, "outbox")
+        report = {"schema_version": 1, "report_date": "2026-04-01",
+                  "waste_shares": {"unknown": 20}}
+        path = sig.queue_report(report, outbox_dir=outbox)
+        dir_mode = stat.S_IMODE(os.stat(outbox).st_mode)
+        file_mode = stat.S_IMODE(os.stat(path).st_mode)
+    assert dir_mode == 0o700, oct(dir_mode)
+    assert file_mode == 0o600, oct(file_mode)
+
+
+# (o) the rollup NO DATA message shortens home to "~", finding 9 --------------
+
+def test_rollup_no_data_message_uses_tilde_for_home_not_the_account_name():
+    with tempfile.TemporaryDirectory() as fake_home:
+        old_home = os.environ.get("HOME")
+        os.environ["HOME"] = fake_home
+        try:
+            ledger = os.path.join(fake_home, "does-not-exist.jsonl")
+            outbox = os.path.join(fake_home, "outbox")
+            rc, err = _capture_stderr(sig.cmd_rollup, "2026-08-10", ledger, outbox)
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
+    assert rc == 2
+    assert fake_home not in err
+    assert "~/does-not-exist.jsonl" in err
 
 
 if __name__ == "__main__":

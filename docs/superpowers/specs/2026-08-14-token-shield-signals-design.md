@@ -51,7 +51,7 @@ Deliberately absent: session counts precise enough to fingerprint, timezones, lo
 ## Threat model, and what defeats each threat
 
 - Us turning curious: the schema cannot carry content; submissions are unlinkable to each other; the client is open source, so the claim is auditable, not trusted.
-- A breach of our bucket: the attacker gets what the public already gets, quantized aggregates without identifiers.
+- A breach of our bucket: the attacker gets the stored per-report stream, one row per day per machine, platform and version fields included, not the published k-anonymous aggregates; this is why the reports themselves must carry nothing identifying.
 - The org admin spying on developers: fleet Signals is double opt-in and the payload preview is identical for every party; the org's own Fleet store is governed by the org, and Signals adds nothing person-level to it.
 - A network observer: sees an HTTPS connection to a known endpoint, contents encrypted; timing reveals at most that a machine runs Token Shield.
 - Correlation and fingerprinting: quantized buckets, banded counts, day resolution, no rare free-form values (unbounded fields do not exist in the schema), and the k-floor on anything published.
