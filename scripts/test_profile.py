@@ -6,13 +6,14 @@
 
 import json
 import os
+import statistics
 import sys
 import tempfile
 
 import profile as pf
 import measure_tokens as mt
 
-METRIC_GROUPS = ("usage", "behavior", "instruction", "environment", "skipped")
+METRIC_GROUPS = ("usage", "behavior", "instruction", "environment", "pressure", "skipped")
 
 SECRET = "SECRET_CONVERSATION_MARKER_do_not_leak"
 
@@ -41,6 +42,57 @@ def _rec(ts, model="claude-x", effort=None, inp=1, w5=0, w1=0, read=0, out=1,
 def _write(path, records):
     with open(path, "w") as f:
         f.write("\n".join(records) + "\n")
+
+
+def _raw_line_bytes(path):
+    """Independent recomputation of "total transcript bytes", read straight
+    off disk the same way _pressure_scan does (open, iterate lines, skip
+    blanks, encode utf-8), without calling any profile.py function. Used so
+    the byte-share tests are not just checking a function against itself."""
+    total = 0
+    with open(path, "r", errors="ignore") as f:
+        for line in f:
+            if line.strip():
+                total += len(line.encode("utf-8", "ignore"))
+    return total
+
+
+def _assistant_line(ts, output_tokens=1, tool_uses=None):
+    """One assistant transcript line. tool_uses is a list of
+    (tool_id, name, input_dict) tuples, matching the real tool_use block
+    shape: {"type": "tool_use", "id", "name", "input", "caller"}."""
+    content = [
+        {"type": "tool_use", "id": tid, "name": name, "input": inp,
+         "caller": {"type": "direct"}}
+        for tid, name, inp in (tool_uses or [])
+    ]
+    msg = {
+        "model": "claude-x",
+        "content": content,
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                               "ephemeral_1h_input_tokens": 0},
+        },
+    }
+    return json.dumps({"type": "assistant", "message": msg, "timestamp": ts})
+
+
+def _user_line(ts, tool_results=None, text=None):
+    """One user transcript line. tool_results is a list of
+    (tool_use_id, content) pairs, matching {"type": "tool_result",
+    "tool_use_id", "content"}. text, if given, becomes a human-typed
+    {"type": "text"} block alongside any tool_result blocks."""
+    content = [
+        {"type": "tool_result", "tool_use_id": tid, "content": c}
+        for tid, c in (tool_results or [])
+    ]
+    if text is not None:
+        content.append({"type": "text", "text": text})
+    msg = {"role": "user", "content": content}
+    return json.dumps({"type": "user", "message": msg, "timestamp": ts})
 
 
 def test_labels_present_on_every_leaf():
@@ -165,6 +217,187 @@ def test_effort_bucket_whitelist():
         assert pf.effort_bucket(good) == good
     for bad in ("HIGH", "medium ", "", "sk-secret", 7, None, {"a": 1}, ["low"]):
         assert pf.effort_bucket(bad) == pf.EFFORT_OTHER, bad
+
+
+def test_tool_result_bytes_helper():
+    assert pf._tool_result_bytes("hello") == len("hello".encode("utf-8"))
+    assert pf._tool_result_bytes([{"type": "text", "text": "ab"},
+                                   {"type": "text", "text": "cd"}]) == 4
+    # A block with no usable text contributes 0 rather than raising.
+    assert pf._tool_result_bytes([{"type": "image"}]) == 0
+    assert pf._tool_result_bytes(None) == 0
+    assert pf._tool_result_bytes(7) == 0
+
+
+def test_pressure_tool_output_share_by_tool():
+    # Calibrated: swapping the /pa["total_bytes"] divisor for a fixed
+    # constant, or having _tool_result_bytes always return 0, makes the
+    # asserted share numbers go red; restoring the real division and byte
+    # count makes them green again.
+    read_content = "A" * 100
+    bash_content = "B" * 50
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "s.jsonl")
+        _write(path, [
+            _assistant_line("2026-08-12T10:00:00Z", tool_uses=[
+                ("t1", "Read", {"file_path": "/a"}),
+                ("t2", "Bash", {"command": "ls"}),
+            ]),
+            _user_line("2026-08-12T10:00:01Z", tool_results=[
+                ("t1", read_content), ("t2", bash_content),
+            ]),
+        ])
+        expected_total = _raw_line_bytes(path)
+        prof = pf.build_profile(root=d, days=30)
+
+    share = prof["pressure"]["tool_output_share_by_tool"]
+    assert share["label"] == "MEASURED", share
+    assert abs(share["value"]["Read"] - 100 / expected_total) < 1e-9, share
+    assert abs(share["value"]["Bash"] - 50 / expected_total) < 1e-9, share
+
+
+def test_pressure_tool_output_share_no_data_without_tool_results():
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _assistant_line("2026-08-12T10:00:00Z"),
+        ])
+        prof = pf.build_profile(root=d, days=30)
+    share = prof["pressure"]["tool_output_share_by_tool"]
+    assert share["label"] == "NO DATA"
+    assert share["value"] is None
+
+
+def test_pressure_duplicate_reads_and_commands():
+    # Calibrated: changing `count - 1` to `count` in _pressure_scan's
+    # duplicate tally (counting every repeated call instead of every call
+    # beyond the first) makes these exact-count assertions go red; restoring
+    # `count - 1` makes them green.
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _assistant_line("2026-08-12T10:00:00Z", tool_uses=[
+                ("t1", "Bash", {"command": "ls"}),
+                ("t2", "Bash", {"command": "ls"}),      # exact repeat of t1
+                ("t3", "Bash", {"command": "pwd"}),     # distinct input
+                ("t4", "Read", {"file_path": "/a"}),
+                ("t5", "Read", {"file_path": "/a"}),    # exact repeat
+                ("t6", "Read", {"file_path": "/a"}),    # exact repeat again
+            ]),
+        ])
+        prof = pf.build_profile(root=d, days=30)
+
+    dup = prof["pressure"]["duplicate_reads"]
+    assert dup["label"] == "MEASURED", dup
+    assert dup["value"] == {"Bash": 1, "Read": 2}, dup
+
+    cmd = prof["pressure"]["duplicate_commands"]
+    assert cmd["label"] == "MEASURED", cmd
+    assert cmd["value"] == 1, cmd
+
+
+def test_pressure_duplicate_reads_measured_zero_not_no_data():
+    # Tool calls happened but none repeated: a real, measured 0 / {}, never
+    # NO DATA (NO DATA is reserved for "no tool_use blocks at all").
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _assistant_line("2026-08-12T10:00:00Z", tool_uses=[
+                ("t1", "Bash", {"command": "ls"}),
+            ]),
+        ])
+        prof = pf.build_profile(root=d, days=30)
+
+    dup = prof["pressure"]["duplicate_reads"]
+    assert dup["label"] == "MEASURED", dup
+    assert dup["value"] == {}, dup
+
+    cmd = prof["pressure"]["duplicate_commands"]
+    assert cmd["label"] == "MEASURED", cmd
+    assert cmd["value"] == 0, cmd
+
+
+def test_pressure_duplicate_no_data_without_any_tool_use():
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [_assistant_line("2026-08-12T10:00:00Z")])
+        prof = pf.build_profile(root=d, days=30)
+    dup = prof["pressure"]["duplicate_reads"]
+    assert dup["label"] == "NO DATA"
+    assert dup["value"] is None
+    cmd = prof["pressure"]["duplicate_commands"]
+    assert cmd["label"] == "NO DATA"
+    assert cmd["value"] is None
+
+
+def test_pressure_output_verbosity():
+    # Calibrated: swapping statistics.median for statistics.mean in
+    # _output_verbosity makes the median assertion go red (55.0 vs 214.0);
+    # restoring median makes it green.
+    values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 2000]
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _assistant_line(f"2026-08-12T10:00:{i:02d}Z", output_tokens=v)
+            for i, v in enumerate(values)
+        ])
+        prof = pf.build_profile(root=d, days=30)
+
+    v = prof["pressure"]["output_verbosity"]
+    assert v["label"] == "MEASURED", v
+    assert v["value"]["median_output_tokens"] == statistics.median(values)
+    assert v["value"]["p90_output_tokens"] == sorted(values)[9]
+    assert v["value"]["over_1000_tokens_share"] == 1 / 10
+    assert v["value"]["n_assistant_messages"] == 10
+
+
+def test_pressure_output_verbosity_p90_needs_ten_samples():
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _assistant_line(f"2026-08-12T10:00:{i:02d}Z", output_tokens=1500)
+            for i in range(3)
+        ])
+        prof = pf.build_profile(root=d, days=30)
+    v = prof["pressure"]["output_verbosity"]["value"]
+    assert v["p90_output_tokens"] is None, v
+    assert v["over_1000_tokens_share"] == 1.0, v
+
+
+def test_pressure_output_verbosity_no_data_without_usage():
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            json.dumps({"type": "assistant", "message": {"content": []},
+                        "timestamp": "2026-08-12T10:00:00Z"}),
+        ])
+        prof = pf.build_profile(root=d, days=30)
+    v = prof["pressure"]["output_verbosity"]
+    assert v["label"] == "NO DATA"
+    assert v["value"] is None
+
+
+def test_pressure_structured_input_share():
+    # Calibrated: swapping the numerator/denominator (structured_bytes and
+    # human_text_bytes) in the structured_input_share formula flips the
+    # expected 0.8888... to 0.1111..., so this exact-value assertion goes
+    # red; restoring the correct split makes it green.
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [
+            _user_line("2026-08-12T10:00:00Z",
+                       tool_results=[("t1", "X" * 80)], text="human text"),
+        ])
+        prof = pf.build_profile(root=d, days=30)
+
+    s = prof["pressure"]["structured_input_share"]
+    assert s["label"] == "MEASURED", s
+    expected = 80 / (80 + len("human text"))
+    assert abs(s["value"] - expected) < 1e-9, s
+
+
+def test_pressure_no_data_on_empty_transcripts():
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), ["not valid json", "{}"])
+        prof = pf.build_profile(root=d, days=30)
+
+    p = prof["pressure"]
+    for key in ("tool_output_share_by_tool", "duplicate_reads", "duplicate_commands",
+                "output_verbosity", "structured_input_share"):
+        assert p[key]["label"] == "NO DATA", (key, p[key])
+        assert p[key]["value"] is None, (key, p[key])
 
 
 def test_main_exits_2_on_empty_root():

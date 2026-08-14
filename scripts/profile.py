@@ -12,11 +12,13 @@ other tools (the optimizer, the dashboard) can read without walking
 transcripts themselves.
 
 It reuses measure_tokens for every usage counter (collect/summarize): this
-script never reimplements input/output/cache arithmetic. What it adds is a
-second, lighter pass over the same transcript files for signals the counter
-math does not carry: the top-level effort field, message timestamps for idle
-gaps, and file-system facts about CLAUDE.md, the auto-memory index, and the
-installed plugin count.
+script never reimplements input/output/cache arithmetic. What it adds is
+further, lighter passes over the same transcript files for signals the
+counter math does not carry: the top-level effort field, message timestamps
+for idle gaps, file-system facts about CLAUDE.md, the auto-memory index, the
+installed plugin count, and transcript-pressure signals (tool_result byte
+share by tool, duplicate tool calls, assistant output verbosity, and the
+structured-versus-typed split of user turns).
 
 CONFIDENCE LABELS
 Every leaf metric is {"value": ..., "label": ..., "basis": ...}:
@@ -41,6 +43,7 @@ import argparse
 import datetime
 import json
 import os
+import statistics
 import sys
 import time
 
@@ -201,6 +204,167 @@ def _ttl_regime(sm):
     return "mixed"
 
 
+def _tool_result_bytes(content):
+    """Byte size of one tool_result block's content. content is a plain
+    string in most transcripts, or a list of content blocks (usually
+    {"type": "text", "text": ...}) in others. Anything else contributes 0
+    rather than raising, since this is a byte-counting pass, not a parser."""
+    if isinstance(content, str):
+        return len(content.encode("utf-8", "ignore"))
+    if isinstance(content, list):
+        total = 0
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                total += len(item["text"].encode("utf-8", "ignore"))
+        return total
+    return 0
+
+
+def _pressure_scan(root, cutoff):
+    """A third pass over the same transcript files, for transcript-pressure
+    signals: how much of the transcript is tool output, whether tool calls
+    repeat verbatim, how bursty assistant output is, and how much of a user
+    turn is machine-generated tool_result versus a human-typed message.
+
+    Each session file is read into memory once and walked twice: first to
+    map tool_use id -> tool name and count exact repeats (same name and
+    identical input JSON) within that one file, then to attribute
+    tool_result bytes to a tool name and to split user-message bytes into
+    tool_result versus human-typed text. Counting `*_total` alongside the
+    aggregates below is what lets the caller tell "measured zero" apart from
+    "no such field in this transcript" (NO DATA).
+    """
+    tool_result_bytes = {}
+    total_bytes = 0
+    tool_use_total = 0
+    tool_result_total = 0
+    bash_call_total = 0
+    dup_calls = {}
+    output_tokens = []
+    structured_bytes = 0
+    human_text_bytes = 0
+    files_scanned = 0
+    skipped_files = 0
+    skipped_lines = 0
+
+    for fp in mt.iter_session_files(root, cutoff):
+        files_scanned += 1
+        try:
+            f = open(fp, "r", errors="ignore")
+        except OSError:
+            skipped_files += 1
+            continue
+
+        records = []
+        with f:
+            for line in f:
+                if not line.strip():
+                    continue
+                total_bytes += len(line.encode("utf-8", "ignore"))
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    skipped_lines += 1
+
+        # Pass 1: tool_use id -> tool name, and exact-repeat counts (same
+        # name and identical input JSON) within this one session file.
+        tool_names = {}
+        seen_calls = {}
+        for rec in records:
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool_use_total += 1
+                name = block.get("name")
+                tool_id = block.get("id")
+                if isinstance(tool_id, str) and isinstance(name, str):
+                    tool_names[tool_id] = name
+                if not isinstance(name, str):
+                    continue
+                if name == "Bash":
+                    bash_call_total += 1
+                try:
+                    key = (name, json.dumps(block.get("input"), sort_keys=True))
+                except TypeError:
+                    continue
+                seen_calls[key] = seen_calls.get(key, 0) + 1
+
+        for (name, _input_json), count in seen_calls.items():
+            if count > 1:
+                dup_calls[name] = dup_calls.get(name, 0) + (count - 1)
+
+        # Pass 2: tool_result bytes attributed by tool name, assistant
+        # output_tokens per message, and the user-message structured-vs-human
+        # byte split.
+        for rec in records:
+            rtype = rec.get("type")
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+
+            if rtype == "assistant":
+                usage = msg.get("usage")
+                out = usage.get("output_tokens") if isinstance(usage, dict) else None
+                if isinstance(out, int):
+                    output_tokens.append(out)
+
+            if rtype == "user":
+                content = msg.get("content")
+                if isinstance(content, str):
+                    human_text_bytes += len(content.encode("utf-8", "ignore"))
+                elif isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "tool_result":
+                            tool_result_total += 1
+                            b = _tool_result_bytes(block.get("content"))
+                            structured_bytes += b
+                            name = tool_names.get(block.get("tool_use_id"), "unknown")
+                            tool_result_bytes[name] = tool_result_bytes.get(name, 0) + b
+                        elif btype == "text":
+                            text = block.get("text")
+                            if isinstance(text, str):
+                                human_text_bytes += len(text.encode("utf-8", "ignore"))
+
+    return {
+        "tool_result_bytes": tool_result_bytes,
+        "total_bytes": total_bytes,
+        "tool_use_total": tool_use_total,
+        "tool_result_total": tool_result_total,
+        "bash_call_total": bash_call_total,
+        "dup_calls": dup_calls,
+        "output_tokens": output_tokens,
+        "structured_bytes": structured_bytes,
+        "human_text_bytes": human_text_bytes,
+        "files_scanned": files_scanned,
+        "skipped_files": skipped_files,
+        "skipped_lines": skipped_lines,
+    }
+
+
+def _output_verbosity(output_tokens):
+    if not output_tokens:
+        return None
+    vals = sorted(output_tokens)
+    n = len(vals)
+    over_1000 = sum(1 for v in vals if v > 1000)
+    return {
+        "median_output_tokens": statistics.median(vals),
+        # p90 needs a real tail to mean anything; below 10 samples it stays
+        # unset rather than reading one arbitrary record as "the 90th
+        # percentile", matching measure_tokens.summarize()'s first_request_p90.
+        "p90_output_tokens": vals[int(n * 0.9)] if n >= 10 else None,
+        "over_1000_tokens_share": over_1000 / n,
+        "n_assistant_messages": n,
+    }
+
+
 def build_profile(root=None, days=30):
     root = root or os.path.expanduser("~/.claude/projects")
     sessions = mt.collect(root, days)
@@ -293,12 +457,57 @@ def build_profile(root=None, days=30):
                    "otherwise mixed")),
     }
 
+    pa = _pressure_scan(root, cutoff)
+
+    tool_share = ({name: b / pa["total_bytes"] for name, b in sorted(pa["tool_result_bytes"].items())}
+                  if pa["tool_result_total"] and pa["total_bytes"] else None)
+    verbosity = _output_verbosity(pa["output_tokens"])
+    structured_denom = pa["structured_bytes"] + pa["human_text_bytes"]
+
+    pressure = {
+        "tool_output_share_by_tool": (
+            no_data("no tool_result blocks found in window") if tool_share is None else
+            metric(tool_share, "MEASURED",
+                   "per tool, share of transcript bytes (sum of raw JSONL line "
+                   "bytes across scanned transcripts) that were tool_result "
+                   "content, attributed by matching tool_result.tool_use_id "
+                   "to the name on the earlier tool_use block")),
+        "duplicate_reads": (
+            no_data("no tool_use blocks found in window") if pa["tool_use_total"] == 0 else
+            metric(dict(sorted(pa["dup_calls"].items())), "MEASURED",
+                   "per tool, count of tool_use calls beyond the first with "
+                   "the exact same name and identical input JSON, within one "
+                   "session transcript file")),
+        "duplicate_commands": (
+            no_data("no Bash tool_use calls found in window") if pa["bash_call_total"] == 0 else
+            metric(pa["dup_calls"].get("Bash", 0), "MEASURED",
+                   "duplicate_reads narrowed to the Bash tool: count of Bash "
+                   "calls beyond the first with identical input JSON, within "
+                   "one session transcript file")),
+        "output_verbosity": (
+            no_data("no assistant messages with usage.output_tokens found in window")
+            if verbosity is None else
+            metric(verbosity, "MEASURED",
+                   "distribution of usage.output_tokens per assistant message "
+                   "across scanned transcripts: median, p90 (needs 10+ "
+                   "messages, else null), and the share of messages over "
+                   "1000 output tokens")),
+        "structured_input_share": (
+            no_data("no user-message tool_result or text bytes found in window")
+            if structured_denom == 0 else
+            metric(pa["structured_bytes"] / structured_denom, "MEASURED",
+                   "share of user-message bytes (tool_result content plus "
+                   "human-typed text blocks) that were tool_result content, "
+                   "i.e. machine-generated rather than typed by a person")),
+    }
+
     skipped = {
-        "files": metric(mt_skip["files"] + raw_skip_files, "MEASURED",
-                         "unreadable files across the usage walk plus the behavior scan"),
-        "lines": metric(mt_skip["lines"] + raw_skip_lines, "MEASURED",
-                         "lines that failed JSON decoding across the usage walk plus "
-                         "the behavior scan"),
+        "files": metric(mt_skip["files"] + raw_skip_files + pa["skipped_files"], "MEASURED",
+                         "unreadable files across the usage walk, the behavior scan, "
+                         "and the pressure scan"),
+        "lines": metric(mt_skip["lines"] + raw_skip_lines + pa["skipped_lines"], "MEASURED",
+                         "lines that failed JSON decoding across the usage walk, "
+                         "the behavior scan, and the pressure scan"),
     }
 
     return {
@@ -309,6 +518,7 @@ def build_profile(root=None, days=30):
         "behavior": behavior,
         "instruction": instruction,
         "environment": environment,
+        "pressure": pressure,
         "skipped": skipped,
     }
 
@@ -332,7 +542,8 @@ def main():
     with open(a.out, "w") as f:
         json.dump(prof, f, indent=2)
 
-    u, b, i, sk = prof["usage"], prof["behavior"], prof["instruction"], prof["skipped"]
+    u, b, i, p, sk = (prof["usage"], prof["behavior"], prof["instruction"],
+                       prof["pressure"], prof["skipped"])
     print(f"profile written: {a.out}")
     print(f"sessions in window: {mt.fmt(b['sessions']['value'])} over {a.days:g} days")
     print(f"first-request floor: {mt.fmt(u['first_request_median_tokens']['value'])} tokens "
@@ -340,6 +551,31 @@ def main():
     print(f"cache hit ratio median: {mt.fmt(u['cache_hit_ratio_median']['value'])}")
     print(f"model switches mid-session: {mt.fmt(b['model_switch_session_share']['value'])} "
           f"of sessions")
+
+    print("--- pressure ---")
+    tool_share = p["tool_output_share_by_tool"]["value"]
+    if tool_share is None:
+        print("tool output share by tool: NO DATA")
+    else:
+        top = sorted(tool_share.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        print("tool output share by tool (top 3): "
+              + ", ".join(f"{name} {mt.fmt(share)}" for name, share in top))
+    dup_reads = p["duplicate_reads"]["value"]
+    if dup_reads is None:
+        print("duplicate tool reads: NO DATA")
+    else:
+        print(f"duplicate tool reads (total): {mt.fmt(sum(dup_reads.values()))}")
+    print(f"duplicate Bash commands: {mt.fmt(p['duplicate_commands']['value'])}")
+    verbosity = p["output_verbosity"]["value"]
+    if verbosity is None:
+        print("assistant output verbosity: NO DATA")
+    else:
+        print(f"assistant output verbosity: median {mt.fmt(verbosity['median_output_tokens'])} "
+              f"tokens, p90 {mt.fmt(verbosity['p90_output_tokens'])}, "
+              f"{mt.fmt(verbosity['over_1000_tokens_share'])} of messages over 1000 tokens")
+    print(f"structured (tool_result) share of user turns: "
+          f"{mt.fmt(p['structured_input_share']['value'])}")
+
     print(f"skipped while reading: {mt.fmt(sk['files']['value'])} files, "
           f"{mt.fmt(sk['lines']['value'])} lines")
     return 0
