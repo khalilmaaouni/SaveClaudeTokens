@@ -568,6 +568,49 @@ def test_sync_refuses_to_suppress_when_the_metric_cannot_be_read():
     assert result["best"] is not None and result["best"]["id"] == "overbuild.s1", result
 
 
+def fact(fid, verified, review_interval_days=30, source="test source"):
+    return {"id": fid, "statement": "test statement", "source": source,
+            "verified": verified, "review_interval_days": review_interval_days}
+
+
+def test_fresh_fact_renders_without_staleness_text():
+    # strategy() sources every fixture strategy "A1" by default.
+    strategies = [strategy("cache.s1", "cache", "usage.m1", ">=", 1, "HIGH")]
+    profile = nest({"usage.m1": leaf(5)})
+    facts = [fact("A1", verified="2026-08-01", review_interval_days=30)]
+    result = adv.advise(profile, {}, strategies, facts=facts, today="2026-08-14")
+    assert result["best"]["stale_facts"] == [], result["best"]["stale_facts"]
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_card(result["best"])
+    assert "FACT STALE" not in printed.getvalue(), printed.getvalue()
+
+
+def test_stale_fact_carries_staleness_to_the_user():
+    # Calibrated: with the propagation removed (_card built without passing
+    # facts_by_id/today into _stale_fact_lines, or _print_card not looping
+    # over stale_facts), this goes red because the rendered card never
+    # mentions the stale fact even though the registry says it is 45 days
+    # past its 30 day review interval; restored, it goes green.
+    strategies = [strategy("cache.s1", "cache", "usage.m1", ">=", 1, "HIGH")]
+    profile = nest({"usage.m1": leaf(5)})
+    facts = [fact("A1", verified="2026-06-30", review_interval_days=30)]
+    result = adv.advise(profile, {}, strategies, facts=facts, today="2026-08-14")
+    assert result["best"]["stale_facts"], result["best"]["stale_facts"]
+    assert any("A1" in line for line in result["best"]["stale_facts"])
+    assert any("FACT STALE" in line for line in result["best"]["stale_facts"])
+
+    printed = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(printed):
+        adv._print_card(result["best"])
+    out = printed.getvalue()
+    assert "FACT STALE" in out and "A1" in out, out
+    assert "2026-06-30" in out, out
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

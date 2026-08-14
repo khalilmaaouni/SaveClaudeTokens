@@ -240,6 +240,24 @@ def _load_facts(path=None):
     return facts, refused, None
 
 
+def _is_fact_stale(fact, today=None):
+    """True when a single fact's verified date is older than its own
+    review_interval_days (falling back to DEFAULT_FACT_REVIEW_DAYS when the
+    fact omits the field). The one staleness rule this repo uses, so a
+    caller elsewhere (advisor.py's stale-fact card line) reuses this instead
+    of re-deriving the same age/interval math. An unparseable date reads as
+    not stale: NO DATA beats a guess."""
+    today_date = _parse_date(today or time.strftime("%Y-%m-%d"))
+    d = _parse_date(fact.get("verified"))
+    if today_date is None or d is None:
+        return False
+    try:
+        interval = int(fact.get("review_interval_days", DEFAULT_FACT_REVIEW_DAYS))
+    except (TypeError, ValueError):
+        interval = DEFAULT_FACT_REVIEW_DAYS
+    return (today_date - d).days > interval
+
+
 def _fact_staleness_lines(facts, today=None):
     """One NEEDS REVIEW line per fact whose verified date is older than its
     own review_interval_days (falling back to DEFAULT_FACT_REVIEW_DAYS when
@@ -253,14 +271,15 @@ def _fact_staleness_lines(facts, today=None):
         d = _parse_date(fact.get("verified"))
         if d is None:
             continue
+        if not _is_fact_stale(fact, today):
+            continue
         try:
             interval = int(fact.get("review_interval_days", DEFAULT_FACT_REVIEW_DAYS))
         except (TypeError, ValueError):
             interval = DEFAULT_FACT_REVIEW_DAYS
         age_days = (today_date - d).days
-        if age_days > interval:
-            lines.append(f"  NEEDS REVIEW: {fact.get('id', '?')}: verified {fact.get('verified')} "
-                         f"({age_days} days ago, review interval {interval} days)")
+        lines.append(f"  NEEDS REVIEW: {fact.get('id', '?')}: verified {fact.get('verified')} "
+                     f"({age_days} days ago, review interval {interval} days)")
     return lines
 
 
