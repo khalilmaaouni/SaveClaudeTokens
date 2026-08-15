@@ -19,7 +19,7 @@ git clone https://github.com/khalilmaaouni/token-shield.git && python3 token-shi
 
 Nothing is installed, no plugin, no MCP server, no config file. It reads your existing local Claude Code transcripts, prints a short honest read of where your tokens went, and exits. Nothing leaves your machine. If it finds too little data, it says NO DATA plainly instead of guessing.
 
-What you see, in order, in about a minute: a line saying it is reading your transcripts (this can take up to a minute on a long history, so the wait is not a hang), then one MEASURED hero line naming your single biggest token issue in plain words plus the exact command to act on it, then a short breakdown (sessions and calls measured, the startup floor and its share, the cache hit ratio, and how much output came from subagents), then what Anthropic's own caching already saved (labeled NATIVE, never counted as this tool's saving), and last the command to run for the full plugin.
+What you see, in order, in about a minute: a line saying it is reading your transcripts (this can take up to a minute on a long history, so the wait is not a hang), then, once you have enough history for it to read, one MEASURED hero line naming your single biggest token issue in plain words plus the exact command to act on it, then a short breakdown (sessions and calls measured, the startup floor and its share, the cache hit ratio, and how much output came from subagents), then what Anthropic's own caching already saved (labeled NATIVE, never counted as this tool's saving), and last the command to run for the full plugin.
 
 ## Install
 
