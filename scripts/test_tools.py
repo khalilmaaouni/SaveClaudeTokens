@@ -1311,6 +1311,84 @@ def test_state_parse_health_none_is_unchanged():
     assert state2 == "PROVING", (state2, reason2)
 
 
+# Verification-review defects (independent review of an unmerged change),
+# fixed together: a suppressed strategy hitting `continue` before advisor.py's
+# insufficient check let len(insufficient) == strategy_count become
+# unreachable after a single suppression, so a completely unmeasured, fully
+# suppressed profile rendered HEALTHY instead of NO DATA.
+
+def test_state_suppressed_strategy_still_no_data():
+    # The reproduction from the review report, run against the real strategy
+    # registry: suppress the first strategy, leave the profile empty (every
+    # other strategy's trigger is insufficient). Before the fix this rendered
+    # HEALTHY with a reason line naming "NO DATA" twice; it must render the
+    # NO DATA state instead.
+    strategies = adv.load_strategies()
+    treatments = {strategies[0]["id"]: {"decision": "suppressed", "until": "2099-01-01T00:00:00"}}
+    res = adv.advise({}, treatments=treatments)
+    state, reason = met.command_center_state([], res, [], len(strategies))
+    assert state == "NO DATA", (state, reason)
+
+
+def test_state_every_strategy_suppressed_is_no_data():
+    # Denominator 0: advise_result["evaluated"] is 0 because every strategy
+    # was suppressed and none reached trigger evaluation at all. This must
+    # render NO DATA and say so honestly (suppressed, not insufficient).
+    advise_result = {"do_nothing": True, "insufficient": [], "evaluated": 0}
+    state, reason = met.command_center_state([], advise_result, [], 5)
+    assert state == "NO DATA", (state, reason)
+    assert "suppress" in reason.lower(), reason
+
+
+def test_state_none_advise_result_is_no_data():
+    # token_shield.py sets advise_result to None when the advisor fails to
+    # load (scripts/token_shield.py:910). The first surface that wires this
+    # function up must degrade to NO DATA, not crash with AttributeError.
+    state, reason = met.command_center_state([], None, [], 3)
+    assert state == "NO DATA", (state, reason)
+    assert "advisor" in reason.lower(), reason
+
+
+def test_state_unreadable_baseline_keeps_the_other_count():
+    # _proving_reason returned early on the _unreadable marker before adding
+    # "(and N more open)", so a user with one unreadable baseline and other
+    # genuinely open experiments was told only about the unreadable one.
+    open_experiments = [{"_unreadable": "/some/path.json"},
+                         {"label": "a", "started": "2026-08-01T10:00:00", "window_days": 7},
+                         {"label": "b", "started": "2026-08-02T10:00:00", "window_days": 7}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "/some/path.json" in reason, reason
+    assert "2 more open" in reason, reason
+
+
+def test_state_healthy_reason_names_the_advisor_message():
+    # Mutant that survived: HEALTHY's reason line content was never checked,
+    # only that the word "healthy" appears somewhere. Pin the reason to
+    # advise_result's own message field verbatim.
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now. Your two strongest metrics: "
+                                "cache hit ratio 0.87, startup floor share 0.42."}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "HEALTHY", (state, reason)
+    assert reason == advise_result["message"], reason
+
+
+def test_state_unrecognised_is_the_only_reason_for_no_data():
+    # Mutant that survived: nothing proved parse_health="UNRECOGNISED" is
+    # actually load-bearing rather than redundant with an already-firing
+    # precondition. Use a fixture that would render a real state (HEALTHY)
+    # without it, then show UNRECOGNISED alone forces NO DATA.
+    advise_result = {"do_nothing": True, "insufficient": []}
+    without_flag_state, _ = met.command_center_state([], advise_result, [], 3)
+    assert without_flag_state == "HEALTHY", without_flag_state
+
+    state, reason = met.command_center_state([], advise_result, [], 3, parse_health="UNRECOGNISED")
+    assert state == "NO DATA", (state, reason)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

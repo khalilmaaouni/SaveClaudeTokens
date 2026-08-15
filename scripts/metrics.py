@@ -640,14 +640,14 @@ def _proving_reason(open_experiments):
     "_unreadable") names the file path instead of guessing a label it does
     not have, per docs/plan/2026-08-15-STATE-MODEL.md section 3."""
     first = open_experiments[0] or {}
+    more = f" (and {len(open_experiments) - 1} more open)" if len(open_experiments) > 1 else ""
     path = first.get("_unreadable")
     if path:
         return (f"a baseline at {path} could not be read, so an open trial "
-                 "cannot be ruled out")
+                 f"cannot be ruled out{more}")
     label = first.get("label") or "(unlabeled)"
     window = first.get("window_days")
     window_txt = f", {window} day window" if window else ""
-    more = f" (and {len(open_experiments) - 1} more open)" if len(open_experiments) > 1 else ""
     return f"proving {label}{window_txt}{more}"
 
 
@@ -694,6 +694,18 @@ def command_center_state(open_experiments, advise_result, verified, strategy_cou
     meter that cannot read its own input is not a state at all. Nothing in
     this codebase passes anything but None yet: the format canary that would
     supply UNRECOGNISED is a separate task, not built here.
+
+    advise_result may be None (token_shield.py sets it to None when the
+    advisor fails to load); that renders NO DATA rather than raising.
+
+    The NO DATA precondition's denominator is advise_result["evaluated"] (the
+    count of strategies that actually reached trigger evaluation, i.e. were
+    not skipped by a suppression) when that key is present; otherwise it is
+    the strategy_count argument, exactly as before this key existed, so
+    older callers and fixtures keep their existing behaviour. A denominator
+    of 0 means every strategy was suppressed, so nothing at all could be
+    evaluated; that also renders NO DATA, distinct in wording from the
+    original "insufficient triggers" case.
     """
     if parse_health == "UNRECOGNISED":
         return ("NO DATA",
@@ -701,8 +713,19 @@ def command_center_state(open_experiments, advise_result, verified, strategy_cou
                 "every measurement below may read as zero rather than absent: "
                 "no state is trustworthy until the format is fixed")
 
+    if advise_result is None:
+        return ("NO DATA",
+                "the advisor could not be read, so no state can be computed. "
+                "Run token-shield profile to gather data.")
+
     insufficient = advise_result.get("insufficient") or []
-    if strategy_count and len(insufficient) == strategy_count:
+    evaluated = advise_result.get("evaluated")
+    denominator = evaluated if evaluated is not None else strategy_count
+    if denominator == 0:
+        return ("NO DATA",
+                "every strategy is suppressed, so nothing could be evaluated "
+                "right now. Run token-shield profile to gather data.")
+    if denominator and len(insufficient) == denominator:
         return ("NO DATA",
                 f"NO DATA on {len(insufficient)} strategy trigger(s): "
                 + ", ".join(insufficient) + ". Run token-shield profile to gather data.")
