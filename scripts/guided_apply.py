@@ -25,12 +25,59 @@ ask yes, apply" ceremony runs as chat turns driven by a command file
 propose/--apply already uses: a founder or agent only calls `apply()` here
 after the yes was already given in chat.
 """
+import contextlib
 import hashlib
+import json
 import os
+import sys
 import time
 
 import experiment as ex
 import config as cfg  # ROOT, EXPERIMENT_DAYS: read from the foundation, never re-declared
+
+# T6.1: the append-only mutation journal. One line per applied mutation
+# (timestamp, target path, pre hash, backup path, producer), written by
+# backup_file/backup_if_exists/journal_mutation below, which are the shared
+# points every producer's mutate_fn already calls to back a target up before
+# overwriting it. A module-level path, same seam as ex.EXP_DIR/ex.LEDGER (see
+# test_guided_apply.py's _point_exp_at), so a test can redirect it without
+# ever touching the founder's real ~/.token-shield/mutations.jsonl.
+# ANY test that can reach backup_file, backup_if_exists, or journal_mutation
+# (directly or through a producer's cmd_apply/cmd_guided_apply) MUST redirect
+# this path first. Use the _point_journal_at/_restore_journal helper pattern
+# from test_guided_apply.py, mirrored into every other test file that needs
+# it; do not invent a second pattern.
+MUTATIONS_LOG = os.path.expanduser("~/.token-shield/mutations.jsonl")
+
+# Which guided-apply run is currently mutating something, set by apply()
+# around its call to mutate_fn(). backup_file() reads this to fill the
+# journal's "producer" field. The apply() label already names its producer
+# module (e.g. "memory-trim-guided-<stamp>", "plugin-prune-<id>-guided-
+# <stamp>"), so reusing it needs no new argument threaded through
+# optimize.py/memory_trim.py/plugin_prune.py, none of which this task may
+# edit. "unknown" when backup_file runs outside any apply() call.
+_current_producer = "unknown"
+
+
+@contextlib.contextmanager
+def producer_scope(label):
+    """Security-review fix (DEFECT 4): sets _current_producer to label for the
+    duration of the `with` block, then restores whatever it was BEFORE the
+    block ran, rather than hardcoding it back to "unknown". apply() below used
+    to reset to the literal "unknown" in its finally clause, which meant a
+    nested apply (an apply() call made from inside another apply()'s
+    mutate_fn) clobbered the outer label instead of just borrowing it for its
+    own inner mutation. Any direct, non-guided call into backup_file (e.g.
+    optimize.py's plain --apply, which never goes through apply() at all and
+    used to record "unknown" as its producer) should also open its own scope
+    here instead of poking _current_producer by hand."""
+    global _current_producer
+    previous = _current_producer
+    _current_producer = label
+    try:
+        yield
+    finally:
+        _current_producer = previous
 
 
 def refuse_if_experiment_open():
@@ -85,27 +132,210 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _abs(path):
+    """None-safe path normaliser for the journal. DEFECT 2: the journal used
+    to record whatever string a caller passed in verbatim, so an --apply run
+    against a relative --file (e.g. "CLAUDE.md") journaled a relative target.
+    An undo run later from a different working directory would then resolve
+    that relative path against the WRONG directory. Every path written to the
+    journal goes through this first.
+
+    DEFECT A (second security review, REGRESSION in the DEFECT 2 fix above):
+    os.path.abspath collapses ".." LEXICALLY, without looking at the
+    filesystem. Through a symlinked directory that is wrong: given a symlink
+    tmp/link -> tmp/sub/real, the path tmp/link/../F.md actually opens
+    tmp/sub/F.md (the OS resolves tmp/link to tmp/sub/real first, THEN walks
+    ".."), but abspath textually cancels "link/.." and reports tmp/F.md, a
+    different file than the one any open() call on that path actually
+    touches. os.path.realpath resolves symlinks component by component like
+    the OS does, so it names the same file that was actually mutated; an undo
+    driven from that journal line then restores over the right target.
+
+    Also (same finding): os.path.expanduser rewrites a bare/leading "~" to
+    the home directory unconditionally, which would silently retarget a file
+    literally named "~" sitting in the current directory. Every caller of
+    _abs runs it AFTER already doing its own real file I/O at the literal
+    path (backup_file reads/writes it, backup_if_exists checked
+    os.path.exists on it), so if something already exists at the literal
+    path on disk, that is what actually got touched and expanduser must not
+    run; the tilde-shorthand interpretation is only used as a fallback for a
+    path that does not exist literally."""
+    if not path:
+        return path
+    if not os.path.lexists(path):
+        path = os.path.expanduser(path)
+    return os.path.realpath(path)
+
+
+def unique_backup_path(path, stamp=None):
+    """Returns a '<path>.bak-<stamp>' backup path guaranteed not to already
+    exist. DEFECT 1 (security review, pre-existing data loss): time.strftime's
+    stamp only has one-second resolution, so two backups of the same target
+    inside the same wall-clock second used to collide on the identical
+    filename, and the second backup_file call silently overwrote the first
+    backup on disk, losing the earlier version entirely (the journal still
+    held two lines with that same backup_path but two different pre_hash
+    values, one of them describing bytes that no longer existed anywhere).
+    When the plain stamped path is already taken, a numeric suffix is added
+    and bumped until a free path is found (zero-padded to two digits so the
+    suffix stays lexically sortable past single digits; order beyond that is
+    still recoverable from the timestamp and append order, so this is
+    cosmetic, not load-bearing). Shared by backup_file below AND by
+    optimize.cmd_apply's own inline backup (which must keep writing from its
+    already-read, already-verified 'original' string rather than re-reading
+    the file through here, so only the PATH CHOICE is shared, not the read).
+
+    DEFECT B (security review): the loop used to test each candidate with
+    os.path.exists, which follows symlinks and returns False for a BROKEN
+    symlink (one whose target does not exist). A caller then does
+    open(candidate, "w"), which follows the dangling link and writes the
+    backup's content wherever it points, possibly far outside the target
+    directory. os.path.lexists tests the path itself, not what it points to,
+    so it reports True for a symlink candidate regardless of whether the
+    link is broken or live; the loop then treats that path as taken and
+    bumps to the next numeric suffix instead of ever opening it. That closes
+    both halves of the finding in one change: a broken symlink can no longer
+    be walked into (the original repro), and a LIVE symlink at a candidate
+    path is equally never written through either, since lexists treats it as
+    occupied the same way. The alternative considered was an explicit
+    os.path.islink check that refuses outright; that would need its own
+    error path and still leaves the caller with no backup path at all. Never
+    reusing a symlinked candidate and continuing to the next number is
+    strictly safer with less code, so that is the fix."""
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    candidate = f"{path}.bak-{stamp}"
+    n = 2
+    while os.path.lexists(candidate):
+        candidate = f"{path}.bak-{stamp}-{n:02d}"
+        n += 1
+    return candidate
+
+
+def _append_mutation(target_path, pre_hash, backup_path, producer, created=False):
+    """Appends one JSON line to MUTATIONS_LOG. Append-only: opens in 'a' mode
+    and never reads, seeks, rewrites, or truncates the file, so a second
+    mutation of the same target adds a second line and leaves every earlier
+    line, corrupt or not, exactly as it was; nothing here ever parses what is
+    already in the file, which is also why a corrupt or unreadable existing
+    journal cannot lose or block the new record.
+
+    target_path and backup_path are normalised to absolute paths before being
+    written (DEFECT 2, see _abs above); backup_path may be None (see created
+    below) and stays None rather than being turned into an absolute path.
+
+    created=True marks a line where the mutation CREATED target_path (it did
+    not exist before), rather than backing up and overwriting an existing
+    one. DEFECT 3: backup_if_exists used to return None and write NOTHING to
+    the journal when the target did not exist yet, so an apply that created a
+    file (claude-history.md, memory-archive.md on their first write) left no
+    trace at all; a later undo built on the journal would not know to delete
+    it and would silently leave it behind. A created line always carries
+    pre_hash=None and backup_path=None (there was nothing to hash or back up)
+    plus created=True, so it is never mistaken for a normal mutation line.
+
+    A journal-write failure (missing/unwritable ~/.token-shield, full disk,
+    permissions, or a field that json.dumps cannot serialise) is caught and
+    reported loudly on stderr, never raised and never silent: the backup this
+    line would describe has already been written by the time this runs, and
+    the caller is about to overwrite the real target next, so raising here
+    would abort a legitimate apply over a logging side channel. Losing one
+    history line is recoverable (the per-proposal .sha256 file and the backup
+    path printed to the user still exist); losing or blocking the founder's
+    actual change would not be."""
+    record = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "target": _abs(target_path),
+        "pre_hash": pre_hash,
+        "backup_path": _abs(backup_path),
+        "producer": producer or "unknown",
+        "created": bool(created),
+    }
+    try:
+        journal_dir = os.path.dirname(MUTATIONS_LOG)
+        if journal_dir:
+            os.makedirs(journal_dir, exist_ok=True)
+        with open(MUTATIONS_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except (OSError, TypeError) as e:
+        # OSError: journal file/dir unwritable. TypeError: json.dumps choked
+        # on a field it cannot serialise (DEFECT 5: this used to catch only
+        # OSError, so a non-serialisable field crashed the apply outright,
+        # well after the real mutation had already happened).
+        print(f"WARNING: mutation journal not written to {MUTATIONS_LOG} ({e}). "
+              f"The mutation of {target_path} itself still applied; only this "
+              f"history line is missing. Backup remains at {backup_path}.",
+              file=sys.stderr)
+
+
+def journal_mutation(target_path, pre_hash, backup_path, producer=None, created=False):
+    """Public entry point to append one line to the mutation journal, for a
+    caller that writes its own backup instead of going through backup_file
+    (see optimize.cmd_apply, which backs the flagship CLAUDE.md diet target
+    up from the 'original' string it already read and hashed for its own
+    staleness check, deliberately not re-reading the file through
+    backup_file, which would reopen the window between that check and the
+    backup). Defers to _append_mutation, the single journal writer backup_file
+    itself also calls, so there is exactly one place that writes
+    MUTATIONS_LOG and the journal line's shape can never drift between the
+    two paths. producer defaults to whatever apply() has set as the current
+    producer (see _current_producer above), same default backup_file uses."""
+    _append_mutation(target_path, pre_hash, backup_path, producer or _current_producer,
+                     created=created)
+
+
 def backup_file(path):
-    """Mirrors optimize.cmd_apply's own backup, lines 195-199 of optimize.py:
-    time.strftime stamp, '<path>.bak-<stamp>', full read then full write.
-    Returns the backup path."""
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{path}.bak-{stamp}"
+    """Mirrors optimize.cmd_apply's own backup: a unique_backup_path stamp,
+    '<path>.bak-<stamp>' (or a numeric-suffixed variant when that collides,
+    see unique_backup_path/DEFECT 1), full read then full write. Returns the
+    backup path.
+    Also appends one line to the mutation journal (see _append_mutation):
+    this is the one place every producer's mutate_fn already calls to back a
+    target up, so it is also the one place that already has the pre-mutation
+    content in hand to hash, with no second hashing helper or second backup
+    mechanism needed."""
+    backup = unique_backup_path(path)
     with open(path) as f:
         original = f.read()
     with open(backup, "w") as f:
         f.write(original)
+    _append_mutation(path, sha256_text(original), backup, _current_producer)
     return backup
 
 
-def backup_if_exists(path):
-    """Like backup_file, but a no-op (returns None) when path does not exist
-    yet. Used before an archive/history file gets written to, so a pre-
-    existing archive is never silently overwritten, and a first-ever write
-    (nothing there to back up) is not an error."""
+def backup_if_exists(path, write_fn=None):
+    """Like backup_file, but a no-op on disk (returns None, backs up nothing)
+    when path does not exist yet. Used before an archive/history file gets
+    written to, so a pre-existing archive is never silently overwritten, and
+    a first-ever write (nothing there to back up) is not an error.
+    DEFECT 3: when path does not exist, this still writes ONE journal line
+    marking the coming write as a creation (see _append_mutation's created
+    param), so an apply that creates a file is not invisible to the journal
+    just because there was nothing to back up. The return value is unchanged
+    (still None for callers that only care whether a backup was made).
+
+    write_fn (optional): a zero-arg callable that performs the caller's
+    actual write to path. DEFECT C (security review): the "created": true
+    line above used to be written unconditionally, before the caller went on
+    to do its own separate write of path. A write that then failed (full
+    disk, permissions) left a journal line claiming a creation that never
+    happened. When write_fn is given, it is called and must return normally
+    BEFORE the created line is journaled (path-does-not-exist branch), or
+    called right after backup_file's own backup-and-journal step, still
+    before this function returns (path-exists branch); either way, a raised
+    exception propagates straight out of this call and no false line is
+    ever added for a write that did not complete. write_fn defaults to None
+    to keep the existing call shape working for a caller that still does its
+    write itself right after this returns; that caller keeps the journal
+    line written up front, same as before this fix."""
     if not os.path.exists(path):
+        if write_fn is not None:
+            write_fn()
+        _append_mutation(path, None, None, _current_producer, created=True)
         return None
-    return backup_file(path)
+    backup = backup_file(path)
+    if write_fn is not None:
+        write_fn()
+    return backup
 
 
 def apply(label, treats, mutate_fn, verify_fn):
@@ -129,7 +359,8 @@ def apply(label, treats, mutate_fn, verify_fn):
     if refusal:
         return 2, refusal
 
-    mutate_rc = mutate_fn()
+    with producer_scope(label):
+        mutate_rc = mutate_fn()
     if mutate_rc:
         return mutate_rc, ("nothing was applied, so no verification ran and no "
                            "experiment was opened. See the message above for why.")

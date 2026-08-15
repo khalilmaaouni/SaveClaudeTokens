@@ -238,19 +238,43 @@ def cmd_apply():
               f"Re-propose against the current file: python3 {os.path.basename(__file__)} "
               f"--file {path}")
         return 2
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{path}.bak-{stamp}"
+    # DEFECT 1 (security review, pre-existing data loss): the stamp used to be
+    # built here inline (f"{path}.bak-{stamp}"), which only has one-second
+    # resolution, so two applies of the same target inside the same
+    # wall-clock second collided on the identical backup filename and the
+    # second one silently overwrote the first backup on disk. The path CHOICE
+    # now goes through guided_apply.unique_backup_path (the same helper
+    # backup_file uses), which bumps a numeric suffix until it finds a path
+    # that is not already taken. The write itself stays exactly as it was:
+    # from 'original', the string already read and verified against
+    # current_hash above, never a re-read of path, which would reopen the
+    # window between that staleness check and the backup.
+    backup = guided_apply.unique_backup_path(path)
     with open(backup, "w") as f:
         f.write(original)
+    # T6.1: journal this backup too. This is the flagship mutation (the
+    # CLAUDE.md diet itself), and it writes its own backup above instead of
+    # calling guided_apply.backup_file, deliberately, so it backs up from the
+    # 'original' string already read and verified against current_hash above
+    # rather than re-reading the file and reopening that check-then-backup
+    # window. journal_mutation reuses the exact hash already computed for
+    # that check: no second read, no second hashing helper.
+    guided_apply.journal_mutation(path, current_hash, backup)
     notes_dest = os.path.join(os.path.dirname(path), "claude-history.md")
     with open(notes) as f:
         notes_text = f.read()
     # M4: never clobber a hand-written or earlier claude-history.md. Back any
     # existing one up first, then append: earlier content survives in place,
     # not only inside a backup nobody reads.
-    history_backup = guided_apply.backup_if_exists(notes_dest)
-    with open(notes_dest, "a") as f:
-        f.write(notes_text)
+    # DEFECT C (security review): the append is now passed in as write_fn
+    # rather than run separately right after this call, so a failed append
+    # (full disk, permissions) never leaves a journal line claiming
+    # claude-history.md was created when the write that would have created
+    # it actually failed. See guided_apply.backup_if_exists.
+    def _append_history():
+        with open(notes_dest, "a") as f:
+            f.write(notes_text)
+    history_backup = guided_apply.backup_if_exists(notes_dest, write_fn=_append_history)
     with open(prop) as f:
         new_text = f.read()
     with open(path, "w") as f:
@@ -479,7 +503,14 @@ def main():
     if a.guided_apply:
         return cmd_guided_apply(a.file)
     if a.apply:
-        return cmd_apply()
+        # DEFECT 4: the plain --apply route never went through guided_apply's
+        # apply() (that is cmd_guided_apply's job, see --guided-apply above),
+        # so _current_producer stayed at its module-default "unknown" and
+        # every journal line for a hand-run --apply recorded producer:
+        # "unknown", the exact path a person actually runs by hand. Wrap it
+        # in the same producer_scope guided_apply.apply() uses internally.
+        with guided_apply.producer_scope("claude-md-diet-apply"):
+            return cmd_apply()
     return cmd_propose(a.file)
 
 
