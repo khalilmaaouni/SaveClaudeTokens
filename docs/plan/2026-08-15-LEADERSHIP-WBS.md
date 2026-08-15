@@ -29,6 +29,19 @@ quietly repairs itself teaches nobody anything.
    `memory_trim.py` at line 128. `plugin_prune.py:142` overwrites a bundle
    JSON, not a hash file. E6 is unaffected; the journal is still absent.
 
+4. **T5.1 is ahead of its own governing architecture, and nobody reconciled
+   them.** `2026-08-15-TARGET-ARCHITECTURE.md` enumerates the available events
+   at line 263, but the bundle it actually RECOMMENDS, at lines 269 and 726, is
+   four: ConfigChange, PreCompact, PostCompact and SubagentStop. T5.1 builds
+   six, adding SessionStart and SubagentStart, and decision D4 asks the founder
+   to consent to "all six" as though six were the designed set. Either the
+   architecture is widened deliberately or T5.1 narrows to four, and that is a
+   decision, not an edit. Until it is taken, D4's option (a) is offering consent
+   to two events the design never argued for. Related and separate: the six
+   event NAMES are not the unverified part. The architecture cites the hooks
+   reference opened 2026-08-15 for them. What is missing is a row per event in
+   `docs/CLAIMS.md`, which is bookkeeping measured in minutes, not research.
+
 Written 2026-08-15 evening. Governs 2026-08-15 through 2026-08-28.
 Compresses the founder's 45 day plan (TOKEN_SHIELD_CLAUDE_LEADERSHIP_WBS.md)
 into 14 days of parallel agent work. The release gate stays live the whole
