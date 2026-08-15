@@ -266,9 +266,15 @@ def cmd_apply():
     # M4: never clobber a hand-written or earlier claude-history.md. Back any
     # existing one up first, then append: earlier content survives in place,
     # not only inside a backup nobody reads.
-    history_backup = guided_apply.backup_if_exists(notes_dest)
-    with open(notes_dest, "a") as f:
-        f.write(notes_text)
+    # DEFECT C (security review): the append is now passed in as write_fn
+    # rather than run separately right after this call, so a failed append
+    # (full disk, permissions) never leaves a journal line claiming
+    # claude-history.md was created when the write that would have created
+    # it actually failed. See guided_apply.backup_if_exists.
+    def _append_history():
+        with open(notes_dest, "a") as f:
+            f.write(notes_text)
+    history_backup = guided_apply.backup_if_exists(notes_dest, write_fn=_append_history)
     with open(prop) as f:
         new_text = f.read()
     with open(path, "w") as f:

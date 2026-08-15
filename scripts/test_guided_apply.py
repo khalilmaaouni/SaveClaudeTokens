@@ -220,6 +220,12 @@ def test_backup_file_matches_optimize_cmd_apply_pattern():
 def test_journal_line_carries_every_required_field():
     # T6.1: timestamp, target path, pre hash, backup path, producer.
     with tempfile.TemporaryDirectory() as td:
+        # DEFECT A fix: the journal now records os.path.realpath, not
+        # os.path.abspath. macOS temp dirs live under /var/folders/..., and
+        # /var is itself a symlink to /private/var, so td must be resolved up
+        # front for every path built from it below to compare equal against
+        # what the journal actually records.
+        td = os.path.realpath(td)
         saved = _point_journal_at(td)
         try:
             target = os.path.join(td, "MEMORY.md")
@@ -260,6 +266,7 @@ def test_second_mutation_appends_never_overwrites():
     # backup_file calls exercise the actual collision path, and
     # unique_backup_path's numeric-suffix fix is what keeps them apart.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         saved = _point_journal_at(td)
         try:
             target = os.path.join(td, "CLAUDE.md")
@@ -356,6 +363,7 @@ def test_apply_journals_the_guided_apply_label_as_producer():
 
 def test_corrupt_existing_journal_does_not_lose_new_record_or_crash():
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         saved = _point_journal_at(td)
         try:
             with open(ga.MUTATIONS_LOG, "w") as f:
@@ -470,6 +478,7 @@ def test_backup_if_exists_journals_creation_when_the_file_is_new():
     # from the journal would not know to delete that file and would silently
     # leave it behind.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         saved = _point_journal_at(td)
         try:
             target = os.path.join(td, "claude-history.md")
@@ -565,6 +574,173 @@ def test_journal_write_survives_a_non_serialisable_field():
             check("nothing was written to the journal for the failed line",
                   not os.path.exists(ga.MUTATIONS_LOG)
                   or open(ga.MUTATIONS_LOG).read() == "")
+        finally:
+            _restore_journal(saved)
+
+
+def test_abs_uses_realpath_through_a_symlinked_directory():
+    # DEFECT A (second security review, REGRESSION in the DEFECT 2 fix
+    # above): os.path.abspath collapses ".." LEXICALLY, without looking at
+    # the filesystem. Given a symlink tmp/link -> tmp/sub/real, the path
+    # tmp/link/../F.md actually opens tmp/sub/F.md (the OS resolves
+    # tmp/link first, THEN walks ".."), but abspath textually cancels
+    # "link/.." and reports tmp/F.md, a DIFFERENT file than the one open()
+    # actually reads. An undo built on the journal's abspath'd line would
+    # then restore over the wrong target. os.path.realpath resolves
+    # symlinks like the OS does, so it must name the same file open() reads.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        os.makedirs(os.path.join(td, "sub", "real"))
+        real_file = os.path.join(td, "sub", "F.md")
+        with open(real_file, "w") as f:
+            f.write("THE FILE ACTUALLY MUTATED\n")
+        os.symlink(os.path.join(td, "sub", "real"), os.path.join(td, "link"))
+        given = os.path.join(td, "link", "..", "F.md")
+        with open(given) as f:
+            actually_read = f.read()
+        check("sanity: the lexical path really does read through the symlink",
+              actually_read == "THE FILE ACTUALLY MUTATED\n")
+        check("sanity: os.path.abspath names the WRONG file for this path",
+              os.path.abspath(given) != real_file)
+        check("guided_apply._abs names the same file open() actually read",
+              ga._abs(given) == real_file)
+
+
+def test_abs_does_not_retarget_a_file_literally_named_tilde():
+    # Same finding: os.path.expanduser rewrites a bare "~" to the home
+    # directory unconditionally, which would silently retarget a file
+    # literally named "~" sitting in the current directory to $HOME instead.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        cwd = os.getcwd()
+        try:
+            os.chdir(td)
+            with open("~", "w") as f:
+                f.write("not your home directory\n")
+            resolved = ga._abs("~")
+            check("a literal '~' file in cwd resolves to itself, not $HOME",
+                  resolved == os.path.join(td, "~"))
+            check("it is definitely not the real home directory",
+                  resolved != os.path.realpath(os.path.expanduser("~")))
+        finally:
+            os.chdir(cwd)
+
+
+def test_unique_backup_path_never_reuses_a_broken_symlinked_candidate():
+    # DEFECT B (security review): the collision loop used to test each
+    # candidate with os.path.exists, which follows symlinks and reports
+    # False for a BROKEN symlink (target does not exist). The caller then
+    # does open(candidate, "w"), which follows the dangling link and writes
+    # the backup's content wherever it points, possibly far outside the
+    # target directory.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        target = os.path.join(td, "CLAUDE.md")
+        with open(target, "w") as f:
+            f.write("secret user content")
+        stamp = "20260101-120000"
+        candidate = f"{target}.bak-{stamp}"
+        victim = os.path.join(td, "elsewhere-victim.txt")
+        os.symlink(victim, candidate)  # broken: victim does not exist yet
+        check("sanity: os.path.exists is fooled by a broken symlink",
+              os.path.exists(candidate) is False)
+        check("sanity: os.path.lexists sees the symlink itself",
+              os.path.lexists(candidate) is True)
+        backup = ga.unique_backup_path(target, stamp)
+        check("unique_backup_path never hands back the symlinked candidate",
+              backup != candidate)
+        with open(target) as f:
+            original = f.read()
+        with open(backup, "w") as f:
+            f.write(original)
+        check("nothing was written through the symlink to the victim path",
+              not os.path.exists(victim))
+
+
+def test_unique_backup_path_never_reuses_a_live_symlinked_candidate():
+    # Second half of DEFECT B's "consider": a LIVE symlink at the candidate
+    # path can redirect a write just as well as a broken one. Decision
+    # (stated in unique_backup_path's own docstring): os.path.lexists alone
+    # already treats any symlink, broken or live, as an occupied candidate
+    # and bumps to the next number, so the fix for the broken-symlink repro
+    # closes this half too, with no separate refusal path needed.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        target = os.path.join(td, "CLAUDE.md")
+        with open(target, "w") as f:
+            f.write("secret user content")
+        stamp = "20260101-130000"
+        candidate = f"{target}.bak-{stamp}"
+        victim = os.path.join(td, "elsewhere-victim.txt")
+        with open(victim, "w") as f:
+            f.write("pre-existing victim content\n")
+        os.symlink(victim, candidate)  # live symlink, points at a real file
+        backup = ga.unique_backup_path(target, stamp)
+        check("unique_backup_path never hands back a live symlinked candidate",
+              backup != candidate)
+        with open(target) as f:
+            original = f.read()
+        with open(backup, "w") as f:
+            f.write(original)
+        with open(victim) as f:
+            check("the victim file's original content is untouched",
+                  f.read() == "pre-existing victim content\n")
+
+
+def test_backup_if_exists_write_fn_journals_creation_only_after_it_succeeds():
+    # DEFECT C: the "created": true line used to be written before the
+    # caller's own separate write of the new file. Passing the write in as
+    # write_fn lets backup_if_exists confirm it succeeded before journaling.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "claude-history.md")
+            order = []
+
+            def write():
+                order.append("write")
+                with open(target, "w") as f:
+                    f.write("history\n")
+
+            result = ga.backup_if_exists(target, write_fn=write)
+            check("backup_if_exists still returns None for a brand new file",
+                  result is None)
+            check("write_fn actually ran", order == ["write"])
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = [json.loads(l) for l in f if l.strip()]
+            check("exactly one journal line was written", len(lines) == 1)
+            check("the creation line is marked as a creation",
+                  lines[0].get("created") is True)
+        finally:
+            _restore_journal(saved)
+
+
+def test_backup_if_exists_write_fn_failure_leaves_no_false_creation_line():
+    # DEFECT C, the failure half: a write_fn that raises must leave NO
+    # journal line at all, never one falsely claiming a creation that never
+    # happened.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "claude-history.md")
+
+            def failing_write():
+                raise OSError("disk full")
+
+            raised = False
+            try:
+                ga.backup_if_exists(target, write_fn=failing_write)
+            except OSError:
+                raised = True
+            check("the write failure propagates rather than being swallowed",
+                  raised)
+            check("the target was never created", not os.path.exists(target))
+            no_journal = (not os.path.exists(ga.MUTATIONS_LOG)
+                          or open(ga.MUTATIONS_LOG).read() == "")
+            check("no journal line claims a creation that never happened",
+                  no_journal)
         finally:
             _restore_journal(saved)
 

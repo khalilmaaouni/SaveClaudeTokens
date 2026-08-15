@@ -133,15 +133,38 @@ def sha256_text(text):
 
 
 def _abs(path):
-    """None-safe os.path.abspath(os.path.expanduser(...)). DEFECT 2: the
-    journal used to record whatever string a caller passed in verbatim, so an
-    --apply run against a relative --file (e.g. "CLAUDE.md") journaled a
-    relative target. An undo run later from a different working directory
-    would then resolve that relative path against the WRONG directory. Every
-    path written to the journal goes through this first."""
+    """None-safe path normaliser for the journal. DEFECT 2: the journal used
+    to record whatever string a caller passed in verbatim, so an --apply run
+    against a relative --file (e.g. "CLAUDE.md") journaled a relative target.
+    An undo run later from a different working directory would then resolve
+    that relative path against the WRONG directory. Every path written to the
+    journal goes through this first.
+
+    DEFECT A (second security review, REGRESSION in the DEFECT 2 fix above):
+    os.path.abspath collapses ".." LEXICALLY, without looking at the
+    filesystem. Through a symlinked directory that is wrong: given a symlink
+    tmp/link -> tmp/sub/real, the path tmp/link/../F.md actually opens
+    tmp/sub/F.md (the OS resolves tmp/link to tmp/sub/real first, THEN walks
+    ".."), but abspath textually cancels "link/.." and reports tmp/F.md, a
+    different file than the one any open() call on that path actually
+    touches. os.path.realpath resolves symlinks component by component like
+    the OS does, so it names the same file that was actually mutated; an undo
+    driven from that journal line then restores over the right target.
+
+    Also (same finding): os.path.expanduser rewrites a bare/leading "~" to
+    the home directory unconditionally, which would silently retarget a file
+    literally named "~" sitting in the current directory. Every caller of
+    _abs runs it AFTER already doing its own real file I/O at the literal
+    path (backup_file reads/writes it, backup_if_exists checked
+    os.path.exists on it), so if something already exists at the literal
+    path on disk, that is what actually got touched and expanduser must not
+    run; the tilde-shorthand interpretation is only used as a fallback for a
+    path that does not exist literally."""
     if not path:
         return path
-    return os.path.abspath(os.path.expanduser(path))
+    if not os.path.lexists(path):
+        path = os.path.expanduser(path)
+    return os.path.realpath(path)
 
 
 def unique_backup_path(path, stamp=None):
@@ -154,15 +177,36 @@ def unique_backup_path(path, stamp=None):
     held two lines with that same backup_path but two different pre_hash
     values, one of them describing bytes that no longer existed anywhere).
     When the plain stamped path is already taken, a numeric suffix is added
-    and bumped until a free path is found. Shared by backup_file below AND by
+    and bumped until a free path is found (zero-padded to two digits so the
+    suffix stays lexically sortable past single digits; order beyond that is
+    still recoverable from the timestamp and append order, so this is
+    cosmetic, not load-bearing). Shared by backup_file below AND by
     optimize.cmd_apply's own inline backup (which must keep writing from its
     already-read, already-verified 'original' string rather than re-reading
-    the file through here, so only the PATH CHOICE is shared, not the read)."""
+    the file through here, so only the PATH CHOICE is shared, not the read).
+
+    DEFECT B (security review): the loop used to test each candidate with
+    os.path.exists, which follows symlinks and returns False for a BROKEN
+    symlink (one whose target does not exist). A caller then does
+    open(candidate, "w"), which follows the dangling link and writes the
+    backup's content wherever it points, possibly far outside the target
+    directory. os.path.lexists tests the path itself, not what it points to,
+    so it reports True for a symlink candidate regardless of whether the
+    link is broken or live; the loop then treats that path as taken and
+    bumps to the next numeric suffix instead of ever opening it. That closes
+    both halves of the finding in one change: a broken symlink can no longer
+    be walked into (the original repro), and a LIVE symlink at a candidate
+    path is equally never written through either, since lexists treats it as
+    occupied the same way. The alternative considered was an explicit
+    os.path.islink check that refuses outright; that would need its own
+    error path and still leaves the caller with no backup path at all. Never
+    reusing a symlinked candidate and continuing to the next number is
+    strictly safer with less code, so that is the fix."""
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     candidate = f"{path}.bak-{stamp}"
     n = 2
-    while os.path.exists(candidate):
-        candidate = f"{path}.bak-{stamp}-{n}"
+    while os.path.lexists(candidate):
+        candidate = f"{path}.bak-{stamp}-{n:02d}"
         n += 1
     return candidate
 
@@ -258,7 +302,7 @@ def backup_file(path):
     return backup
 
 
-def backup_if_exists(path):
+def backup_if_exists(path, write_fn=None):
     """Like backup_file, but a no-op on disk (returns None, backs up nothing)
     when path does not exist yet. Used before an archive/history file gets
     written to, so a pre-existing archive is never silently overwritten, and
@@ -267,11 +311,31 @@ def backup_if_exists(path):
     marking the coming write as a creation (see _append_mutation's created
     param), so an apply that creates a file is not invisible to the journal
     just because there was nothing to back up. The return value is unchanged
-    (still None for callers that only care whether a backup was made)."""
+    (still None for callers that only care whether a backup was made).
+
+    write_fn (optional): a zero-arg callable that performs the caller's
+    actual write to path. DEFECT C (security review): the "created": true
+    line above used to be written unconditionally, before the caller went on
+    to do its own separate write of path. A write that then failed (full
+    disk, permissions) left a journal line claiming a creation that never
+    happened. When write_fn is given, it is called and must return normally
+    BEFORE the created line is journaled (path-does-not-exist branch), or
+    called right after backup_file's own backup-and-journal step, still
+    before this function returns (path-exists branch); either way, a raised
+    exception propagates straight out of this call and no false line is
+    ever added for a write that did not complete. write_fn defaults to None
+    to keep the existing call shape working for a caller that still does its
+    write itself right after this returns; that caller keeps the journal
+    line written up front, same as before this fix."""
     if not os.path.exists(path):
+        if write_fn is not None:
+            write_fn()
         _append_mutation(path, None, None, _current_producer, created=True)
         return None
-    return backup_file(path)
+    backup = backup_file(path)
+    if write_fn is not None:
+        write_fn()
+    return backup
 
 
 def apply(label, treats, mutate_fn, verify_fn):

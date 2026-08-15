@@ -196,6 +196,7 @@ def test_cmd_apply_journals_creation_when_memory_archive_is_new():
     # later one-command undo built on the journal would not know to delete
     # memory-archive.md and would silently leave it behind.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         real_review_dir = _point_review_dir_at(td)
         saved_journal = _point_journal_at(td)
         try:

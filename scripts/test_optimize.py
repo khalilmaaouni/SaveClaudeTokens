@@ -320,6 +320,7 @@ def test_cmd_apply_journals_the_primary_claude_md_target():
     # cover the primary target. This must journal path with the same shape
     # backup_file itself writes.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         real_review_dir = _point_review_dir_at(td)
         saved_journal = _point_journal_at(td)
         try:
@@ -356,6 +357,7 @@ def test_cmd_apply_journals_creation_when_claude_history_is_new():
     # later one-command undo built on the journal would not know to delete
     # claude-history.md and would silently leave it behind.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         real_review_dir = _point_review_dir_at(td)
         saved_journal = _point_journal_at(td)
         try:
@@ -390,6 +392,7 @@ def test_direct_apply_route_records_a_named_producer_not_unknown():
     # every journal line written by a hand-run --apply recorded producer:
     # "unknown", exactly the path a person actually runs by hand.
     with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
         real_review_dir = _point_review_dir_at(td)
         saved_journal = _point_journal_at(td)
         real_argv = sys.argv
