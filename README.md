@@ -19,6 +19,8 @@ git clone https://github.com/khalilmaaouni/token-shield.git && python3 token-shi
 
 Nothing is installed, no plugin, no MCP server, no config file. It reads your existing local Claude Code transcripts, prints a short honest read of where your tokens went, and exits. Nothing leaves your machine. If it finds too little data, it says NO DATA plainly instead of guessing.
 
+What you see, in order, in about a minute: a line saying it is reading your transcripts (this can take up to a minute on a long history, so the wait is not a hang), then one MEASURED hero line naming your single biggest token issue in plain words plus the exact command to act on it, then a short breakdown (sessions and calls measured, the startup floor and its share, the cache hit ratio, and how much output came from subagents), then what Anthropic's own caching already saved (labeled NATIVE, never counted as this tool's saving), and last the command to run for the full plugin.
+
 ## Install
 
 ```bash
@@ -26,7 +28,16 @@ claude plugin marketplace add khalilmaaouni/token-shield
 claude plugin install token-shield@token-shield
 ```
 
+Already inside a Claude Code session? Type the same two steps as slash commands instead:
+
+```
+/plugin marketplace add khalilmaaouni/token-shield
+/plugin install token-shield@token-shield
+```
+
 That is the whole setup. The skill loads on demand, so it adds one listing line to your sessions and nothing else.
+
+**No git, no marketplace?** This repository does not yet ship a zip archive install path: no packaged zip, no archive-source marketplace entry, and no built zipapp exist in this checkout (`.claude-plugin/marketplace.json` points at `./` over git, and no `.pyz` file exists). A zip-based path is planned but not shipped, so use the clone-and-run trial above or the marketplace install.
 
 Then run `/token-shield:start` once: it measures your usage, names the one thing most worth fixing, and asks before it touches anything.
 
