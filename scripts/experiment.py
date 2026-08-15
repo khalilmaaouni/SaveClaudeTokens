@@ -31,7 +31,14 @@ v2 adds four more guards on top of the v1 before/after:
     moved for any reason other than the named --treats target, the verdict
     downgrades to NOT_PROVEN rather than credit an unrelated config change.
     Whatever --treats excludes is listed on the record and printed at the end,
-    because a blind spot nobody can see is worse than no guard at all;
+    because a blind spot nobody can see is worse than no guard at all. A JSON
+    file in the fingerprint is hashed in canonical form with its volatile
+    keys (~/.claude.json's own lastUsedAt, usageCount) stripped first, since
+    those move on their own several times a minute with no config change
+    involved; a baseline's fingerprint_start pinned under an older hashing
+    method is never compared byte-for-byte against a fresh fingerprint_end,
+    since that would look like "config changed" for no reason but the
+    hashing itself, so a method mismatch reports NO DATA instead;
   - a baseline pinned before those guards existed carries none of them, so it
     is not comparable under them: it can never be VERIFIED, only NOT_PROVEN
     with the legacy baseline named as the reason.
@@ -102,6 +109,30 @@ def _is_numeric(v):
 # "downgrade if this moved", which a missing key silently passes.
 V2_BASELINE_KEYS = ("cohort_start_ts", "cohort_end_ts", "fingerprint_start", "treats")
 
+# The keys stripped from a JSON config file before it is fingerprinted.
+# ~/.claude.json is Claude Code's own live state file: lastUsedAt and
+# usageCount move on their own, several times a minute, on every session
+# that so much as looks at the file, with zero configuration change
+# involved. Hashing the file's raw bytes (the original approach) meant
+# fingerprint_start and fingerprint_end differed on EVERY experiment,
+# appending "config changed during experiment window" every single time,
+# which made a VERIFIED verdict structurally unreachable. Stripping these
+# keys before hashing follows the same principle as the dominant-model
+# guard in build_record: compare the meaningful signal, not an incidental
+# one. Matched by exact key name, at any depth.
+VOLATILE_JSON_KEYS = {"lastUsedAt", "usageCount"}
+
+# Bumped whenever compute_fingerprint's hashing algorithm changes in a way
+# that would move the hash for reasons unrelated to actual config drift.
+# Recorded on every fresh baseline as "fingerprint_method" (additive,
+# optional field, no EXP_SCHEMA bump). build_record uses it to tell a
+# fingerprint computed under an OLD method apart from one computed under
+# the CURRENT method: comparing those byte-for-byte would read as "config
+# changed" even when nothing did, purely because the hashing algorithm
+# changed out from under a running experiment. See build_record's
+# config-change guard.
+FINGERPRINT_METHOD = 2
+
 
 def _iso(ts):
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -143,23 +174,63 @@ def excluded_by_treats(treats=None):
     return [p for p in fingerprint_files() if os.path.abspath(p) == treats_abs]
 
 
+def _strip_volatile(value):
+    """Recursively remove VOLATILE_JSON_KEYS from a parsed JSON structure, at
+    any depth, matched by exact key name. Returns a new structure; the input
+    is not mutated, so the caller's already-parsed object stays intact."""
+    if isinstance(value, dict):
+        return {k: _strip_volatile(v) for k, v in value.items()
+                if k not in VOLATILE_JSON_KEYS}
+    if isinstance(value, list):
+        return [_strip_volatile(v) for v in value]
+    return value
+
+
 def _sha_file(path):
-    h = hashlib.sha256()
+    """Hash one fingerprinted file. Returns (hexdigest, method), where method
+    is "json" or "raw" so a caller can always tell a canonical hash from a
+    raw-byte one.
+
+    A file whose content parses as a JSON object or array is hashed in
+    CANONICAL form: parsed, VOLATILE_JSON_KEYS stripped at any depth, then
+    re-serialized with sort_keys and fixed separators. That is what keeps
+    ~/.claude.json's own live telemetry (lastUsedAt, usageCount, both of
+    which move on their own several times a minute) from ever looking like
+    a configuration change.
+
+    A file that is not JSON (CLAUDE.md, a SKILL.md) or JSON that fails to
+    parse is hashed as raw bytes, exactly as before this method existed.
+    Dropping an unparseable file from the fingerprint would blind the guard
+    entirely, which is a worse defect than the one being fixed, so it is
+    never silently skipped: it still contributes a hash, just a raw-byte
+    one, and the returned method says so."""
     try:
         with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
+            raw = f.read()
     except OSError:
-        return "MISSING"
-    return h.hexdigest()
+        return "MISSING", "raw"
+    parsed = None
+    try:
+        candidate = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        candidate = None
+    if isinstance(candidate, (dict, list)):
+        parsed = candidate
+    if parsed is not None:
+        canonical = json.dumps(_strip_volatile(parsed), sort_keys=True,
+                               separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest(), "json"
+    return hashlib.sha256(raw).hexdigest(), "raw"
 
 
 def compute_fingerprint(treats=None):
     """sha256 over a MANIFEST, one line per in-scope item, sorted:
-    "<path>:<sha256 of its content>" for each fingerprinted file, then
-    "<dir>:PLUGIN" for each installed plugin dir under plugins/cache/*/*.
-    Hashing a manifest rather than concatenated bytes means two files cannot
-    trade content across their boundary and leave the hash unmoved.
+    "<path>:<method>:<hash of its content>" for each fingerprinted file
+    (method is "json" for a canonical-form hash, "raw" for a raw-byte one;
+    see _sha_file), then "<dir>:PLUGIN" for each installed plugin dir under
+    plugins/cache/*/*. Hashing a manifest rather than concatenated bytes
+    means two files cannot trade content across their boundary and leave
+    the hash unmoved.
 
     `treats` names the one file this experiment's own treatment edits: its
     line becomes "<path>:EXCLUDED" so the experiment does not trip its own
@@ -168,8 +239,11 @@ def compute_fingerprint(treats=None):
     excluded = set(excluded_by_treats(treats))
     lines = []
     for path in fingerprint_files():
-        lines.append(f"{path}:EXCLUDED" if path in excluded
-                     else f"{path}:{_sha_file(path)}")
+        if path in excluded:
+            lines.append(f"{path}:EXCLUDED")
+            continue
+        digest, method = _sha_file(path)
+        lines.append(f"{path}:{method}:{digest}")
     try:
         plugin_dirs = sorted(
             d for d in glob.glob(os.path.join(PLUGINS_CACHE, "*", "*")) if os.path.isdir(d)
@@ -355,7 +429,11 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         naming the key, instead of the TypeError a subtraction would raise;
       - the config fingerprint moved between start and end (fingerprint_end
         passed in, compared against baseline["fingerprint_start"]) and the
-        mover was not the file named at start's --treats;
+        mover was not the file named at start's --treats; if the baseline's
+        fingerprint_method does not match the current FINGERPRINT_METHOD (no
+        method recorded at all, or a since-changed one), the two fingerprints
+        are not comparable at all, and this reports NO DATA by name instead
+        of comparing them anyway;
       - the DOMINANT main-thread model (the one used in the most sessions,
         ties broken lexically) differs between the before and after cohort,
         when both sides carry main-thread model tracking at all; exactly one
@@ -383,8 +461,25 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
                        f"need {MIN_SESSIONS}")
 
     fp_start = baseline.get("fingerprint_start")
-    if fingerprint_end is not None and fp_start is not None and fingerprint_end != fp_start:
-        reasons.append("config changed during experiment window")
+    fp_method = baseline.get("fingerprint_method")
+    if fingerprint_end is not None and fp_start is not None:
+        if fp_method != FINGERPRINT_METHOD:
+            # A baseline pinned before FINGERPRINT_METHOD existed, or under a
+            # since-changed hashing algorithm, has an fp_start that is not
+            # comparable to an fp_end computed under the CURRENT algorithm:
+            # they would differ even if configuration never moved, purely
+            # because the hashing changed. That is exactly the defect this
+            # guard exists to catch, so it must not fire on itself. NO DATA
+            # beats a guess: name the reason instead of claiming "changed" or
+            # claiming "unchanged".
+            reasons.append(
+                "config fingerprint method changed since the baseline was "
+                f"pinned (baseline method {fp_method!r}, current method "
+                f"{FINGERPRINT_METHOD!r}): NO DATA on whether configuration "
+                "changed during the window, the start and end fingerprints "
+                "are not comparable")
+        elif fingerprint_end != fp_start:
+            reasons.append("config changed during experiment window")
 
     # Model mix is a confound the same way the config fingerprint is: a floor
     # change might come from a model switch mid-experiment, not the named
@@ -596,6 +691,7 @@ def cmd_start(label, root, days, now_ts, treats, metric=None):
     snap = {"label": label, "started": _iso(now_ts), "window_days": days,
             "schema": mt.SCHEMA, "cohort_start_ts": before_start_ts,
             "cohort_end_ts": before_end_ts, "fingerprint_start": fingerprint_start,
+            "fingerprint_method": FINGERPRINT_METHOD,
             "treats": treats, "fingerprint_excluded": excluded, "summary": sm}
     if metric:
         snap["target_metric"] = metric
