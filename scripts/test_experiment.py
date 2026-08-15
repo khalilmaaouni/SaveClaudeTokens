@@ -60,7 +60,8 @@ def _usage_line(ts, inp, sub=False):
 def _baseline(schema=mt.SCHEMA, window=30, fr=80000, sessions=10):
     return {"label": "t", "started": "2026-08-01T00:00:00", "window_days": window,
             "schema": schema, "cohort_start_ts": 1_000_000, "cohort_end_ts": 3_592_000,
-            "fingerprint_start": None, "treats": None,
+            "fingerprint_start": None, "fingerprint_method": ex.FINGERPRINT_METHOD,
+            "treats": None,
             "summary": {"first_request_median": fr, "normalized_input_total": 1_000_000,
                         "parent_sessions": sessions}}
 
@@ -140,6 +141,186 @@ def test_fingerprint_mismatch_is_not_proven():
     rec_same = ex.build_record(b, _after(), "2026-08-30T00:00:00", fingerprint_end="aaa")
     check("matching fingerprints add no config-change reason",
           not any("config changed" in r for r in rec_same["reasons"]))
+
+
+def test_canonical_fingerprint_ignores_volatile_telemetry_keys():
+    # H1 (the real defect). ~/.claude.json is Claude Code's own live state
+    # file; lastUsedAt and usageCount move on their own several times a
+    # minute with zero configuration change involved. A raw-byte hash of the
+    # file therefore differs between fingerprint_start and fingerprint_end on
+    # EVERY experiment, appending "config changed during experiment window"
+    # every single time, which makes VERIFIED structurally unreachable.
+    #
+    # RED (without _strip_volatile / canonical hashing, i.e. a plain
+    # hashlib.sha256 of the raw bytes as the original code did): the two
+    # fingerprints below differ, because "usageCount": 53811 vs 53839 and
+    # "lastUsedAt" moved, and the assertion below fails.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_paths_at(td)
+        try:
+            _write(ex.CLAUDE_MD_PATH, "md")
+            _write(ex.SETTINGS_PATH, "{}")
+            _write(ex.CLAUDE_JSON_PATH, json.dumps({
+                "mcpServers": {"foo": {"command": "bar"}},
+                "lastUsedAt": 1786754517692, "usageCount": 53811}))
+            fp_before = ex.compute_fingerprint()
+            _write(ex.CLAUDE_JSON_PATH, json.dumps({
+                "mcpServers": {"foo": {"command": "bar"}},
+                "lastUsedAt": 1786754553039, "usageCount": 53839}))
+            fp_after = ex.compute_fingerprint()
+            check("a fingerprint pair differing ONLY in lastUsedAt/usageCount "
+                  "is EQUAL, not flagged as a config change",
+                  fp_before == fp_after)
+        finally:
+            _restore_paths(saved)
+
+
+def test_canonical_fingerprint_still_moves_on_a_real_config_change():
+    # The mirror of the test above, and the more important of the two: a
+    # fingerprint that never moves would be a worse defect than the one
+    # being fixed, since it would blind the guard entirely rather than
+    # merely over-trip it. Adding a real MCP server entry, alongside
+    # telemetry noise that must NOT move the hash, still has to move it.
+    #
+    # RED (if volatile-key stripping were implemented by blinding the whole
+    # file instead of removing just the named keys, e.g. always returning a
+    # constant hash for ~/.claude.json): this assertion fails because the
+    # real mcpServers change would not be seen either.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_paths_at(td)
+        try:
+            _write(ex.CLAUDE_MD_PATH, "md")
+            _write(ex.SETTINGS_PATH, "{}")
+            _write(ex.CLAUDE_JSON_PATH, json.dumps({
+                "mcpServers": {}, "lastUsedAt": 1000, "usageCount": 1}))
+            fp_before = ex.compute_fingerprint()
+            _write(ex.CLAUDE_JSON_PATH, json.dumps({
+                "mcpServers": {"new-server": {"command": "x"}},
+                "lastUsedAt": 2000, "usageCount": 2}))
+            fp_after = ex.compute_fingerprint()
+            check("adding a real MCP server entry still moves the fingerprint, "
+                  "even though lastUsedAt/usageCount moved alongside it",
+                  fp_before != fp_after)
+        finally:
+            _restore_paths(saved)
+
+
+def test_unparseable_json_file_still_fingerprints_visibly_not_silently():
+    # M3. Dropping a file that fails to parse as JSON from the fingerprint
+    # would blind the guard, a worse defect than the raw-byte-telemetry one
+    # being fixed. It must still contribute a hash (raw bytes), and the
+    # method used must be visible to a caller, so a canonical hash is never
+    # confused with a raw-byte one.
+    #
+    # RED (if a JSONDecodeError were treated as "skip this file", e.g.
+    # `continue`-ing past it in compute_fingerprint instead of falling back
+    # to raw bytes): the digest for the corrupt file would be identical to
+    # not fingerprinting it at all, so the "moves when repaired" assertion
+    # below would still pass by accident, but the method check catches the
+    # silent-drop case directly, and a MISSING-file digest check confirms it
+    # is not being treated as absent.
+    with tempfile.TemporaryDirectory() as td:
+        broken = os.path.join(td, "broken.json")
+        _write(broken, '{"mcpServers": {"a": ')  # truncated, invalid JSON
+        digest, method = ex._sha_file(broken)
+        check("an unparseable JSON file still gets a real digest, not MISSING",
+              digest != "MISSING")
+        check("an unparseable JSON file is hashed as raw bytes, and that is "
+              "visible on the returned method", method == "raw")
+
+        valid = os.path.join(td, "valid.json")
+        _write(valid, '{"mcpServers": {"a": {}}}')
+        digest_valid, method_valid = ex._sha_file(valid)
+        check("a file that parses as JSON is hashed canonically, visibly "
+              "distinct from the raw-byte fallback", method_valid == "json")
+        check("repairing the file changes its digest (it was not silently "
+              "dropped from the fingerprint while broken)", digest != digest_valid)
+
+        markdown = os.path.join(td, "CLAUDE.md")
+        _write(markdown, "not json at all, plain markdown")
+        digest_md, method_md = ex._sha_file(markdown)
+        check("a file that is not JSON keeps being hashed as raw bytes, "
+              "exactly as before this change", method_md == "raw")
+
+
+def test_baseline_with_no_fingerprint_method_reports_no_data_and_still_closes():
+    # H1, the hard part: a baseline pinned before this fix (fingerprint_start
+    # computed with the OLD raw-byte method) must not be compared
+    # byte-for-byte against a fingerprint_end computed with the NEW
+    # canonical method: they would differ even if nothing changed, which
+    # both reproduces the defect this fix targets and falsely flags a real
+    # running experiment as "config changed". This is exactly the shape of
+    # the live claude-md-diet-v2 baseline on this machine.
+    #
+    # RED (without the fp_method check in build_record, i.e. comparing
+    # fp_start directly to fingerprint_end whenever both are present): this
+    # asserts NOT_PROVEN with reasons containing "NO DATA", but the old code
+    # would instead append the generic "config changed during experiment
+    # window" reason (or, if the strings happened to match, wrongly stay
+    # silent) with no NO DATA wording anywhere, and the assertions below fail.
+    b = _baseline()
+    b["fingerprint_start"] = "old-raw-byte-hash"
+    del b["fingerprint_method"]  # exactly what a pre-fix baseline looks like
+    rec = ex.build_record(b, _after(), "2026-08-30T00:00:00",
+                          fingerprint_end="new-canonical-hash")
+    check("a baseline with no fingerprint_method still closes (does not crash, "
+          "and gets a verdict)", rec["confidence"] in ("VERIFIED", "NOT_PROVEN"))
+    check("a baseline with no fingerprint_method downgrades to NOT_PROVEN",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the config check reports NO DATA by name, not 'config changed'",
+          any("NO DATA" in r for r in rec["reasons"]))
+    check("the old false-positive wording is not used for this case",
+          not any(r == "config changed during experiment window"
+                  for r in rec["reasons"]))
+
+    # A baseline whose method differs from the CURRENT one (not just absent)
+    # gets the same NO DATA treatment, not a silent pass and not a false
+    # "config changed".
+    b2 = _baseline()
+    b2["fingerprint_start"] = "old-raw-byte-hash"
+    b2["fingerprint_method"] = ex.FINGERPRINT_METHOD - 1
+    rec2 = ex.build_record(b2, _after(), "2026-08-30T00:00:00",
+                           fingerprint_end="new-canonical-hash")
+    check("a baseline whose fingerprint_method differs from the current one "
+          "also reports NO DATA", any("NO DATA" in r for r in rec2["reasons"]))
+
+    # A baseline whose method MATCHES the current one still gets the normal,
+    # meaningful comparison: a real difference is still "config changed".
+    b3 = _baseline()
+    b3["fingerprint_start"] = "same-method-hash"
+    rec3 = ex.build_record(b3, _after(), "2026-08-30T00:00:00",
+                           fingerprint_end="a-different-hash")
+    check("a matching fingerprint_method still catches a real config change",
+          any(r == "config changed during experiment window" for r in rec3["reasons"]))
+
+
+def test_cli_experiment_end_on_a_pre_fix_fingerprint_baseline_closes_cleanly():
+    # The end-to-end version of the test above, through the real cmd_start /
+    # cmd_end CLI path: a baseline written to disk with an old-style
+    # fingerprint_start and no fingerprint_method key (simulating a baseline
+    # pinned before this fix landed) must still `end` successfully, exit 0,
+    # and print NOT_PROVEN with a NO DATA reason rather than crash or print a
+    # false "config changed".
+    with tempfile.TemporaryDirectory() as home:
+        os.makedirs(os.path.join(home, ".claude", "projects"))
+        exp_dir = os.path.join(home, ".claude", "token-shield", "experiments")
+        os.makedirs(exp_dir)
+        with open(os.path.join(exp_dir, "pre-fix.json"), "w") as f:
+            json.dump({"label": "pre-fix", "started": "2026-07-01T00:00:00",
+                       "window_days": 30, "schema": mt.SCHEMA,
+                       "cohort_start_ts": 0.0, "cohort_end_ts": 1.0,
+                       "fingerprint_start": "old-raw-byte-hash", "treats": None,
+                       "fingerprint_excluded": [],
+                       "summary": {"first_request_median": 80000,
+                                   "normalized_input_total": 1_000_000,
+                                   "parent_sessions": 10}}, f)
+        r = _run_cli(home, ["experiment", "end", "pre-fix"])
+        check("ending a pre-fix baseline exits 0, does not crash", r.returncode == 0)
+        check("ending a pre-fix baseline does not raise", "Traceback" not in r.stderr)
+        check("a pre-fix fingerprint baseline ends NOT_PROVEN",
+              "NOT_PROVEN" in r.stdout)
+        check("the NO DATA reason for the fingerprint method is printed",
+              "NO DATA" in r.stdout)
 
 
 def test_treats_exclusion_keeps_treatment_edit_from_tripping_the_downgrade():
@@ -796,6 +977,8 @@ def test_cli_experiment_start_runs_and_pins_a_baseline():
               all(k in baseline for k in ex.V2_BASELINE_KEYS))
         check("cohort_end_ts is an epoch number, not a formatted string",
               isinstance(baseline["cohort_end_ts"], (int, float)))
+        check("a freshly pinned baseline records the current fingerprint method",
+              baseline.get("fingerprint_method") == ex.FINGERPRINT_METHOD)
 
 
 def test_cli_experiment_end_on_a_legacy_baseline_is_not_proven():
