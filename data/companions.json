@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated": "2026-08-13",
+  "updated": "2026-08-15",
   "companions": [
     {
       "name": "ponytail",
@@ -31,25 +31,53 @@
     {
       "name": "token-saver",
       "repo": "github.com/ppgranger/token-saver",
-      "install": "claude plugin install token-saver@claude-community",
-      "tier": "detect-and-measure only, never default-recommended",
-      "when": "already installed: measure it; not installed: mention only on huge shell-output profiles",
-      "benefit": "compresses noisy shell output before the model reads it",
-      "drawback": "compressed output must never stand as evidence where exact text matters; needs Python 3.10+",
-      "uninstall": "claude plugin uninstall token-saver",
-      "note": "This is ppgranger's token-saver, a different project from ww-w-ai/claude-code-token-saver.",
+      "install": "/plugin marketplace add ppgranger/token-saver, then /plugin install token-saver",
+      "tier": "prescribable treatment (promoted 2026-08-15 from detect-and-measure only)",
+      "when": "profile shows heavy CLI/shell output volume (git, docker, npm, terraform, kubectl, pytest and similar)",
+      "benefit": "compresses noisy shell output before the model reads it (36 content aware processors, local regex and string parsing, no external calls); vendor's own README claims 60 to 99 percent compression on 16 before/after scenarios, locked to a CI ratchet test",
+      "drawback": "compressed output must never stand as evidence where exact text matters; small per-call overhead; lossy by design for whatever it judges to be noise",
+      "uninstall": "python3 install.py --uninstall",
+      "note": "This is ppgranger's token-saver, a different project from ww-w-ai/claude-code-token-saver (see the claude-code-token-saver mention below). Promoted from detect-and-measure only to a prescribable treatment on 2026-08-15 because its identity was settled first party (repository and license confirmed against the local plugin.json) and a documented uninstall command exists (docs/research/2026-08-15-companion-fabric-facts.md). Flip: a maintainer change removes the uninstall path, or the identity ambiguity resurfaces, and it returns to detect-and-measure only. Machine specific caveat carried forward from this machine's own hardening: the local copy needs a working python3 on 3.13, and its file_content and env processors stay disabled because they would auto approve reads of files including secrets.",
       "tested_version_range": {"min": "2.7.1", "max": "2.7.1", "tested_on": "2026-08-13"},
       "hook_footprint": ["PreToolUse", "SessionStart"],
-      "last_reviewed": "2026-08-13"
+      "last_reviewed": "2026-08-15"
+    },
+    {
+      "name": "rtk",
+      "repo": "github.com/rtk-ai/rtk",
+      "install": "brew install rtk, then rtk init -g to wire it into Claude Code",
+      "tier": "prescribable treatment",
+      "when": "profile shows heavy Bash command output volume",
+      "benefit": "PreToolUse hook rewrites Bash commands to rtk equivalents (smart filtering, grouping, truncation, deduplication); rtk-ai's own README claims it cuts up to 90 percent of Bash output bytes before they reach context (vendor's own figure, not measured by Token Shield)",
+      "drawback": "alters what the model sees for Bash calls and is lossy by design, though full output is teed to a local log on failure by default; silently does not cover Read, Grep or Glob, which a user could mistake for full coverage; its own token counts are estimated as bytes divided by four, not a real tokenizer; its README separates the 60 to 90 percent output-reduction figure from actual billing impact but does not mention Anthropic's own prompt caching at all",
+      "uninstall": "rtk init -g --uninstall, then cargo uninstall rtk or brew uninstall rtk depending on how it was installed",
+      "note": "Name collision warning from rtk-ai's own README: an unrelated crates.io package called Rust Type Kit shares the name rtk.",
+      "tested_version_range": {"min": "dev-0.45.1-rc.356", "max": "dev-0.45.1-rc.356", "tested_on": "2026-08-15"},
+      "hook_footprint": ["PreToolUse"],
+      "last_reviewed": "2026-08-15"
+    },
+    {
+      "name": "token-optimizer",
+      "repo": "github.com/ooples/token-optimizer-mcp",
+      "install": "/plugin marketplace add ooples/token-optimizer-mcp, then /plugin install token-optimizer@token-optimizer, then /reload-plugins",
+      "tier": "prescribable treatment, with disclosed cache residue",
+      "when": "profile shows heavy tool-output volume across large file reads, searches and shell calls",
+      "benefit": "PreToolUse hook refuses large Read, Grep, Glob, Edit, Write and Bash calls (over roughly 25KB) and redirects them to smart equivalents; re-reads of an unchanged file return diffs only, backed by a per-project knowledge graph; ooples' own published figure is 43,491 net verified MCP transport tokens avoided (54,037 gross minus 10,546 of its own deliberate expansion), a vendor's own claim, not measured by Token Shield",
+      "drawback": "DISCLOSURE: its documented uninstall script (npm run uninstall-hooks -- --apply) removes the hooks but is NOT documented as removing its on disk knowledge graph cache, so a residue survives an uninstall. Also: a background MCP process plus a gate on every file, search and shell call means both startup and per-call overhead; it refuses or rewrites what the model sees by design; it does not separate Anthropic's own cache savings from its own effect.",
+      "uninstall": "npm run uninstall-hooks to preview, then npm run uninstall-hooks -- --apply to execute (hooks only: the on disk knowledge graph cache is not documented as removed by this script)",
+      "tested_version_range": {"min": "master, 506 commits (exact last commit date NO DATA)", "max": "master, 506 commits (exact last commit date NO DATA)", "tested_on": "2026-08-15"},
+      "hook_footprint": ["PreToolUse", "SessionStart", "PreCompact"],
+      "last_reviewed": "2026-08-15"
     }
   ],
   "mentions": [
     {
       "name": "context-mode",
       "repo": "github.com/mksglu/context-mode",
-      "reason": "NO DATA: not yet verified first-party",
-      "status": "not vetted on this machine",
-      "last_reviewed": "never"
+      "reason": "NOT PRESCRIBABLE: confirmed first-party (repository, manifest and hooks all opened directly), but its own documentation publishes no uninstall command for the Claude Code path. Its README gives an upgrade command and a knowledge base purge command, neither of which removes it; the only literal uninstall command in the whole README targets a different client, the Antigravity CLI (agy plugin uninstall context-mode). We never prescribe a treatment we cannot reverse.",
+      "flip_condition": "The project publishes a literal uninstall command for the Claude Code plugin path, or a maintainer confirms one first party. Then it is re-reviewed for promotion to a curated treatment. This is a documentation gap on their side, not a judgement about the tool's quality.",
+      "status": "confirmed first-party, not installed on this machine",
+      "last_reviewed": "2026-08-15"
     },
     {
       "name": "claude-dcp",
@@ -60,17 +88,24 @@
     },
     {
       "name": "ccusage",
-      "repo": "github.com/ccusage/ccusage",
-      "reason": "usage accounting for multi-agent users",
+      "repo": "github.com/ryoppippi/ccusage",
+      "reason": "METER, never a treatment: it reads local usage logs and reports token and cost breakdowns, no network calls, no intervention. It claims no savings of its own, consistent with being a meter. Worth copying: it separates cache creation tokens from cache read tokens in its reports rather than lumping everything cached together, though it stops short of isolating Anthropic's own cache saving as its own figure.",
       "status": "not vetted on this machine",
-      "last_reviewed": "never"
+      "last_reviewed": "2026-08-15"
     },
     {
       "name": "claude-code-token-saver",
       "repo": "github.com/ww-w-ai/claude-code-token-saver",
-      "reason": "different project from the installed token-saver; compat note only",
+      "reason": "A DIFFERENT project sharing the token-saver name with our curated ppgranger/token-saver companion above. No documented uninstall exists (only a partial revert, /setup-git-lite revert, for one side effect). Its own published figure (45 percent cost reduction) openly conflates Anthropic's own prompt-cache-expiry avoidance with its own effect, since its headline mechanism is preventing a cache expiry. This entry's main job is to stop a user confusing it with the other token-saver.",
       "status": "not vetted on this machine",
-      "last_reviewed": "never"
+      "last_reviewed": "2026-08-15"
+    },
+    {
+      "name": "codeburn",
+      "repo": "github.com/getagentseal/codeburn",
+      "reason": "METER primarily: reads local session files, prices against daily refreshed pricing, classifies usage into thirteen task categories; the optional optimize --apply command is a narrow, opt-in treatment edge, not the main behavior. NAME CAVEAT: no first-party source for a project literally spelled CodeBurn was found; getagentseal/codeburn, lowercase, is the closest match and is reported as such, not as a confirmed identity.",
+      "status": "not vetted on this machine",
+      "last_reviewed": "2026-08-15"
     }
   ]
 }

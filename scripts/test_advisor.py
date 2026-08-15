@@ -124,7 +124,7 @@ def test_why_selected_contains_the_profiles_own_number():
 
 def test_strategies_json_loads_validates_and_carries_no_dashes():
     strategies = adv.load_strategies(STRATEGIES_PATH)
-    assert 10 <= len(strategies) <= 14, len(strategies)
+    assert 10 <= len(strategies) <= 17, len(strategies)
     for s in strategies:
         assert s["source"], s["id"]
     # The dash needles are written as escapes so this source file itself
@@ -1040,6 +1040,258 @@ def test_main_mode_narrows_tournament_field_and_notes_it():
     m = len(real)
     assert n < m, (n, m)  # conservative must actually narrow this fixture, or the test proves nothing
     assert f"field narrowed by mode conservative: {n} of {m} candidates" in out, out
+
+
+def test_load_registry_refuses_a_curated_entry_missing_rollback():
+    # Unit CF1's load time refusal: a curated companion entry with its
+    # rollback command removed must be refused the moment the whole
+    # registry loads, by name, with the reason, the same way
+    # load_strategies() refuses a strategy naming an unknown problem_class.
+    # Calibrated: this reinjects the exact defect the rule exists to catch
+    # (a curated entry shipped without an uninstall command) against a
+    # temp copy of the real registry with only "widget" appended, so the
+    # other, already-valid curated entries prove the refusal is scoped to
+    # the one broken entry, not a blanket failure.
+    import tempfile
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    broken = json.loads(json.dumps(real_data))
+    broken["companions"].append({"name": "widget", "install": "do it",
+                                 "tested_version_range": {"min": "1.0.0", "max": "1.0.0",
+                                                          "tested_on": "2026-08-15"}})
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump(broken, f)
+        try:
+            adv.load_registry(path)
+            assert False, "expected a ValueError for a companion missing uninstall"
+        except ValueError as e:
+            assert "widget" in str(e), str(e)
+            assert "uninstall" in str(e), str(e)
+    # Restored: the real, unbroken registry loads clean.
+    assert adv.load_registry() is not None
+
+
+def test_new_companion_strategies_still_cannot_win_a_tournament():
+    # Requirement (b): a companion strategy can never be a tournament
+    # winner, rtk and token-optimizer included now that they are curated,
+    # prescribable treatments. Calibrated by reinjecting the exact defect
+    # the guard exists to catch (see below), the test goes RED, then the
+    # original is restored and the test goes GREEN again.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(450_000)})  # fires
+    # rtk (>=350000), token-optimizer (>=400000) and token-saver (>=200000)
+    # all at once, all category "companion": none may ever win. (Below their
+    # own thresholds, redundancy.bounded-reads and output.isolate-huge-logs
+    # do not fire, so this tournament renders only if the guard is broken;
+    # a winner dict only ever carries id/title/fit, never category, so the
+    # companion_ids id check below is the only sound way to test this.)
+    companion_ids = {"companion.rtk", "companion.token-optimizer", "companion.token-saver"}
+    result = adv.advise(profile, {}, real)
+    for t in result["tournaments"]:
+        assert t["winner"]["id"] not in companion_ids, t["winner"]
+
+    # Reinject: build_tournaments()'s own guard is the "is_companion" flag
+    # _tournament_candidate() stamps onto every candidate (never the
+    # winner pool unless forced to match advise()'s own best card, which
+    # itself can never be a companion). Blind that one flag to False for
+    # every candidate, exactly the defect class finding C2/M2 already
+    # calibrated against for token-saver alone, and confirm it now also
+    # lets the newer rtk and token-optimizer siblings win, then restore.
+    real_tournament_candidate = adv._tournament_candidate
+
+    def _blind_tournament_candidate(strategy, profile):
+        c = real_tournament_candidate(strategy, profile)
+        c["is_companion"] = False
+        return c
+
+    adv._tournament_candidate = _blind_tournament_candidate
+    try:
+        result_broken = adv.advise(profile, {}, real)
+        winners = [t["winner"]["id"] for t in result_broken["tournaments"]]
+        went_red = any(w in companion_ids for w in winners)
+        assert went_red, ("reinjection did not reproduce the defect", winners)
+    finally:
+        adv._tournament_candidate = real_tournament_candidate
+
+    # Confirmed green again with the real _sort_key restored.
+    result_fixed = adv.advise(profile, {}, real)
+    for t in result_fixed["tournaments"]:
+        assert t["winner"]["id"] not in companion_ids, t["winner"]
+
+
+def test_recipe_refuses_for_a_mention_like_context_mode():
+    # Requirement (c): asking for a recipe for a MENTION (never curated,
+    # by design: NO DATA on rollback is the reason it is a mention at all)
+    # must refuse with the reason, never invent a command. context-mode is
+    # confirmed first-party but has no documented Claude Code uninstall,
+    # which is exactly why it lives in "mentions" and not "companions".
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("context-mode")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "REFUSED" in out, out
+    assert "context-mode" in out, out
+
+    # Calibrated: if context-mode were ever accidentally promoted into the
+    # curated "companions" list (the exact mistake the mentions/companions
+    # split exists to prevent), the recipe would stop refusing. Prove that
+    # by promoting it on a throwaway copy of the real registry and watching
+    # the refusal disappear, then confirm the real, unbroken registry still
+    # refuses.
+    import tempfile
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    promoted = json.loads(json.dumps(real_data))
+    context_mode_mention = next(m for m in promoted["mentions"] if m["name"] == "context-mode")
+    promoted["companions"].append({
+        "name": "context-mode", "install": "invented install",
+        "uninstall": "invented uninstall",
+        "tested_version_range": {"min": "1.0.169", "max": "1.0.169", "tested_on": "2026-08-15"},
+    })
+    del context_mode_mention
+    real_path = adv.ts.COMPANIONS_PATH
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump(promoted, f)
+        adv.ts.COMPANIONS_PATH = path
+        try:
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                rc2 = adv.cmd_recipe("context-mode")
+            went_red = rc2 == 0
+            assert went_red, "reinjection (accidental promotion) did not reproduce the defect"
+        finally:
+            adv.ts.COMPANIONS_PATH = real_path
+
+    buf3 = io.StringIO()
+    with contextlib.redirect_stdout(buf3):
+        rc3 = adv.cmd_recipe("context-mode")
+    assert rc3 == 2, buf3.getvalue()
+
+
+def test_curated_registry_install_and_rollback_strings_are_non_empty():
+    # Requirement (d). Calibrated: blank one curated entry's uninstall on a
+    # temp copy of the real registry, confirm the check catches it (RED),
+    # then confirm the real, unbroken registry passes (GREEN).
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    for c in real_data["companions"]:
+        assert c.get("install"), c["name"]
+        assert c.get("uninstall"), c["name"]
+
+    broken = json.loads(json.dumps(real_data))
+    broken["companions"][0]["uninstall"] = ""
+    caught = not all(c.get("uninstall") for c in broken["companions"])
+    assert caught, "reinjection (blanked uninstall) did not reproduce the defect"
+
+
+def test_mention_recipe_names_the_reason_verbatim_never_the_generic_no_entry_text():
+    # Fix round item 1: a recipe request for a known MENTION (context-mode)
+    # must never be told "has no entry", which is false, since a mention
+    # is a real, deliberate entry, not an unknown name. It must name it as
+    # a mention and print its own "reason" and "flip_condition" verbatim.
+    # An exit-code-only test already passed once for entirely the wrong
+    # reason (this repo's own test_recipe_refuses_for_a_mention_like_
+    # context_mode only asserted rc==2 and the bare name), so this asserts
+    # on the reason text itself reaching the printed output.
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        data = json.load(f)
+    context_mode = next(m for m in data["mentions"] if m["name"] == "context-mode")
+
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("context-mode")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "is a known mention" in out, out
+    assert context_mode["reason"] in out, out
+    assert context_mode["flip_condition"] in out, out
+    assert "has no entry" not in out, out  # the false claim this fix removes
+    assert "  install:" not in out, out    # never an invented command
+    assert "  rollback:" not in out, out
+
+    # Calibrated: reinject the exact defect (cmd_recipe answering a mention
+    # with the plain "no entry" message, no reason, no flip condition) on
+    # the real, production advisor.py, confirm RED, restore, confirm GREEN.
+    path = os.path.join(HERE, "advisor.py")
+    with open(path) as f:
+        src = f.read()
+    marker = "    data = ts.load_companions(ts.COMPANIONS_PATH)\n    result = describe(data, load_state(), name)\n    if result[\"refused\"]:\n"
+    assert marker in src, "cmd_recipe's shape changed; update this reinjection"
+    broken = src.replace(
+        marker,
+        "    data = ts.load_companions(ts.COMPANIONS_PATH)\n"
+        "    result = describe(data, load_state(), name)\n"
+        "    if result[\"refused\"]:\n"
+        "        print(f\"REFUSED: {result['reason']}\")\n"
+        "        return 2\n"
+        "    if False:\n",
+    )
+    assert broken != src, "reinjection replacement did not match"
+    with open(path, "w") as f:
+        f.write(broken)
+    try:
+        adv2 = _load("advisor")
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            adv2.cmd_recipe("context-mode")
+        out2 = buf2.getvalue()
+        went_red = context_mode["reason"] not in out2
+        assert went_red, ("reinjection did not reproduce the defect", out2)
+    finally:
+        with open(path, "w") as f:
+            f.write(src)
+
+
+def test_unknown_recipe_lists_the_curated_names():
+    # Fix round items 1/2: a name matching nothing (neither a companion
+    # nor a mention) keeps an honest not-found message but now also lists
+    # the curated names, so a user who typed a project's own longer repo
+    # name (token-optimizer-mcp for the curated token-optimizer) can see
+    # the right one to ask for, with no new alias field invented.
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("token-optimizer-mcp")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "Known curated companions:" in out, out
+    assert "token-optimizer" in out, out
+
+
+def test_token_saver_strategy_card_matches_its_promoted_tier():
+    # Fix round item 3: the coordinator's decision, now built. The registry
+    # calls token-saver a prescribable treatment (data/companions.json);
+    # its own tournament card must agree, never still speak as detect and
+    # measure only, and its evidence must never be MEASURED or VERIFIED
+    # (nothing about it was measured on this machine).
+    real = adv.load_strategies(STRATEGIES_PATH)
+    card = next(s for s in real if s["id"] == "companion.token-saver")
+    assert card["category"] == "companion", card  # the winner-exclusion rule still applies
+    assert card["problem_class"] == "tool_output", card
+    assert card["evidence"] not in ("MEASURED", "VERIFIED"), card
+    assert "detect" not in card["title"].lower(), card
+    assert "detect-and-measure only" not in card["what_it_changes"].lower(), card
+    assert "not applicable" not in card["reversibility"].lower(), card
+
+    # Calibrated: reinject the old detect-only card text on a temp copy of
+    # the real strategies.json, confirm the check above would have caught
+    # it (RED), then confirm the real, already-fixed file passes (GREEN).
+    with open(STRATEGIES_PATH) as f:
+        real_data = json.load(f)
+    broken = json.loads(json.dumps(real_data))
+    broken_card = next(s for s in broken["strategies"] if s["id"] == "companion.token-saver")
+    broken_card["title"] = "Companion: token-saver (detect and measure only)"
+    broken_card["what_it_changes"] = "Detect-and-measure only: ..."
+    went_red = ("detect" in broken_card["title"].lower()
+               or "detect-and-measure only" in broken_card["what_it_changes"].lower())
+    assert went_red, "reinjection (old detect-only text) did not reproduce the defect"
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated": "2026-08-13",
+  "updated": "2026-08-15",
   "strategies": [
     {
       "id": "cache.fixed-parent-model",
@@ -372,29 +372,98 @@
       "id": "companion.token-saver",
       "category": "companion",
       "problem_class": "tool_output",
-      "title": "Companion: token-saver (detect and measure only)",
+      "title": "Companion: token-saver (CLI/shell output compressor)",
       "trigger": {
         "metric": "usage.output_tokens_total",
         "op": ">=",
         "value": 200000,
         "band": "LOW"
       },
-      "what_it_changes": "Detect-and-measure only: token-saver is already enforced by its own hook when installed, so this card surfaces that its compression is active, it never turns anything on and is never offered as a recommended fix.",
-      "expected_benefit": "Visibility into how much shell and tool output volume the plugin is already compressing.",
+      "what_it_changes": "36 content aware processors compress verbose CLI output (git, docker, npm, terraform, kubectl, pytest and others) with local regex and string parsing only, no external calls, while preserving errors, diffs and stack traces. A PreToolUse hook rewrites the command to the compressing wrapper.",
+      "expected_benefit": "ppgranger's own README claims 60 to 99 percent compression across 16 before/after scenarios (76 percent on a git diff to 99.9 percent on an npm install), locked to a CI ratchet test, its own figure, never a Token Shield measurement.",
       "evidence": "ESTIMATED",
-      "drawback": "This card never recommends installing or enabling token-saver as a fix; its file_content and env processors carry a real redaction risk when enabled and stay out of scope for a detect-only card.",
+      "drawback": "Compressed output must never stand as evidence where exact text matters; it is lossy by design for whatever it judges to be noise; small per-call overhead. Its file_content and env processors carry a real redaction risk when enabled and should stay disabled (a machine-local override, not a vendor default).",
       "quality_risk": "LOW",
-      "reversibility": "Not applicable, detection only, nothing is changed.",
-      "how_measured": "usage.output_tokens_total from the profile, a proxy for how much command output volume exists to compress.",
-      "if_you_say_no": "No effect either way; this card only reports, it never changes anything.",
-      "alternatives": [],
+      "reversibility": "Fully reversible with its own documented rollback: python3 install.py --uninstall.",
+      "how_measured": "usage.output_tokens_total from the profile; more tool-output volume is where a CLI-output compressor has more to work with, a loose proxy rather than a direct measurement of token-saver's own effect.",
+      "if_you_say_no": "CLI and shell output volume keeps landing in context uncompressed; nothing changes.",
+      "alternatives": [
+        "companion.rtk",
+        "companion.token-optimizer"
+      ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "source": "docs/research/2026-08-15-companion-fabric-facts.md",
       "how": [
         {"text": "Check whether token-saver is already installed.", "command": "claude plugin list"},
-        {"text": "This card is detect-only: it never turns anything on, so there is nothing further to apply."},
-        {"text": "If not installed and you want it, install it yourself; this card does not recommend that step."}
+        {"text": "Get the exact verified install and rollback commands before running anything.", "command": "python3 scripts/cli.py advise --recipe token-saver"},
+        {"text": "Install only if you accept that compressed output must never stand as evidence where exact text matters."},
+        {"text": "Watch your output token volume over the next few sessions.", "command": "python3 scripts/cli.py profile"}
+      ]
+    },
+    {
+      "id": "companion.rtk",
+      "category": "companion",
+      "problem_class": "tool_output",
+      "title": "Companion: rtk (Bash output filter)",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 350000,
+        "band": "LOW"
+      },
+      "what_it_changes": "A PreToolUse hook rewrites Bash commands to rtk equivalents (smart filtering, grouping, truncation, deduplication) so verbose shell output is filtered before it reaches context. Only Bash calls are rewritten; Read, Grep and Glob are untouched.",
+      "expected_benefit": "rtk-ai's own README claims it cuts up to 90 percent of Bash output bytes before they reach context, its own figure, never a Token Shield measurement. Its own docs go further than most of the field on honesty: they explicitly separate that output-reduction figure from your actual bill (\"that is what RTK measures, and it is not the same as cutting your bill by 90%\"), though they never mention Anthropic's own prompt caching at all.",
+      "evidence": "ESTIMATED",
+      "drawback": "It alters what the model sees for Bash calls and is lossy by design (though full output is teed to a local log on failure by default); it silently does not cover Read, Grep or Glob, which a user could mistake for full coverage; its own token counts are estimated as bytes divided by four, not a real tokenizer.",
+      "quality_risk": "LOW",
+      "reversibility": "Fully reversible with its own documented rollback: rtk init -g --uninstall, then cargo uninstall rtk or brew uninstall rtk depending on how it was installed.",
+      "how_measured": "usage.output_tokens_total from the profile; more tool-output volume is where a Bash-output filter has more to work with, a loose proxy rather than a direct measurement of rtk's own effect.",
+      "if_you_say_no": "Bash output volume keeps landing in context unfiltered; nothing changes.",
+      "alternatives": [
+        "companion.token-saver"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "docs/research/2026-08-15-companion-fabric-facts.md",
+      "how": [
+        {"text": "Check whether rtk is already installed.", "command": "claude plugin list"},
+        {"text": "Get the exact verified install and rollback commands before running anything.", "command": "python3 scripts/cli.py advise --recipe rtk"},
+        {"text": "Install only if you accept that it silently does not cover Read, Grep or Glob calls."},
+        {"text": "Watch your output token volume over the next few sessions.", "command": "python3 scripts/cli.py profile"}
+      ]
+    },
+    {
+      "id": "companion.token-optimizer",
+      "category": "companion",
+      "problem_class": "tool_output",
+      "title": "Companion: token-optimizer (large call gate plus knowledge graph)",
+      "trigger": {
+        "metric": "usage.output_tokens_total",
+        "op": ">=",
+        "value": 400000,
+        "band": "LOW"
+      },
+      "what_it_changes": "A PreToolUse hook refuses large Read, Grep, Glob, Edit, Write and Bash calls (over roughly 25KB) and redirects them to smart equivalents; a re-read of an unchanged file returns a diff only, backed by a per-project knowledge graph so prior findings are not re-derived.",
+      "expected_benefit": "ooples' own published figure is 43,491 net verified MCP transport tokens avoided (54,037 gross minus 10,546 of its own deliberate expansion), its own claim, never a Token Shield measurement. Publishing a net figure with its own expansion subtracted is a real discipline worth noting, the same one this project applies to its own numbers.",
+      "evidence": "ESTIMATED",
+      "drawback": "DISCLOSURE: its documented uninstall script (npm run uninstall-hooks -- --apply) removes the hooks but is NOT documented as removing its on disk knowledge graph cache, so residue survives an uninstall. It also runs a background MCP process plus a gate on every file, search and shell call, so both startup and per-call overhead; it refuses or rewrites what the model sees by design; it does not separate Anthropic's own cache savings from its own effect.",
+      "quality_risk": "LOW",
+      "reversibility": "Reversible for the hooks through the documented script (npm run uninstall-hooks -- --apply); the on disk knowledge graph cache is not documented as removed by that script, so residue can remain, a fact this card discloses rather than hides.",
+      "how_measured": "usage.output_tokens_total from the profile; more tool-output volume across large reads, searches and shell calls is where this gate has more to work with, a loose proxy rather than a direct measurement of token-optimizer's own effect.",
+      "if_you_say_no": "Large file, search and shell calls keep landing in context unfiltered; nothing changes.",
+      "alternatives": [
+        "companion.rtk",
+        "companion.token-saver"
+      ],
+      "companion": null,
+      "requires_confirmation": false,
+      "source": "docs/research/2026-08-15-companion-fabric-facts.md",
+      "how": [
+        {"text": "Check whether token-optimizer is already installed.", "command": "claude plugin list"},
+        {"text": "Get the exact verified install and rollback commands before running anything.", "command": "python3 scripts/cli.py advise --recipe token-optimizer"},
+        {"text": "Install only if you accept the disclosed cache residue left behind by its uninstall script."},
+        {"text": "Watch your output token volume over the next few sessions.", "command": "python3 scripts/cli.py profile"}
       ]
     }
   ]
