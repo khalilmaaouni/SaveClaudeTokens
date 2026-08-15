@@ -398,6 +398,32 @@ def _read_local_config(path):
     return data if isinstance(data, dict) else None
 
 
+def _harden(path, mode):
+    """chmod `path` to `mode`, and SAY SO when it does not take.
+
+    Every one of these calls used to be `except OSError: pass`. Swallowing an
+    error about somebody else's bad data is this module's documented design: a
+    record that cannot be read becomes its own NO DATA row rather than killing
+    the run. Swallowing an error about OUR OWN promise not being kept is a
+    different thing. The docstrings here state that the config is 0600 and its
+    directory 0700 because they hold an org's store URL and its salt, and on a
+    filesystem where chmod does not take (a network mount, a synced folder,
+    some container overlays) the file kept the umask default while the
+    docstring went on asserting otherwise.
+
+    Best effort is still the right behaviour, so this never raises: refusing to
+    save a config because a permission could not be tightened would lose the
+    user's work over a warning. It just stops being silent. stderr, not stdout,
+    so a caller piping this command's output is unaffected."""
+    try:
+        os.chmod(path, mode)
+    except OSError as e:
+        print(f"warning: could not set permissions {oct(mode)} on "
+              f"{_display_path(path)} ({e}). It keeps whatever mode it was "
+              f"created with, which may be readable by other accounts on this "
+              f"machine.", file=sys.stderr)
+
+
 def _write_local_config(path, config):
     """Write `fleet join`'s local fleet config as JSON, private to this
     account: parent dir at 0700, file at 0600. Never raises on a chmod
@@ -407,16 +433,10 @@ def _write_local_config(path, config):
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-        try:
-            os.chmod(d, 0o700)
-        except OSError:
-            pass
+        _harden(d, 0o700)
     with open(path, "wb") as f:
         f.write((json.dumps(config, sort_keys=True, indent=2) + "\n").encode("utf-8"))
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    _harden(path, 0o600)
 
 
 def _disclosure_path(config_path):
@@ -437,16 +457,10 @@ def _write_disclosure_copy(config_path):
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-        try:
-            os.chmod(d, 0o700)
-        except OSError:
-            pass
+        _harden(d, 0o700)
     with open(path, "wb") as f:
         f.write((DISCLOSURE_TEXT + "\n").encode("utf-8"))
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    _harden(path, 0o600)
     return path
 
 
@@ -791,10 +805,7 @@ def _queue_locally(record, org, machine_id, date, queue_dir, reason):
     path = os.path.join(queue_dir, fname)
     data = (json.dumps(record, sort_keys=True, indent=2) + "\n").encode("utf-8")
     _write_bytes_no_symlink(queue_root, path, data, mode=0o600)
-    try:
-        os.chmod(queue_dir, 0o700)
-    except OSError:
-        pass
+    _harden(queue_dir, 0o700)
     print(f"warning: fleet push queued locally at {_display_path(path)} "
           f"({reason})", file=sys.stderr)
     return path

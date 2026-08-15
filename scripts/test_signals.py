@@ -556,6 +556,51 @@ def test_rollup_no_data_message_uses_tilde_for_home_not_the_account_name():
     assert "~/does-not-exist.jsonl" in err
 
 
+def test_a_permission_that_did_not_take_is_reported_and_never_loses_the_report():
+    """The outbox's two chmod calls disagreed with each other about failure.
+    The directory's was `except OSError: pass`, so a filesystem that would not
+    take 0700 left it at the umask default in silence while the docstring
+    promised otherwise. The file's was unwrapped, so the SAME filesystem
+    raised straight out of queue_report, after the report had already been
+    written to disk: the caller sees an exception and has no idea a file is
+    sitting there.
+
+    Both now warn and neither raises. A permission that could not be tightened
+    must not lose a report that already exists, and must not be silent either.
+    """
+    import contextlib
+    import io
+    real_chmod = os.chmod
+    seen = []
+
+    def _refusing_chmod(path, mode, *a, **k):
+        if mode in (0o600, 0o700):
+            seen.append((path, mode))
+            raise OSError(1, "Operation not permitted")
+        return real_chmod(path, mode, *a, **k)
+
+    with tempfile.TemporaryDirectory() as d:
+        outbox = os.path.join(d, "outbox")
+        err = io.StringIO()
+        os.chmod = _refusing_chmod
+        try:
+            with contextlib.redirect_stderr(err):
+                path = sig.queue_report({"report_date": "2026-08-15"}, outbox_dir=outbox)
+        finally:
+            os.chmod = real_chmod
+        warned = err.getvalue()
+
+        assert seen, "the fixture never intercepted a hardening chmod"
+        # The report survives. This is the half that used to raise.
+        assert os.path.isfile(path), "the queued report was lost to a chmod failure"
+        with open(path) as f:
+            assert json.load(f)["report_date"] == "2026-08-15"
+
+    assert warned.strip(), "chmod failed on the outbox and nothing was said"
+    assert "600" in warned, "the file's own permission failure was not reported"
+    assert "700" in warned, "the directory's permission failure was not reported"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

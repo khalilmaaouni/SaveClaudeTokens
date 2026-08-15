@@ -92,23 +92,48 @@ entry**: extract `scripts/config.py` at layer 0 holding `ROOT`,
 `EXPERIMENT_DAYS`, `COMPANIONS_PATH` and `load_companions`, and repoint the
 five importers at it.
 
-It is not done in the same change as this document on purpose. About 35 call
-sites across six test suites monkeypatch those symbols through their current
-owners (`dr.ts.load_companions`, `adv.ts.COMPANIONS_PATH`), and one test in
-`test_advisor.py` asserts against the literal source text
-`data = ts.load_companions(ts.COMPANIONS_PATH)`. That is a real refactor with
-a real blast radius, and it earns its own branch, its own review, and its own
-red-then-green calibration. The frozen list captures the value in the
-meantime: no new upward import can be added while the old ones are paid down.
+### Decision record: freeze the violations, do not fix them yet
 
-**Rejected alternative:** doing the extraction immediately, in the same
-session. Rejected because it is a 35-site edit across six suites landing
-beside an unmerged review round, in a session whose predecessor overran its
-token ceiling by eight percent. The ratchet captures the durable half of the
-value at a fraction of the risk.
+**Criteria, in the order they decided it.** (1) Does the option stop the
+problem growing? (2) What is its blast radius measured in call sites and test
+suites, not in feeling? (3) Does it leave the codebase honestly described, or
+does it leave a document asserting something untrue? (4) Can it be verified by
+a command rather than by reading?
 
-**Flip condition:** when a session opens with nothing owed and budget
-headroom, the extraction goes first, as its own pull request.
+**Decision.** Declare the layers, and freeze today's five upward imports by
+name in a check that refuses a sixth and refuses a stale entry.
+
+**Rejected alternative 1: extract `scripts/config.py` immediately, in the same
+change.** This is the right end state and it is scheduled. Rejected here on
+criterion 2: about 35 call sites across six test suites monkeypatch those
+symbols through their current owners (`dr.ts.load_companions`,
+`adv.ts.COMPANIONS_PATH`), and one test in `test_advisor.py` asserts against
+the literal source text `data = ts.load_companions(ts.COMPANIONS_PATH)`. That
+is a real refactor with a real blast radius, and it would have landed beside an
+unmerged review round in a session whose predecessor overran its token ceiling
+by eight percent.
+
+**Rejected alternative 2: move the modules into directories first, and sort
+the imports out afterwards.** Superficially the most visible "organise the
+architecture" move, and the one most likely to be asked for. Rejected on
+criteria 1 and 3: a directory layout is not a dependency rule. Every cycle
+would survive the move intact, `advisor` would still reach up into
+`token_shield`, and the repository would then LOOK layered while behaving
+exactly as before, which is worse than looking flat and being flat. Directories
+are cosmetic until the direction is enforced, so they are not scheduled ahead
+of the extraction.
+
+**Consequences, including the ones that cost something.** No new upward import
+can be added while the old ones are paid down, and that is enforced rather than
+asked for. The cost: five violations stay in the codebase and are now WRITTEN
+DOWN, which makes them easy to point at and easy to live with. A frozen list is
+a standing invitation to leave things frozen. The stale-entry check is the
+counterweight, because it forces the list to shrink honestly rather than
+quietly outliving its violations, but nothing forces the extraction itself to
+happen on any particular day.
+
+**Flip condition.** When a session opens with nothing owed and budget headroom,
+the extraction goes first, as its own pull request.
 
 ## What the static check cannot see
 
@@ -128,6 +153,38 @@ undocumented reads as more coverage than it has.
   `~/.token-shield/` state depend on each other's formats without importing
   anything. The record schemas (`data/fleet.schema.json`,
   `data/signals.schema.json`) are the only thing holding those contracts.
+- **Duplication the layer rule actively causes.** `fleet` and `signals` each
+  carry their own `_harden(path, mode)`, byte for byte the same idea, because
+  `signals` sits below `fleet` and importing upward is exactly what the check
+  refuses. That is the rule working, not failing: the honest fix is a
+  foundation module, which is the same extraction the frozen list is waiting
+  on, and a shared helper parked in the wrong layer would have been the
+  dishonest one. Named here so the duplication reads as a decision rather than
+  as carelessness.
+
+## Silent failures, and which ones are the design
+
+`tools/sbe_score.py`'s silent-failure lint reports 23 handlers under
+`scripts/` that swallow an error. Most of them are this codebase's central
+promise working correctly: a ledger line that will not parse, a record that
+will not read, a machine directory that will not list, each becomes its own NO
+DATA row rather than killing the page or the run for everyone else. Changing
+those would be a regression.
+
+One cluster was genuinely wrong and is fixed: the `chmod` calls that deliver
+the `0600` file and `0700` directory posture on the fleet config and the
+signals outbox were wrapped in `except OSError: pass`. Swallowing an error
+about somebody else's bad data is the design. Swallowing an error about OUR OWN
+promise not being kept is not, and the docstrings above those calls went on
+asserting a posture the code had silently failed to achieve, on files holding
+an organisation's store URL and its salt. They now warn on stderr, naming the
+path and the mode, and still never raise, because refusing to save a config
+over a permission that could not be tightened would lose the user's work.
+
+**Open, and not claimed as green:** the remaining 23 sites have no
+`# sbe: allow-silent <reason>` marker, so the lint FAILs as a gate. The correct
+disposition is one visible, reasoned marker per site, read individually rather
+than pasted, which is its own unit of work and not yet done.
 
 ## Deploying to an organisation
 
