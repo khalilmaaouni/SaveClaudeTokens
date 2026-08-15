@@ -238,8 +238,18 @@ def cmd_apply():
               f"Re-propose against the current file: python3 {os.path.basename(__file__)} "
               f"--file {path}")
         return 2
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{path}.bak-{stamp}"
+    # DEFECT 1 (security review, pre-existing data loss): the stamp used to be
+    # built here inline (f"{path}.bak-{stamp}"), which only has one-second
+    # resolution, so two applies of the same target inside the same
+    # wall-clock second collided on the identical backup filename and the
+    # second one silently overwrote the first backup on disk. The path CHOICE
+    # now goes through guided_apply.unique_backup_path (the same helper
+    # backup_file uses), which bumps a numeric suffix until it finds a path
+    # that is not already taken. The write itself stays exactly as it was:
+    # from 'original', the string already read and verified against
+    # current_hash above, never a re-read of path, which would reopen the
+    # window between that staleness check and the backup.
+    backup = guided_apply.unique_backup_path(path)
     with open(backup, "w") as f:
         f.write(original)
     # T6.1: journal this backup too. This is the flagship mutation (the
@@ -487,7 +497,14 @@ def main():
     if a.guided_apply:
         return cmd_guided_apply(a.file)
     if a.apply:
-        return cmd_apply()
+        # DEFECT 4: the plain --apply route never went through guided_apply's
+        # apply() (that is cmd_guided_apply's job, see --guided-apply above),
+        # so _current_producer stayed at its module-default "unknown" and
+        # every journal line for a hand-run --apply recorded producer:
+        # "unknown", the exact path a person actually runs by hand. Wrap it
+        # in the same producer_scope guided_apply.apply() uses internally.
+        with guided_apply.producer_scope("claude-md-diet-apply"):
+            return cmd_apply()
     return cmd_propose(a.file)
 
 

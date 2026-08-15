@@ -244,27 +244,23 @@ def test_journal_line_carries_every_required_field():
 
 
 def test_second_mutation_appends_never_overwrites():
-    # T6.1/done-check: a second mutation of the SAME target must add a
-    # second line and leave the first line, including its backup path and
-    # pre hash, exactly as it was, rather than the .sha256-file pattern of
-    # one record per target that a later mutation overwrites.
-    # backup_file's own stamp (time.strftime("%Y%m%d-%H%M%S")) only has
-    # one-second resolution, so two calls inside the same wall-clock second
-    # collide on the same backup filename; that is a pre-existing property
-    # of backup_file, unrelated to the journal, and out of this task's scope
-    # to change. Faking the stamp here removes that timing flakiness from
-    # THIS test without touching backup_file itself.
+    # T6.1/done-check + DEFECT 1 (T6.1 security review, pre-existing data
+    # loss): a second mutation of the SAME target must add a second line and
+    # leave the first line, including its backup path and pre hash, exactly
+    # as it was, rather than the .sha256-file pattern of one record per
+    # target that a later mutation overwrites.
+    # This used to fake time.strftime to force two distinct stamps, because
+    # backup_file's own stamp only has one-second resolution and two calls
+    # inside the same wall-clock second collided on the same backup filename
+    # (DEFECT 1: the second backup_file call then silently overwrote the
+    # FIRST backup's content on disk, losing the earlier version entirely,
+    # while the journal still held two lines pointing at that one surviving
+    # file with two different pre_hash values). That faking hid the exact
+    # bug it should have caught. No faking now: two real, back-to-back
+    # backup_file calls exercise the actual collision path, and
+    # unique_backup_path's numeric-suffix fix is what keeps them apart.
     with tempfile.TemporaryDirectory() as td:
         saved = _point_journal_at(td)
-        real_strftime = ga.time.strftime
-        stamps = iter(["20260101-000000", "20260101-000001"])
-
-        def fake_strftime(fmt, *args):
-            if fmt == "%Y%m%d-%H%M%S" and not args:
-                return next(stamps)
-            return real_strftime(fmt, *args)
-
-        ga.time.strftime = fake_strftime
         try:
             target = os.path.join(td, "CLAUDE.md")
             with open(target, "w") as f:
@@ -274,6 +270,13 @@ def test_second_mutation_appends_never_overwrites():
                 f.write("version two\n")
             backup2 = ga.backup_file(target)
             check("the two backups are different files", backup1 != backup2)
+            with open(backup1) as f:
+                check("the first backup still holds the FIRST version's content "
+                      "(not clobbered by the second backup)",
+                      f.read() == "version one\n")
+            with open(backup2) as f:
+                check("the second backup holds the second version's content",
+                      f.read() == "version two\n")
             with open(ga.MUTATIONS_LOG) as f:
                 lines = [json.loads(l) for l in f if l.strip()]
             check("two mutations of the same target produce two journal lines",
@@ -289,8 +292,34 @@ def test_second_mutation_appends_never_overwrites():
             check("the second line's pre_hash is the hash of version two",
                   lines[1]["pre_hash"] == ga.sha256_text("version two\n"))
         finally:
-            ga.time.strftime = real_strftime
             _restore_journal(saved)
+
+
+def test_unique_backup_path_avoids_collision_on_the_same_stamp():
+    # DEFECT 1 core fix, unit-level: unique_backup_path must never return a
+    # path that already exists on disk, even when called twice with the
+    # IDENTICAL stamp, which is exactly the real-world case (two backups of
+    # the same target inside one wall-clock second; time.strftime only has
+    # one-second resolution).
+    with tempfile.TemporaryDirectory() as td:
+        target = os.path.join(td, "CLAUDE.md")
+        stamp = "20260101-120000"
+        p1 = ga.unique_backup_path(target, stamp)
+        check("the first call follows the plain '<path>.bak-<stamp>' shape",
+              p1 == target + ".bak-" + stamp)
+        with open(p1, "w") as f:
+            f.write("already here")
+        p2 = ga.unique_backup_path(target, stamp)
+        check("a second call with the SAME stamp returns a DIFFERENT path",
+              p1 != p2)
+        check("the second path is not already on disk", not os.path.exists(p2))
+        # And a third call, with p2 also now taken, must keep bumping rather
+        # than looping back to a taken path.
+        with open(p2, "w") as f:
+            f.write("also here")
+        p3 = ga.unique_backup_path(target, stamp)
+        check("a third call keeps bumping past both taken paths",
+              p3 not in (p1, p2) and not os.path.exists(p3))
 
 
 def test_apply_journals_the_guided_apply_label_as_producer():
@@ -376,6 +405,166 @@ def test_journal_write_failure_does_not_block_the_apply_but_is_reported():
             check("the failure was reported to stderr, not silently skipped",
                   "WARNING" in captured.getvalue() and
                   "mutation journal" in captured.getvalue())
+        finally:
+            _restore_journal(saved)
+
+
+def test_backup_records_absolute_normalised_target_even_when_input_is_relative():
+    # DEFECT 2 (T6.1 security review): the journal used to record whatever
+    # path string a caller handed it verbatim. Running --apply with a
+    # relative --file (e.g. "CLAUDE.md") journaled a relative target; an undo
+    # run later from a different working directory would resolve that
+    # relative path against the WRONG directory and hit the wrong file (or no
+    # file at all). backup_file/journal_mutation must always record an
+    # absolute, normalised path, for both target and backup_path.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        cwd = os.getcwd()
+        try:
+            os.chdir(td)
+            with open("CLAUDE.md", "w") as f:
+                f.write("content\n")
+            expected_target = os.path.join(os.getcwd(), "CLAUDE.md")
+            ga.backup_file("CLAUDE.md")
+            with open(ga.MUTATIONS_LOG) as f:
+                record = json.loads(f.readline())
+            check("the journaled target is an absolute path",
+                  os.path.isabs(record["target"]))
+            check("the journaled target resolves to the real file, not a "
+                  "cwd-relative fragment", record["target"] == expected_target)
+            check("the journaled backup_path is also absolute",
+                  os.path.isabs(record["backup_path"]))
+        finally:
+            os.chdir(cwd)
+            _restore_journal(saved)
+
+
+def test_journal_mutation_also_normalises_a_relative_target():
+    # DEFECT 2, the journal_mutation() entry point (optimize.cmd_apply's own
+    # inline-backup path uses this one, not backup_file), same fix.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        cwd = os.getcwd()
+        try:
+            os.chdir(td)
+            expected_target = os.path.join(os.getcwd(), "CLAUDE.md")
+            ga.journal_mutation("CLAUDE.md", "somehash", "CLAUDE.md.bak-x",
+                                producer="test")
+            with open(ga.MUTATIONS_LOG) as f:
+                record = json.loads(f.readline())
+            check("journal_mutation also records an absolute target",
+                  record["target"] == expected_target)
+            check("journal_mutation also records an absolute backup_path",
+                  os.path.isabs(record["backup_path"]))
+        finally:
+            os.chdir(cwd)
+            _restore_journal(saved)
+
+
+def test_backup_if_exists_journals_creation_when_the_file_is_new():
+    # DEFECT 3 (T6.1 security review): optimize.py and memory_trim.py call
+    # backup_if_exists right before writing claude-history.md /
+    # memory-archive.md for the first time. backup_if_exists returned None
+    # for a file that did not exist yet and wrote NOTHING to the journal, so
+    # an apply that CREATED a file left no record at all; a later undo driven
+    # from the journal would not know to delete that file and would silently
+    # leave it behind.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "claude-history.md")
+            check("sanity: the target does not exist yet", not os.path.exists(target))
+            result = ga.backup_if_exists(target)
+            check("backup_if_exists still returns None for a brand new file",
+                  result is None)
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = [json.loads(l) for l in f if l.strip()]
+            check("a journal line was written even though nothing existed to back up",
+                  len(lines) == 1)
+            record = lines[0]
+            check("the created record names the target", record["target"] == target)
+            check("the created record carries no backup path (nothing was backed up)",
+                  record["backup_path"] is None)
+            check("the created record carries no pre hash (nothing existed to hash)",
+                  record["pre_hash"] is None)
+            check("the created record is marked as a creation, not a normal mutation",
+                  record.get("created") is True)
+        finally:
+            _restore_journal(saved)
+
+
+def test_backup_if_exists_still_backs_up_normally_when_the_file_already_exists():
+    # The other half of the DEFECT 3 fix must not regress: an existing file
+    # still gets a real backup and a normal (non-creation) journal line.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "claude-history.md")
+            with open(target, "w") as f:
+                f.write("already here\n")
+            result = ga.backup_if_exists(target)
+            check("an existing file still gets backed up (non-None return)",
+                  result is not None)
+            check("the backup file exists on disk", os.path.exists(result))
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = [json.loads(l) for l in f if l.strip()]
+            check("exactly one journal line for the existing-file case", len(lines) == 1)
+            check("the existing-file case is NOT marked as a creation",
+                  lines[0].get("created") is False)
+            check("the existing-file case still carries a real backup_path",
+                  lines[0]["backup_path"] is not None)
+        finally:
+            _restore_journal(saved)
+
+
+def test_nested_apply_restores_the_outer_producer_label():
+    # DEFECT 4, second half (T6.1 security review): apply() used to hardcode
+    # _current_producer back to the literal "unknown" in its finally clause
+    # instead of restoring whatever it was set to before, so an apply() call
+    # nested inside code that had already set a producer (an apply nested
+    # inside another apply's mutate_fn) lost the outer label the moment the
+    # inner one returned.
+    with tempfile.TemporaryDirectory() as td:
+        saved_exp = _point_exp_at(td)
+        saved_journal = _point_journal_at(td)
+        real_cmd_start = ex.cmd_start
+        ex.cmd_start = lambda label, root, days, now_ts, treats, metric=None: 0
+        try:
+            with ga.producer_scope("outer-label"):
+                check("the outer scope set the producer", ga._current_producer == "outer-label")
+                rc, msg = ga.apply("inner-label", None, lambda: 0, lambda: (True, "ok"))
+                check("the nested apply succeeded", rc == 0)
+                check("producer restores to the OUTER label, not the hardcoded "
+                      "'unknown', once the nested apply() returns",
+                      ga._current_producer == "outer-label")
+            check("producer restores to 'unknown' once the outer scope itself exits",
+                  ga._current_producer == "unknown")
+        finally:
+            ex.cmd_start = real_cmd_start
+            _restore_exp(saved_exp)
+            _restore_journal(saved_journal)
+
+
+def test_journal_write_survives_a_non_serialisable_field():
+    # DEFECT 5 (T6.1 security review): the journal write used to catch only
+    # OSError. json.dumps raises TypeError, not OSError, when a field cannot
+    # be serialised (e.g. a set() sneaking in as pre_hash). Before the fix
+    # that TypeError propagated uncaught and crashed the caller, well after
+    # the real mutation/backup had already happened; it must degrade to the
+    # same WARNING-on-stderr path OSError already takes.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "CLAUDE.md")
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                ga.journal_mutation(target, {1, 2, 3}, None, producer="test")
+            check("the failure was reported to stderr, not raised",
+                  "WARNING" in captured.getvalue() and
+                  "mutation journal" in captured.getvalue())
+            check("nothing was written to the journal for the failed line",
+                  not os.path.exists(ga.MUTATIONS_LOG)
+                  or open(ga.MUTATIONS_LOG).read() == "")
         finally:
             _restore_journal(saved)
 
