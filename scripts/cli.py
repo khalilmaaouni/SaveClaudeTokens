@@ -117,6 +117,43 @@ def _print_verified_rows(rows, indent):
         print(f"{indent}{label:<26} {fr:+,}  {tail}")
 
 
+def state_line(verified):
+    """The one top line state, as "STATE: <state> (<reason>)".
+
+    Read through metrics.command_center_state and NEVER recomputed here. That
+    function is the single source of truth for which of the four states shows,
+    so the terminal, the dashboard panel and any later surface all say the same
+    thing on the same day. A second copy of the priority order in this file is
+    exactly the drift the state model memo exists to prevent.
+
+    Every primitive is gathered defensively and degrades to a value the state
+    function already handles: advise_result of None returns NO DATA rather than
+    raising, which mirrors token_shield.py's own "degrade, do not take the
+    render down" shape at its main() (lines 1115 to 1132). This line is the
+    FIRST thing summary() prints, so it must never be the thing that stops the
+    command running.
+    """
+    open_experiments = []
+    advise_result = None
+    strategy_count = 0
+    try:
+        open_experiments = ex.list_open_experiments() or []
+    except (OSError, ValueError) as e:
+        print(f"note: open experiments not read ({e})", file=sys.stderr)
+    try:
+        import advisor as adv
+        profile = met.load_profile(adv.PROFILE_PATH)
+        if profile is not None:
+            strategies = adv.load_strategies()
+            strategy_count = len(strategies)
+            advise_result = adv.advise(profile, adv.load_treatments(), strategies)
+    except (OSError, ValueError, ImportError) as e:
+        print(f"note: advisor skipped ({e})", file=sys.stderr)
+    state, reason = met.command_center_state(
+        open_experiments, advise_result, verified, strategy_count)
+    return f"STATE: {state} ({reason})"
+
+
 def summary(days=30):
     if not os.path.isdir(ROOT):
         print("NO DATA: no Claude Code transcripts found.")
@@ -143,6 +180,10 @@ def summary(days=30):
     tool = max((r["saving"] for r in rx), default=0)
     ver = _verified_by_label()
 
+    # The state line goes FIRST, before the product's own name, because it is
+    # the one sentence that tells the user whether anything below it can be
+    # trusted. A NO DATA state above a wall of numbers is the whole point.
+    print(state_line(ver))
     print("Token Shield")
     if ver:
         print("  VERIFIED     latest measured floor change per experiment "
