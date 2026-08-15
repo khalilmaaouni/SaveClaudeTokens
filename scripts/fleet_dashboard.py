@@ -222,7 +222,17 @@ def _load_one(path):
         return None, str(e)
     except Exception as e:
         return None, f"unreadable record: {type(e).__name__}: {e}"
-    shape_error = _validate_record_shape(record)
+    try:
+        shape_error = _validate_record_shape(record)
+    except Exception as e:
+        # Inside the try, not after it. The broad handler above exists because
+        # a shared store is attacker controlled, but validation was called
+        # OUTSIDE its reach, so anything the validator itself raised still
+        # killed the whole org page instead of this one machine's row.
+        # Demonstrated with a counter of 10**400: math.isfinite raises
+        # OverflowError ("int too large to convert to float") on an int too
+        # big for a float, at 401 bytes, far under the size cap.
+        return None, f"unreadable record: {type(e).__name__}: {e}"
     if shape_error:
         return None, shape_error
     return record, None
@@ -259,6 +269,18 @@ def collect_org(store_dir, org):
     org_dir = os.path.join(store_dir, "fleet", org)
     rows = []
     empty_machines = []
+    # Refuse a symlink AT or ABOVE the org directory, not only below it.
+    # _refuse_symlinks_under walks components strictly below its root, so
+    # passing org_dir as the root left fleet/<org> and fleet/ themselves
+    # unchecked: making fleet/<org> a symlink pointed the whole reader at an
+    # arbitrary directory outside the store and rendered it with no refusal.
+    # os.path.isdir follows symlinks, so this check has to come first.
+    try:
+        fl._refuse_symlinks_under(store_dir, org_dir)
+    except fl.FleetSymlinkError as e:
+        rows.append({"machine_id": org, "date": None, "record": None,
+                     "error": f"refusing to read: {e}"})
+        return rows, empty_machines
     if not os.path.isdir(org_dir):
         return rows, empty_machines
     for machine_id in sorted(os.listdir(org_dir)):
@@ -412,6 +434,17 @@ def latest_experiment_by_label(healthy_rows):
             if not isinstance(item, dict):
                 continue
             entry = dict(item)
+            # label and confidence are attacker supplied and are used as a
+            # dict key, a set member and a sort key below. A list or dict
+            # there raised "unhashable type", and a number beside a string
+            # raised "'<' not supported between 'str' and 'int'", either of
+            # which killed the whole org page rather than this one record.
+            # Coerced here, where the entry is built, so no downstream user
+            # of these two fields has to remember.
+            label = entry.get("label")
+            entry["label"] = label if isinstance(label, str) else "(unlabeled)"
+            conf = entry.get("confidence")
+            entry["confidence"] = conf if isinstance(conf, str) else "NO DATA"
             entry["machine_id"] = r["machine_id"]
             items.append(entry)
 
@@ -630,7 +663,11 @@ def main():
                else ts.render_standalone(body, title=f"Token Shield Fleet: {a.org}"))
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-    with open(out, "w") as f:
+    # encoding pinned: the page declares <meta charset="utf-8">, but a plain
+    # open() encodes with the locale's codec, so under LC_ALL=C (cron,
+    # launchd, CI, ssh without LANG) one non-ASCII byte anywhere in the store
+    # raised UnicodeEncodeError and left a zero byte page.
+    with open(out, "w", encoding="utf-8") as f:
         f.write(out_html)
     print(f"written: {out}")
     return 0
