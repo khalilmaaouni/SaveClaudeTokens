@@ -1119,6 +1119,40 @@ def test_list_open_experiments_fails_closed_on_unreadable_or_corrupt_baseline():
             ex.EXP_DIR, ex.LEDGER = saved_exp_dir, saved_ledger
 
 
+def test_a_cohort_that_skipped_files_or_lines_is_not_proven():
+    """A VERIFIED verdict could be manufactured entirely by parse failures.
+
+    This module's cohort reader mirrors measure_tokens.read_session but
+    copied only its two skip handlers, not the counter increments that go
+    with them, so an unreadable transcript or a truncated line vanished
+    without trace. A dropped FIRST line is the sharp end: it promotes a
+    cheap mid-conversation turn to "first request", which is the exact
+    number this verdict compares. The reviewer produced a clean VERIFIED
+    with a 39,750 token saving from five transcripts whose content had not
+    changed at all.
+
+    RED before the fix: reasons == [] and confidence == VERIFIED with
+    skipped files and lines on the after cohort."""
+    after = _after(fr=60000)
+    after["_skipped_files"] = 1
+    after["_skipped_lines"] = 2
+    rec = ex.build_record(_baseline(fr=80000), after, "2026-08-30T00:00:00")
+    check("a cohort with skipped input is not VERIFIED",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the skip is named as the reason, with its counts",
+          any("skipped 1 unreadable file(s) and 2 undecodable line(s)" in r
+              for r in rec["reasons"]))
+
+    # The mirror case, so the guard cannot degenerate into downgrading
+    # everything: a cohort that skipped nothing still reaches VERIFIED.
+    clean = _after(fr=60000)
+    clean["_skipped_files"] = 0
+    clean["_skipped_lines"] = 0
+    rec_ok = ex.build_record(_baseline(fr=80000), clean, "2026-08-30T00:00:00")
+    check("a cohort that skipped nothing is still VERIFIED",
+          rec_ok["confidence"] == "VERIFIED")
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):

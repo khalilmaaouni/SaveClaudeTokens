@@ -313,6 +313,11 @@ def _read_session_cohort(fp, start_ts, end_ts):
     try:
         fh = open(fp, "r", errors="ignore")
     except OSError:
+        # Counted, not swallowed. This mirror of measure_tokens.read_session
+        # copied its two skip handlers but dropped the counter increments that
+        # go with them, so an unreadable transcript vanished from a cohort
+        # without trace and the verdict never knew a file was missing.
+        mt.SKIP_COUNTS["files"] += 1
         return None
     with fh:
         for line in fh:
@@ -320,7 +325,12 @@ def _read_session_cohort(fp, start_ts, end_ts):
                 continue
             try:
                 rec = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError, ValueError):
+                # A truncated line is the common case: Claude Code was still
+                # writing. Dropping the FIRST line silently promoted a cheap
+                # mid-conversation turn to "first request", which is how a
+                # parse failure turned into a proven floor reduction.
+                mt.SKIP_COUNTS["lines"] += 1
                 continue
             ts = _parse_ts(rec.get("timestamp"))
             msg = rec.get("message") or {}
@@ -402,6 +412,10 @@ def collect_cohort(root, start_ts, end_ts):
     window, across every transcript under root. A file's mtime can only be
     older than the last record it holds, so files untouched since start_ts
     cannot contain a record inside the window and are skipped."""
+    # Reset so the counts describe THIS cohort walk, not a running total
+    # across both cohorts and every earlier call in the process.
+    mt.SKIP_COUNTS["files"] = 0
+    mt.SKIP_COUNTS["lines"] = 0
     out = []
     for fp in mt.iter_session_files(root, start_ts):
         s = _read_session_cohort(fp, start_ts, end_ts)
@@ -459,6 +473,21 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
     if (after_sm.get("parent_sessions") or 0) < MIN_SESSIONS:
         reasons.append(f"only {after_sm.get('parent_sessions')} sessions after the change, "
                        f"need {MIN_SESSIONS}")
+
+    # A cohort assembled from a partly unreadable tree is not evidence: a
+    # dropped file removes whole sessions from a median, and a dropped FIRST
+    # line promotes a cheap mid-conversation turn to "first request". Both
+    # move the exact number the verdict compares, so a skip on either side is
+    # a downgrade rather than a footnote. The reviewer demonstrated a clean
+    # VERIFIED with a 39,750 token "saving" produced entirely this way, from
+    # five transcripts whose content had not changed at all.
+    for side, cohort in (("before", b), ("after", after_sm)):
+        sf = (cohort or {}).get("_skipped_files") or 0
+        sl = (cohort or {}).get("_skipped_lines") or 0
+        if sf or sl:
+            reasons.append(
+                f"the {side} cohort skipped {sf} unreadable file(s) and "
+                f"{sl} undecodable line(s): the comparison is missing data")
 
     fp_start = baseline.get("fingerprint_start")
     fp_method = baseline.get("fingerprint_method")
@@ -631,8 +660,14 @@ def aggregate_by_label(records):
 
 def _measure_cohort(root, start_ts, end_ts, days):
     sessions = collect_cohort(root, start_ts, end_ts)
+    skipped = mt.skip_counts()
     sm = mt.summarize(sessions) or {}
     sm = dict(sm)
+    # Carried onto the cohort so build_record can downgrade on it. A cohort
+    # assembled from a partly unreadable tree is not evidence: dropped files
+    # and dropped lines both change the very medians the verdict compares.
+    sm["_skipped_files"] = skipped.get("files", 0)
+    sm["_skipped_lines"] = skipped.get("lines", 0)
     sm["_window_days"] = days
     sm["_cohort_start_ts"] = start_ts
     sm["_cohort_end_ts"] = end_ts
