@@ -86,7 +86,7 @@ def _verified_by_label():
             try:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                continue  # sbe: allow-silent a ledger line that will not parse is skipped so one corrupt line cannot hide every verified experiment on the machine
     # Newest row per label FIRST (the shared rule), THEN the VERIFIED filter.
     # Reversed, as it was, a later NOT_PROVEN run did not supersede an earlier
     # VERIFIED one, so this kept reporting a proven saving for a claim the
@@ -210,7 +210,7 @@ def _version():
         with open(manifest, encoding="utf-8") as f:
             version = json.load(f).get("version")
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent a manifest that will not read means the version is unknown, and main() prints NO DATA naming the file rather than a made-up version string
     return version if isinstance(version, str) and version else None
 
 

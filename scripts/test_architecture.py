@@ -203,6 +203,63 @@ def test_the_import_cycles_are_the_ones_the_frozen_list_explains():
             f"tangle rather than the known one")
 
 
+def test_every_silent_handler_states_why_it_is_silent():
+    """A handler that catches an error and then only `pass`, `continue` or
+    `return None` has decided that losing the error is correct. Usually it IS
+    correct here: a ledger line that will not parse is skipped so one corrupt
+    line cannot hide every other record, which is this codebase's central
+    promise. But "correct" and "nobody thought about it" look identical in
+    source, and the difference is the whole point.
+
+    So every such handler carries `# sbe: allow-silent <reason>` on the
+    swallowing statement, and this refuses a new one that does not. The marker
+    is the same one tools/sbe_score.py's lint reads, so annotating for that
+    external gate and satisfying this one are the same act; this check exists
+    so the property holds for anyone who does not have that tool installed.
+
+    Reasons are not policed for quality here, only for presence and for not
+    being empty. What a reason is worth is a review question, and pretending a
+    string check settles it would be the kind of false assurance this file was
+    written against.
+
+    Deliberately NOT a general lint: this is the one swallow shape that has
+    actually cost this repository data, and it is the shape a new one is most
+    likely to take."""
+    bad = []
+    for name, paths in _modules().items():
+        for path in paths:
+            with open(path, encoding="utf-8") as f:
+                src = f.read()
+            lines = src.splitlines()
+            for node in ast.walk(ast.parse(src, filename=path)):
+                if not isinstance(node, ast.ExceptHandler):
+                    continue
+                body = node.body
+                if len(body) != 1:
+                    continue
+                stmt = body[0]
+                silent = (isinstance(stmt, (ast.Pass, ast.Continue))
+                          or (isinstance(stmt, ast.Return)
+                              and (stmt.value is None
+                                   or (isinstance(stmt.value, ast.Constant)
+                                       and stmt.value.value is None))))
+                if not silent:
+                    continue
+                span = lines[node.lineno - 1:stmt.lineno]
+                marked = [ln for ln in span if "sbe: allow-silent" in ln]
+                if not marked:
+                    bad.append(f"{os.path.basename(path)}:{stmt.lineno} has no reason")
+                    continue
+                reason = marked[0].split("sbe: allow-silent", 1)[1].strip()
+                if len(reason) < 12:
+                    bad.append(f"{os.path.basename(path)}:{stmt.lineno} reason is empty or a stub: "
+                               f"{reason!r}")
+    assert not bad, (
+        "silent handler(s) with no stated reason: " + "; ".join(bad) +
+        ". Add `# sbe: allow-silent <why losing this error is correct>` on the "
+        "swallowing line, or stop swallowing it.")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

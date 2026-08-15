@@ -71,7 +71,7 @@ def discover():
             return None
         entries = json.loads(r.stdout)
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        return None
+        return None  # sbe: allow-silent the plugin CLI missing, failing or answering with non-JSON means discovery has nothing to report, and the caller prints NO DATA rather than an empty list read as none installed
     rows = []
     for e in entries:
         name = e.get("id", "").split("@")[0]
@@ -93,7 +93,7 @@ def hook_footprint_of(name):
         if r.returncode != 0:
             return None
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None  # sbe: allow-silent same CLI, same rule: no answer is NO DATA at the caller, never a claim that the thing is absent
     for line in r.stdout.splitlines():
         line = line.strip()
         if not line.startswith("Hooks ("):
@@ -331,7 +331,7 @@ def discover_declarations(cache_root=None, companions_path=None, live=None):
         try:
             plugins = sorted(os.listdir(mpath))
         except OSError:
-            continue
+            continue  # sbe: allow-silent an unreadable marketplace directory contributes no companion instead of failing discovery for every other one
         for plugin in plugins:
             ppath = os.path.join(mpath, plugin)
             if not os.path.isdir(ppath):
@@ -339,7 +339,7 @@ def discover_declarations(cache_root=None, companions_path=None, live=None):
             try:
                 versions = sorted(os.listdir(ppath))
             except OSError:
-                continue
+                continue  # sbe: allow-silent same: an unreadable plugin directory drops that plugin from discovery, never the whole scan
             for version in versions:
                 decl_path = os.path.join(ppath, version, INTEGRATION_FILENAME)
                 if os.path.isfile(decl_path):

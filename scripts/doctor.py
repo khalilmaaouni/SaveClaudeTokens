@@ -67,7 +67,7 @@ def _load_state(path=None):
         with open(path) as f:
             return json.load(f)
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent an unreadable JSON file becomes NO DATA in doctor's own report, which is what doctor exists to print honestly
 
 
 def _ensure_fresh_state():
@@ -114,7 +114,7 @@ def _parse_date(s):
     try:
         return datetime.date(*(int(p) for p in s.split("-")))
     except (ValueError, TypeError, AttributeError):
-        return None
+        return None  # sbe: allow-silent an unparseable date is NO DATA; the caller skips the staleness comparison rather than guessing a date and calling something stale
 
 
 def _staleness_lines(companions, today=None):
@@ -325,7 +325,7 @@ def _open_experiments(exp_dir=None):
             with open(os.path.join(exp_dir, fname)) as f:
                 baseline = json.load(f)
         except (OSError, ValueError):
-            continue
+            continue  # sbe: allow-silent one unreadable baseline file is skipped so a single corrupt experiment cannot empty doctor's whole view of open experiments
         label = baseline.get("label")
         started = baseline.get("started")
         if label and started:
@@ -345,7 +345,7 @@ def _parse_iso_utc(s):
     try:
         return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
     except ValueError:
-        return None
+        return None  # sbe: allow-silent an unparseable timestamp becomes NO DATA at the caller, which is what doctor prints, rather than a guessed date
 
 
 def _spanning_warning_lines(open_experiments, drifted):

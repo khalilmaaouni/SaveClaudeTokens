@@ -81,7 +81,7 @@ def saving_by_model(root, days):
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
-                    continue
+                    continue  # sbe: allow-silent a transcript line that will not parse is skipped so one corrupt line cannot zero the whole priced saving
                 msg = rec.get("message") or {}
                 usage = msg.get("usage") or rec.get("usage")
                 if not isinstance(usage, dict):

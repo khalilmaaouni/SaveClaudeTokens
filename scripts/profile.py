@@ -83,7 +83,7 @@ def _file_bytes(path):
     try:
         return os.path.getsize(path)
     except OSError:
-        return None
+        return None  # sbe: allow-silent an unreadable file has no size to report; the caller treats None as NO DATA rather than counting it as zero bytes
 
 
 def _file_metric(path, what):
@@ -140,7 +140,7 @@ def _raw_scan(root, cutoff):
                 da = datetime.datetime.fromisoformat(a.replace("Z", "+00:00"))
                 db = datetime.datetime.fromisoformat(b.replace("Z", "+00:00"))
             except ValueError:
-                continue
+                continue  # sbe: allow-silent an unparseable timestamp drops that one session from the gap calculation rather than fabricating a gap for it
             gap = (db - da).total_seconds()
             if gap < 0 or gap > 12 * 3600:
                 continue  # negative: clock skew. over 12h: a day boundary, not an idle wait.
@@ -311,7 +311,7 @@ def _pressure_scan(root, cutoff):
                 try:
                     key = (name, json.dumps(block.get("input"), sort_keys=True))
                 except TypeError:
-                    continue
+                    continue  # sbe: allow-silent a tool input that will not serialise cannot be keyed for duplicate detection, so that one call is not counted as a repeat rather than being counted as a false one
                 seen_calls[key] = seen_calls.get(key, 0) + 1
 
         for (name, _input_json), count in seen_calls.items():

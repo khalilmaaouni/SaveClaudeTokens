@@ -109,7 +109,7 @@ def parse_session(path):
     try:
         fh = open(path, "r", errors="ignore")
     except OSError:
-        return None
+        return None  # sbe: allow-silent a transcript this process cannot open is reported as unreadable by the caller, which counts it, rather than being read as an empty file
 
     with fh:
         for line in fh:
@@ -118,7 +118,7 @@ def parse_session(path):
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                continue  # sbe: allow-silent a corrupt line is skipped and counted by the caller's own skip counter, which reconcile prints
             message = rec.get("message") or {}
             usage = message.get("usage") or rec.get("usage")
             if not isinstance(usage, dict):
@@ -170,7 +170,7 @@ def collect_own(root, days):
         try:
             mtime = path.stat().st_mtime
         except OSError:
-            continue
+            continue  # sbe: allow-silent a file whose mtime vanished between listing and stat is out of the window rather than assumed inside it
         if mtime < cutoff:
             continue
         s = parse_session(path)
@@ -250,7 +250,7 @@ def parse_measure_tokens_output(text):
                 if int(models_field) > 1:
                     multi += 1
             except ValueError:
-                continue
+                continue  # sbe: allow-silent this parses another command's fixed-width text output; a non-numeric models column is a row this comparison cannot use, not a zero
         result["multi_model_count"] = multi
 
     return result

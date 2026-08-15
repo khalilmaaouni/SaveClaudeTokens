@@ -370,7 +370,7 @@ def _plugin_version():
         with open(PLUGIN_MANIFEST_PATH) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent an unreadable plugin manifest means the version is unknown; the record simply omits it rather than carrying a fabricated one off the machine
     v = data.get("version")
     return v if isinstance(v, str) and v else None
 
@@ -394,7 +394,7 @@ def _read_local_config(path):
         with open(path) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent an unreadable local config means this machine has not joined an org as far as every caller is concerned, which is the safe reading, not a partial join
     return data if isinstance(data, dict) else None
 
 
@@ -484,7 +484,7 @@ def _day_counters(ledger_path, day):
             w1 = float(row.get("cache_write_1h") or 0)
             wu = float(row.get("cache_write_unsplit") or 0)
         except (TypeError, ValueError):
-            continue
+            continue  # sbe: allow-silent a telemetry row whose counters are not numbers contributes nothing to the day's totals rather than a coerced zero that would understate real usage
         if inp == 0 and out == 0 and rd == 0 and w5 == 0 and w1 == 0 and wu == 0:
             continue
         seen = True
@@ -520,7 +520,7 @@ def _day_experiments(exp_ledger_path, day):
             try:
                 rec = json.loads(line, parse_constant=sig._reject_non_finite_constant)
             except (json.JSONDecodeError, ValueError):
-                continue
+                continue  # sbe: allow-silent a corrupt or non-finite telemetry line is skipped so one bad line cannot poison a whole day's record before it is pushed
             if not isinstance(rec, dict):
                 continue
             ts = rec.get("timestamp")
@@ -700,7 +700,7 @@ def _has_staged_changes(clone_dir):
                               cwd=clone_dir, capture_output=True, text=True,
                               timeout=GIT_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None  # sbe: allow-silent git missing or timing out is not an answer about whether anything is staged; the caller treats None as unknown and falls through to its own safe path
     if proc.returncode == 0:
         return False
     if proc.returncode == 1:
@@ -952,13 +952,13 @@ def _parse_queued_name(path):
         rest, date = stem.rsplit("__", 1)
         org, machine_id = rest.rsplit("__", 1)
     except ValueError:
-        return None
+        return None  # sbe: allow-silent a queue filename that does not split into org and machine is not a queued record; the caller skips it by name rather than crashing the drain
     try:
         _validate_org(org)
         _validate_machine_id(machine_id)
         _validate_day(date)
     except FleetValidationError:
-        return None
+        return None  # sbe: allow-silent a queue filename whose date is not a real day is not a queued record, for the same reason
     return org, machine_id, date
 
 
@@ -1035,7 +1035,7 @@ def _fetch_org_profile(store_url):
             with open(profile_path) as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            return None
+            return None  # sbe: allow-silent an unreadable org profile means the org's settings are unknown, and the caller refuses rather than proceeding on assumed defaults
         return data if isinstance(data, dict) else None
 
 

@@ -148,7 +148,7 @@ def _parse_ts(s):
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
     except ValueError:
-        return None
+        return None  # sbe: allow-silent an unparseable ISO timestamp becomes NO DATA at the caller rather than a guessed time the cohort maths would trust
 
 
 def fingerprint_files():
@@ -160,7 +160,7 @@ def fingerprint_files():
     try:
         files += glob.glob(os.path.join(SKILLS_DIR, "**", "SKILL.md"), recursive=True)
     except OSError:
-        pass
+        pass  # sbe: allow-silent NARROWING, stated: an unreadable skills directory leaves the fingerprint built from the three named config files only, so a skill edit during the window would go undetected and the config guard is weaker, not absent. glob swallows most errors itself, so this path is near unreachable; the three files still fingerprint
     return sorted(set(files))
 
 
@@ -867,7 +867,7 @@ def list_open_experiments(exp_dir=None, ledger=None):
                 try:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
-                    continue
+                    continue  # sbe: allow-silent a corrupt ledger line is skipped so one bad line cannot hide every other experiment record
                 label = rec.get("label")
                 end = (rec.get("cohort_before") or {}).get("end")
                 # D8. This used to require `end is not None` as well, which
@@ -920,7 +920,7 @@ def cmd_report():
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                continue  # sbe: allow-silent same ledger, same rule: one unparseable line must not empty the report
     if not records:
         print("NO DATA: ledger carries no readable records.")
         return 2

@@ -143,7 +143,7 @@ def load_state(path=None):
         with open(path) as f:
             return json.load(f)
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent an unreadable registry means describe() refuses every companion by name, which is the documented contract, rather than answering from a default
 
 
 def report(name, companions_path=None, state=None):
