@@ -1443,12 +1443,43 @@ def test_dashboard_renders_proving_panel():
     assert panel, html
     body = panel.group(1)
     assert "diet-claude-md" in body, body
-    assert "day 8 of 7" in body, body
+    assert "day 8 of 7" not in body, body
+    assert "closed" in body.lower(), body
+    assert "1 day ago" in body, body
+    assert "experiment end" in body, body
+    assert "scripts/cli.py" in body, body
     assert "settings.json" in body, body
     assert ".claude.json" in body, body
     assert "installed skills" in body.lower(), body
     keep_section = body.split("Keep this stable")[1]
     assert "CLAUDE.md" not in keep_section, keep_section
+
+
+def test_proving_panel_last_day_of_window_still_reads_as_in_window():
+    # Boundary: 2026-08-01 to 2026-08-07 inclusive is day 7 of a 7 day
+    # window, the LAST day still inside it. The panel must still render
+    # "day 7 of 7", never the closed-window message: closing happens the
+    # day AFTER the window ends, not on its last day.
+    exp_mod = met.load_experiment()
+    open_experiments = [{
+        "label": "diet-claude-md", "started": "2026-08-01T00:00:00+0000",
+        "window_days": 7, "treats": exp_mod.CLAUDE_MD_PATH,
+        "fingerprint_excluded": [exp_mod.CLAUDE_MD_PATH],
+    }]
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=[], profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[], open_experiments=open_experiments,
+                         strategy_count=len(adv.load_strategies()), exp_mod=exp_mod,
+                         today="2026-08-07")
+    panel = re.search(r'<div class="proving-panel">(.*?)</div>', html, re.S)
+    assert panel, html
+    body = panel.group(1)
+    assert "day 7 of 7" in body, body
+    assert "closed" not in body.lower(), body
 
 
 def test_proving_panel_handles_unreadable_baseline_without_raising():

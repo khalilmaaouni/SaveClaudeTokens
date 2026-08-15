@@ -576,8 +576,11 @@ def render_command_center(state, reason):
 
 
 def _proving_day_count(started, window_days, today_str):
-    """(n, m) for the PROVING panel's "day n of m", n counting the start
-    date as day 1. Returns None when started, window_days or today_str is
+    """(n, m) for the PROVING panel, n counting the start date as day 1.
+    n can exceed m: the window is n days long only up to and including day
+    m, so n > m means the window has closed and the caller (render_proving_
+    panel) renders that as "closed", never as an impossible "day n of m"
+    fraction. Returns None when started, window_days or today_str is
     missing or unparsable, rather than guess a day count: this is panel
     text, not a computed state, and the memo's own refusal to guess (section
     2) applies here too. Never raises. today_str is a plain "YYYY-MM-DD" (or
@@ -645,7 +648,15 @@ def render_proving_panel(open_experiments, exp_mod, today_str):
         day = _proving_day_count(first.get("started"), first.get("window_days"), today_str)
         if day:
             n, m = day
-            parts.append(f'<p class="pv-day">day {n} of {m}</p>')
+            if n > m:
+                closed_days = n - m
+                day_word = "day" if closed_days == 1 else "days"
+                close_cmd = f'python3 scripts/cli.py experiment end "{label}"'
+                parts.append(f'<p class="pv-day pv-closed">Window closed {closed_days} '
+                             f'{day_word} ago. Run <code>{fmt.esc(close_cmd)}</code> for a '
+                             f'verdict.</p>')
+            else:
+                parts.append(f'<p class="pv-day">day {n} of {m}</p>')
         else:
             parts.append('<p class="pv-day nodata">day NO DATA</p>')
         keep = _keep_stable_list(exp_mod, first)
@@ -784,6 +795,7 @@ table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-num
 .proving-panel{background:var(--panel2);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin:0 0 22px;}
 .pv-label{font-size:16px;font-weight:650;margin:0 0 4px;}
 .pv-day{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 0 10px;}
+.pv-day.pv-closed{color:var(--warn);}
 .pv-keep{margin:6px 0 0;padding-left:18px;font-size:13.5px;color:var(--ink);}
 .pv-keep li{margin:2px 0;}
 """
