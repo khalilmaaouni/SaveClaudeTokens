@@ -362,6 +362,33 @@ def _historical_check(record, exp_mod):
     return False, None
 
 
+def latest_row_per_label(rows):
+    """The newest ledger row per label, across EVERY confidence.
+
+    One function because this rule had three copies (here, share_card.py and
+    cli.py), and all three made the same mistake: they filtered to VERIFIED
+    BEFORE picking the latest row, so a re-run that FAILED to prove a claim
+    did not supersede the older VERIFIED one. The share card is the artifact
+    designed to leave this machine, so that published "proven" for a claim
+    the newest run could not reproduce, which inverts the one thing this
+    project sells. Filtering by confidence is the CALLER's job and happens
+    after this returns, never before.
+
+    Ties on timestamp keep the LAST row in file order, matching the
+    append-only ledger's own meaning of "latest".
+    """
+    newest = {}
+    for i, r in enumerate(rows or []):
+        if not isinstance(r, dict):
+            continue
+        label = r.get("label") or "(unlabeled)"
+        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
+        if label in newest and (ts, i) < newest[label][0]:
+            continue
+        newest[label] = ((ts, i), r)
+    return {label: r for label, (_key, r) in newest.items()}
+
+
 def verified_by_label(rows, exp_mod=None):
     """One VERIFIED row per experiment label, newest record wins.
 
@@ -389,18 +416,12 @@ def verified_by_label(rows, exp_mod=None):
     the check never depends on this machine's actual ~/.claude files).
     """
     by_label = {}
-    newest = {}
-    for i, r in enumerate(rows or []):
+    for label, r in latest_row_per_label(rows).items():
         if r.get("confidence") != "VERIFIED":
             continue
         delta = r.get("floor_reduction_tokens")
         if isinstance(delta, bool) or not isinstance(delta, (int, float)):
             continue
-        label = r.get("label") or "(unlabeled)"
-        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
-        if label in newest and (ts, i) < newest[label]:
-            continue
-        newest[label] = (ts, i)
         historical, reason = _historical_check(r, exp_mod)
         by_label[label] = {"label": label, "floor_reduction": delta,
                            "timestamp": r.get("timestamp"),

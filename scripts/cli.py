@@ -62,24 +62,26 @@ def _verified_by_label():
     """
     if not os.path.exists(ex.LEDGER):
         return []
-    latest = {}
-    order = []
+    rows = []
     with open(ex.LEDGER, errors="ignore") as f:
         for line in f:
             try:
-                r = json.loads(line)
+                rows.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-            if r.get("confidence") != "VERIFIED":
-                continue
-            fr = r.get("floor_reduction_tokens")
-            if fr is None:
-                continue
-            label = r.get("label") or "(unlabeled)"
-            if label not in latest:
-                order.append(label)
-            latest[label] = fr
-    return [(label, latest[label]) for label in order]
+    # Newest row per label FIRST (the shared rule), THEN the VERIFIED filter.
+    # Reversed, as it was, a later NOT_PROVEN run did not supersede an earlier
+    # VERIFIED one, so this kept reporting a proven saving for a claim the
+    # newest run could not reproduce.
+    out = []
+    for label, r in ts.latest_row_per_label(rows).items():
+        if r.get("confidence") != "VERIFIED":
+            continue
+        fr = r.get("floor_reduction_tokens")
+        if fr is None:
+            continue
+        out.append((label, fr))
+    return out
 
 
 def _print_verified_rows(rows, indent):
