@@ -1,5 +1,85 @@
 # Token Shield: the 14 day leadership WBS, three windows
 
+## CORRECTED 2026-08-15 late, after an independent evidence audit
+
+Three corrections, kept visible here rather than edited in silently, following
+the precedent set by the field map correction in pull request 83. A plan that
+quietly repairs itself teaches nobody anything.
+
+1. **T10.1's done-check was unrunnable as written.** It chained the CLAUDE.md
+   full test line and the MCP install in one breath. That line begins
+   `python3 scripts/check_py311.py && cd scripts && ...` and never returns, so
+   the shell is left in `scripts/`, where `./mcp-server` does not exist. CI
+   never hit it because CI runs the two as separate steps from the repository
+   root. Fixed in the T10.1 and T10.2 rows below. Method defect: the done-check
+   was assembled by concatenating two commands that were each known to work,
+   without running the concatenation.
+
+2. **"Zero connectors" and "no export of any kind" were false.**
+   `scripts/obsidian_export.py` exists, is registered as a layer 7 module in
+   `test_architecture.py`, and writes markdown with an `--out` flag. What is
+   genuinely absent is a MACHINE READABLE export: no CSV, no webhook, and no
+   `csv` import anywhere under `scripts/` or `mcp-server/`. E7 is unchanged,
+   because CSV is still the missing thing. What changes is E1: obsidian_export
+   is not routed through `cli.py`, so it is a SIXTH front door, and the epic
+   that exists to make five doors into one was counting five.
+
+3. **The count in "three modules each overwrite one hash file" was wrong.** It
+   is two modules across three files: `optimize.py` at lines 175 and 369, and
+   `memory_trim.py` at line 128. `plugin_prune.py:142` overwrites a bundle
+   JSON, not a hash file. E6 is unaffected; the journal is still absent.
+
+4. **T5.1 is ahead of its own governing architecture, and nobody reconciled
+   them.** `2026-08-15-TARGET-ARCHITECTURE.md` enumerates the available events
+   at line 263, but the bundle it actually RECOMMENDS, at lines 269 and 726, is
+   four: ConfigChange, PreCompact, PostCompact and SubagentStop. T5.1 builds
+   six, adding SessionStart and SubagentStart, and decision D4 asks the founder
+   to consent to "all six" as though six were the designed set. Either the
+   architecture is widened deliberately or T5.1 narrows to four, and that is a
+   decision, not an edit. Until it is taken, D4's option (a) is offering consent
+   to two events the design never argued for. Related and separate: the six
+   event NAMES are not the unverified part. The architecture cites the hooks
+   reference opened 2026-08-15 for them. What is missing is a row per event in
+   `docs/CLAIMS.md`, which is bookkeeping measured in minutes, not research.
+
+## FOUNDER DECISIONS TAKEN 2026-08-15 late
+
+Three, all through question windows, all after the corrections above were put to
+him with their evidence. Each amends this plan and each is binding.
+
+**FD1. The format canary is built THIS WEEK, beside the state function.** New
+task T2.5 below. The reasoning he chose: the four state screen must not ship a
+week ahead of the alarm that stops it saying HEALTHY on a dead meter. Rejected:
+grouping it with next week's evidence work, and documenting the risk instead of
+closing it.
+
+**FD2. The lifecycle sensor narrows from six events to the four the architecture
+argued for**: ConfigChange, PreCompact, PostCompact, SubagentStop. SessionStart
+and SubagentStart are OUT. T5.1's row is amended below and decision D4 is now
+CLOSED, because it was asking for consent to two events no design ever
+justified. Rejected: widening the architecture to six deliberately, which is a
+real position that would have to be argued rather than inherited. Flip
+condition: a named use for either dropped event.
+
+**FD3. A real status line payload is captured BEFORE T3.1 starts.** New task
+T3.0 below. Rejected: building against the documented shape and adapting, and
+reordering E3 behind E1. The reasoning: typing a field name from recollection is
+a failure class this project has already recorded twice, and an hour spent now
+is the cheapest moment to avoid a third.
+
+### The two new tasks these decisions create
+
+| ID | Task | Owner | Model | Depends on | Files owned | Files forbidden | Deliverable | Done-check |
+|---|---|---|---|---|---|---|---|---|
+| T2.5 | Format canary (layer 0) in measure_tokens.py: over real transcripts, count assistant messages carrying a `message` object and count how many yield at least one recognised usage key. Zero transcripts is NO DATA at exit 0; transcripts present with zero recognised keys is FORMAT UNRECOGNISED at a nonzero exit. Its ground truth is a file we do not write, which is why it sees what reconcile.py and the bench fixtures structurally cannot. Surfaced by doctor.py beside its existing NEEDS REVIEW line, and passed into `command_center_state` as `parse_health` per STATE-MODEL section 2a | A3 | sonnet | T2.1 merged (the `parse_health` seam must exist first) | scripts/measure_tokens.py, scripts/test_measure_tokens.py, scripts/doctor.py, scripts/test_doctor.py | scripts/metrics.py, scripts/reconcile.py, bench/ | PR | `cd /Users/khalil.maaouni/SaveClaudeTokens/scripts && python3 test_measure_tokens.py` prints ok test_renamed_usage_field_is_unrecognised_not_zero and ok test_no_transcripts_is_no_data_exit_zero, exits 0 |
+| T3.0 | Capture one real statusLine payload: point a throwaway script at the statusLine setting, record verbatim what Claude Code actually sends on stdin, commit it as a fixture with its capture date, and add one row per confirmed field to docs/CLAIMS.md with its source and date. If a documented field does not arrive on this machine, the fixture records its ABSENCE explicitly rather than omitting it | A1 | sonnet | none | NEW: scripts/fixtures/statusline-payload-2026-08-16.json, docs/CLAIMS.md | scripts/statusline.py, .claude/settings.json (the founder pastes, nothing is written for him) | fixture plus CLAIMS rows | `python3 -c "import json;d=json.load(open('/Users/khalil.maaouni/SaveClaudeTokens/scripts/fixtures/statusline-payload-2026-08-16.json'));print(sorted(d))"` prints the captured top level keys, and `grep -c statusLine /Users/khalil.maaouni/SaveClaudeTokens/docs/CLAIMS.md` prints 1 or more |
+
+T5.1's event list is amended by FD2 to exactly four: ConfigChange, PreCompact,
+PostCompact, SubagentStop. Its done-check is unchanged. D4 in section 11 is
+CLOSED, not defaulted.
+
+The task count moves from 30 to 32, and Window 2 from 11 tasks to 13.
+
 Written 2026-08-15 evening. Governs 2026-08-15 through 2026-08-28.
 Compresses the founder's 45 day plan (TOKEN_SHIELD_CLAUDE_LEADERSHIP_WBS.md)
 into 14 days of parallel agent work. The release gate stays live the whole
@@ -168,8 +248,8 @@ provenance. OTel remains attributed, not competed with.
 
 | ID | Task | Owner | Model | Depends on | Files owned | Files forbidden | Deliverable | Done-check |
 |---|---|---|---|---|---|---|---|---|
-| T10.1 | Window 2 integration: the full documented suite plus the MCP suite and the bench run on the integration branch after the last W2 merge; fixes only, each signed off by A0, no redesign | A10 | sonnet | all W2 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run | the CLAUDE.md full test line, then `python3 -m pip install ./mcp-server && cd mcp-server && python3 test_mcp_server.py`, both exit 0 with output quoted in the integration PR |
-| T10.2 | Window 3 integration and close out: same commands, plus the close note naming everything UNVERIFIED with its blocker | A10 | sonnet | all W3 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run plus close note | same two commands, both exit 0, output quoted; the close note lists each UNVERIFIED item with its blocker |
+| T10.1 | Window 2 integration: the full documented suite plus the MCP suite and the bench run on the integration branch after the last W2 merge; fixes only, each signed off by A0, no redesign | A10 | sonnet | all W2 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run | three SEPARATE commands, each started from the repository root, never chained (see correction 1 at the top of this file): (a) the CLAUDE.md full test line; (b) `cd /Users/khalil.maaouni/SaveClaudeTokens && python3 -m pip install ./mcp-server && cd mcp-server && python3 test_mcp_server.py`; (c) `cd /Users/khalil.maaouni/SaveClaudeTokens && python3 bench/test_bench.py && python3 bench/generate_corpus.py --out /tmp/bench-corpus && python3 bench/run_benchmark.py --corpus /tmp/bench-corpus`. All three exit 0, output quoted in the integration PR |
+| T10.2 | Window 3 integration and close out: same commands, plus the close note naming everything UNVERIFIED with its blocker | A10 | sonnet | all W3 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run plus close note | the same three separate commands as T10.1, each exit 0, output quoted; the close note lists each UNVERIFIED item with its blocker |
 
 No task in this table is NEEDS SCOPING. The one that came closest, T5.5, was
 scoped by deciding the semantics here: what is captured is the installed CLI
