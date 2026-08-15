@@ -247,6 +247,76 @@ def test_shield_saving_is_net_of_the_write_premium():
     assert sv["saved"] == 90.0 - 20.0               # 70.0 net, not 90 gross
 
 
+def test_native_charges_a_premium_for_writes_whose_ttl_is_unknown():
+    """A cache write with no TTL split cannot be priced: measure_tokens sets
+    normalized input to NO DATA for exactly that data, at measure_tokens.py
+    around the split_writes docstring. Charging it nothing made the NATIVE
+    headline LARGEST precisely where the evidence was WEAKEST.
+
+    NATIVE is the one row attributed to Anthropic rather than claimed by this
+    tool, so it has to be a lower bound. Unsplit writes are therefore charged
+    at the most expensive TTL (1.0x, the 1 hour rate), which understates the
+    saving rather than overstating it. Understating Anthropic's benefit is a
+    caveat; overstating it is the dishonesty the whole product exists against.
+
+    Calibrated by reinjection: dropping write_unsplit_total back out of the
+    premium makes the unsplit fixture report 90.0 saved against the split
+    fixture's 40.0, and the first assertion fails.
+    """
+    common = {"read_total": 100.0, "input_total": 5.0}
+    split = dict(common, write_5m_total=0.0, write_1h_total=50.0,
+                 write_unsplit_total=0.0)
+    unsplit = dict(common, write_5m_total=0.0, write_1h_total=0.0,
+                   write_unsplit_total=50.0)
+
+    sv_split = shield.savings_breakdown(split)
+    sv_unsplit = shield.savings_breakdown(unsplit)
+
+    assert sv_unsplit["saved"] <= sv_split["saved"], (
+        f"unknown-TTL writes reported a LARGER saving ({sv_unsplit['saved']}) "
+        f"than the same volume at the most expensive known TTL "
+        f"({sv_split['saved']})")
+    assert sv_unsplit["write_premium"] == 50.0
+    # The count travels with the number so a surface can disclose it rather
+    # than printing a quietly weaker figure that looks identical.
+    assert sv_unsplit["write_unsplit"] == 50.0
+    assert sv_split["write_unsplit"] == 0.0
+
+
+def test_native_discloses_unpriceable_writes_and_stays_silent_without_them():
+    """A NATIVE figure computed partly from writes that could not be priced
+    must SAY so on the same line as the number. Charging them conservatively
+    (the test above) stops the overstatement; without the disclosure the
+    weaker figure still prints identically to a fully priced one, and a reader
+    cannot tell which they are looking at.
+
+    The note names the volume, not a transcript count: the volume is what the
+    counters actually carry. NO DATA beats a guess, including a guessed count.
+    """
+    none_unsplit = shield.savings_breakdown(
+        {"read_total": 100.0, "write_5m_total": 40.0, "write_1h_total": 10.0,
+         "write_unsplit_total": 0.0, "input_total": 5.0})
+    some_unsplit = shield.savings_breakdown(
+        {"read_total": 1e9, "write_5m_total": 0.0, "write_1h_total": 0.0,
+         "write_unsplit_total": 1_200_000.0, "input_total": 5.0})
+
+    assert shield.native_note(none_unsplit) == "", (
+        "a fully priced figure must carry no caveat at all")
+    note = shield.native_note(some_unsplit)
+    assert "1.2M" in note, note
+    assert "TTL" in note, note
+
+
+def test_savings_breakdown_survives_a_summary_missing_the_unsplit_key():
+    # Callers pass partial summary dicts (the sibling premium test does), and
+    # a summary written by an older schema has no unsplit key at all. A missing
+    # key is zero, never a crash on a caller's first run.
+    sv = shield.savings_breakdown({"read_total": 100.0, "write_5m_total": 40.0,
+                                   "write_1h_total": 10.0, "input_total": 5.0})
+    assert sv["write_unsplit"] == 0
+    assert sv["saved"] == 70.0
+
+
 def test_dashboard_attributes_the_saving_to_native_caching():
     # The load-bearing honesty: the native caching saving is Claude Code's,
     # not this tool's doing. A future edit that quietly re-claims it as the

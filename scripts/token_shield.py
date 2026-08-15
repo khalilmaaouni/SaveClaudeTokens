@@ -160,20 +160,48 @@ def savings_breakdown(sm):
     premium on every write token (0.25x extra at the 5 minute TTL, 1.0x extra
     at the 1 hour TTL). The NET saving subtracts that premium, so the headline
     is not the gross read saving dressed up as the net benefit.
+
+    Writes whose TTL the transcript never split are charged at the MOST
+    expensive rate (1.0x), not skipped. Skipping them made this headline
+    largest exactly where the evidence was weakest. NATIVE is attributed to
+    Anthropic rather than claimed by this tool, so it has to be a lower bound:
+    understating their benefit is a caveat, overstating it is the dishonesty
+    this whole product exists against. The unsplit volume is returned beside
+    the number so a surface can disclose it instead of printing a quietly
+    weaker figure that looks identical to a fully priced one.
     """
     read = sm["read_total"] or 0
     paid = CACHE_READ * read          # what reads actually cost, at 0.1x
     unblocked = 1.0 * read            # what they would cost uncached
     gross = unblocked - paid          # the 0.9x earned on reads
     w5, w1 = sm["write_5m_total"] or 0, sm["write_1h_total"] or 0
-    write_premium = 0.25 * w5 + 1.0 * w1   # extra paid over uncached input
+    # .get: an older schema's summary, and the partial dicts callers build,
+    # carry no unsplit key at all. A missing key is zero, never a crash.
+    wu = sm.get("write_unsplit_total") or 0
+    write_premium = 0.25 * w5 + 1.0 * w1 + 1.0 * wu   # extra over uncached
     return {
         "read": read, "paid": paid, "unblocked": unblocked,
         "gross": gross, "write_premium": write_premium,
         "saved": gross - write_premium,     # NET
-        "write_cost": 1.25 * w5 + 2.0 * w1,
+        "write_cost": 1.25 * w5 + 2.0 * w1 + 2.0 * wu,
+        "write_unsplit": wu,
         "raw_input": sm["input_total"] or 0,
     }
+
+
+def native_note(sv):
+    """The caveat that travels with a NATIVE figure, or "" when there is none.
+
+    Empty whenever every cache write carried a TTL, so a fully priced headline
+    stays clean. When some writes could not be priced, the reader is told on
+    the same line as the number rather than in a footnote, because a quietly
+    weaker figure prints identically to a solid one otherwise.
+    """
+    wu = sv.get("write_unsplit") or 0
+    if not wu:
+        return ""
+    return (f" (includes {human(wu)} of cache writes with no TTL split, "
+            f"charged at the most expensive rate, so this is a lower bound)")
 
 
 def prescriptions(sm, sessions):

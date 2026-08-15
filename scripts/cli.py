@@ -99,9 +99,14 @@ def summary(days=30):
     if not sm:
         print("NO DATA: no transcripts carried usage counters yet.")
         return 0
-    native = ts.savings_breakdown(sm)["saved"]
+    sv = ts.savings_breakdown(sm)
+    native = sv["saved"]
     rx = ts.prescriptions(sm, mt.collect(ROOT, days))
-    tool = sum(r["saving"] for r in rx)
+    # The largest lever, never the sum. The levers overlap (they all cut the
+    # same startup floor), so summing them double counts, and trial.py already
+    # takes the max: a stranger who runs the trial and then this command has to
+    # see one number, not two that contradict each other.
+    tool = max((r["saving"] for r in rx), default=0)
     ver = _verified_by_label()
 
     print("Token Shield")
@@ -112,7 +117,7 @@ def summary(days=30):
     else:
         print("  VERIFIED     none yet. Run: python3 cli.py experiment start \"my-change\"")
     print(f"  NATIVE       {native/1e9:.1f}B token-units saved by Claude Code's caching "
-          f"(Anthropic's, not this tool)")
+          f"(Anthropic's, not this tool){ts.native_note(sv)}")
     print(f"  OPPORTUNITY  {tool/1e6:.0f}M token-units you could still cut (estimated, "
           f"from your own sessions)")
     if rx:
