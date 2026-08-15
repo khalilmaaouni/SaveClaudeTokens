@@ -11,8 +11,28 @@ main, but ONLY when every one of these is true, checked in this order:
 
 1. The full documented test line in `CLAUDE.md` exits 0 on THAT pull request's
    own head commit, not on an earlier one.
-2. `python3 -m pip install ./mcp-server && cd mcp-server && python3 test_mcp_server.py`
-   exits 0, started from the repository ROOT.
+2. `cd /Users/khalil.maaouni/SaveClaudeTokens/mcp-server && python3 test_mcp_server.py`
+   exits 0 and prints `13 passed`.
+
+   NOTE, corrected before this file was an hour old, and the correction matters
+   because the original would have blocked every merge tonight. This condition
+   was first written as `python3 -m pip install ./mcp-server && cd mcp-server &&
+   python3 test_mcp_server.py`. On this machine `pip install` exits 1, because
+   the system Python is externally managed (PEP 668), so the `&&` chain never
+   reaches the test and the gate fails closed forever. The reason it looked green
+   when it was checked is worse than the bug: it was run as
+   `pip install ... | tail -2 && ...`, and a pipeline reports the exit code of
+   its LAST command, so `tail` returned 0 and hid pip's 1. Never verify a command
+   through a pipe when the exit code is the thing you are verifying.
+
+   The install was never load bearing anyway. `test_mcp_server.py` does
+   `sys.path.insert(0, SRC)` and `sys.path.insert(0, SCRIPTS)` at lines 21 and
+   22, so it imports from the source tree whether or not a package is installed,
+   and `token_shield_mcp` is in fact not installed on this machine at all. The
+   thing this step exists to catch, a `metrics.py` symbol move breaking
+   `mcp-server/` (which went red on CI on 2026-08-14), is caught by that
+   `SCRIPTS` path entry, not by the install. CI keeps its own install step and
+   that is correct there: on a clean runner it also proves the package builds.
 3. `python3 bench/test_bench.py && python3 bench/generate_corpus.py --out /tmp/bench-corpus && python3 bench/run_benchmark.py --corpus /tmp/bench-corpus`
    exits 0, started from the repository ROOT.
 4. All three fail closed scans (secret, dash, attribution) are clean over the
@@ -36,7 +56,9 @@ and T3.1 both wait for him. Reorder around them.
 
 ## The work, in order. Do not reorder without a reason written down.
 
-Main is at `2582b47`, clean, zero open pull requests. Green there after the
+Main is at `477c645`, clean, zero open pull requests. (An earlier draft of this
+file said `2582b47`, which was main BEFORE this file's own pull request merged. If
+your HEAD does not match, run `git ls-remote origin main` and trust that.) Green there after the
 merges: 532 checks across 23 suites, exit 0, `check_py311` clean over 56 files.
 
 **1. T2.1, the state function.** The packet is standalone and complete at
@@ -81,9 +103,25 @@ If nothing is pullable, say so in one line and stop rather than inventing work.
 - No AI vendor attribution anywhere. Sole credited author: Khalil Maaouni.
 - Python 3.11 floor.
 - Confidence labels never merge, no cross label totals, NO DATA beats a guess.
-- The release gate HOLDS. No tag, no release, no publish, no plugin update, no
-  MCP client registration. The `claude-md-diet-v2` experiment runs untouched: do
-  not read it, shorten it, or help it.
+- The release gate is CONTESTED ON MAIN. Treat it as HOLDING tonight: no tag, no
+  release, no publish, no plugin update, no MCP client registration. Nothing in
+  tonight's work order needs any of those, so holding costs nothing and is the
+  safe reading of a contradiction nobody has resolved.
+
+  The contradiction, so you do not have to rediscover it. `docs/ROADMAP.md` says
+  the original `claude-md-diet` was closed early on the founder's explicit word
+  with an honest NOT_PROVEN verdict, that under the ratified amendment either
+  verdict OPENS the release boundary, and therefore that the boundary is OPEN;
+  1.8.0 shipped on 2026-08-14 on that reading. The project `CLAUDE.md` says the
+  gate holds until `claude-md-diet-v2` reaches VERIFIED or an honest NOT_PROVEN.
+  Both files are on main. They disagree about whether a successor experiment
+  re-closes a boundary its predecessor opened. That is a founder decision and it
+  is in the morning packet. Do not resolve it yourself and do not release on the
+  permissive reading.
+
+  Either way, `claude-md-diet-v2` runs untouched: do not read it, shorten it, or
+  help it. It is open, started 2026-08-13, 30 day window, verdict due about
+  2026-09-12.
 - NEW files declare their layer in `test_architecture.py` LAYERS in the same
   pull request. NEW test suites are added to `.github/workflows/ci.yml` AND to
   the `CLAUDE.md` documented test line in the same pull request.
