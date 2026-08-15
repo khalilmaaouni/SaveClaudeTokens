@@ -315,6 +315,10 @@ claude plugin uninstall token-shield
 
 The uninstall script will print what exists on your machine, ask before removing each item, and print a short exit summary of any verified savings to keep. Removal deletes your local measurement history and is irreversible.
 
+Running it from a management tool, a script, or any place with no terminal attached: add `--yes`. Without a terminal and without that flag the command refuses and deletes nothing, rather than waiting forever for a person to type `YES`.
+
+To ask an installed copy which build it is: `python3 .../scripts/cli.py --version`.
+
 The version directory matters: Claude Code keeps every version you have installed side by side, so a `*` glob there expands to several paths and `python3` would run the first and treat the rest as arguments. Run the `ls` line, pick the newest, and use that one path.
 
 ## For teams and enterprises

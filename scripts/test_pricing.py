@@ -130,6 +130,112 @@ def test_prices_leads_with_the_disclaimer_and_prints_no_grand_total():
           "API-equivalent" in out and f"snapshot {today}" in out)
 
 
+def test_version_is_reported_and_matches_the_plugin_manifest():
+    """A tool an administrator deploys to a thousand machines has to be able
+    to answer which build is on any of them. `--help` existed and `--version`
+    did not, so the only way to identify an installed copy was to read the
+    marketplace manifest by hand. The number comes FROM the manifest rather
+    than a second copy in the source, so the two cannot drift apart.
+    """
+    import json
+    import os as _os
+    import cli
+    rc, out, _err = _capture(cli.main, ["--version"])
+    check("--version exits 0", rc == 0)
+    manifest = _os.path.join(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(cli.__file__))), ".claude-plugin", "plugin.json")
+    with open(manifest, encoding="utf-8") as f:
+        version = json.load(f)["version"]
+    check("--version prints the manifest's version", version in out)
+    check("...and names the tool it belongs to", "token-shield" in out.lower())
+
+
+def test_uninstall_refuses_rather_than_hangs_when_nothing_can_answer_it():
+    """The enterprise removal path. uninstall() called sys.stdin.readline()
+    with no check that anything was attached to stdin, so under an MDM run, a
+    CI job, or any `< /dev/null` invocation it either blocked forever or read
+    an empty line. Blocking forever is the bad one: a removal that hangs on a
+    thousand machines is an incident, not a prompt.
+
+    Refuse by default (nothing is deleted, and the message names the flag),
+    and delete only when --yes was passed deliberately.
+    """
+    import io
+    import os as _os
+    import tempfile
+    import cli
+    real_stdin = sys.stdin
+    real_expand = _os.path.expanduser
+    with tempfile.TemporaryDirectory() as d:
+        # Redirect BOTH paths uninstall() walks into the temp dir, so this
+        # test can never reach the real ~/.token-shield on this machine.
+        home = _os.path.join(d, "home")
+        _os.makedirs(_os.path.join(home, ".token-shield"))
+        with open(_os.path.join(home, ".token-shield", "ledger.jsonl"), "w") as f:
+            f.write("{}\n")
+        _os.path.expanduser = lambda p: p.replace("~", home, 1) if p.startswith("~") else p
+        try:
+            # A pipe that is not a terminal, which is what MDM and CI give it.
+            sys.stdin = io.StringIO("")
+            rc, out, _err = _capture(cli.uninstall, [])
+            check("a non-interactive uninstall refuses instead of deleting", rc == 2)
+            check("...and names the flag that would have worked", "--yes" in out)
+            check("...and the data is still there",
+                  _os.path.isdir(_os.path.join(home, ".token-shield")))
+
+            rc, out, _err = _capture(cli.uninstall, ["--yes"])
+            check("--yes removes without asking", rc == 0)
+            check("...and the data is gone",
+                  not _os.path.isdir(_os.path.join(home, ".token-shield")))
+        finally:
+            sys.stdin = real_stdin
+            _os.path.expanduser = real_expand
+
+
+def test_pricings_own_main_leads_with_the_caveat_and_prints_no_grand_total():
+    """The same screen, reached by the other door.
+
+    `cli prices` was fixed to lead with the disclaimer and drop the summed
+    six-figure headline, but pricing.py's own main() is a second entry point
+    onto the same numbers and kept the old shape: a "priced total" line at
+    $121,000.00 with its "not money anyone saved" note printed five lines
+    BELOW it. A reader who runs the module directly met the number before
+    the caveat, which is the exact failure the cli fix was for. Two doors
+    onto one figure have to say the same thing.
+    """
+    import tempfile
+    import time
+    today = time.strftime("%Y-%m-%d")
+    fresh = dict(PRICING, snapshot=today)
+    fake = {"claude-opus-5": 24_000_000_000, "claude-haiku-4-5": 1_000_000_000}
+    real_load, real_by_model = pricing.load_pricing, pricing.saving_by_model
+    pricing.load_pricing = lambda *a, **k: fresh
+    pricing.saving_by_model = lambda root, days: fake
+    argv = sys.argv
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            sys.argv = ["pricing.py", "--root", d]
+            rc, out, _err = _capture(pricing.main)
+    finally:
+        pricing.load_pricing, pricing.saving_by_model = real_load, real_by_model
+        sys.argv = argv
+
+    low = out.lower()
+    check("pricing.main exits 0", rc == 0)
+    check("the first line says this is not money you saved",
+          "not money you saved" in out.strip().splitlines()[0].lower())
+    check("...and carries no figure of its own",
+          "$" not in out.strip().splitlines()[0])
+    check("the disclaimer comes before any dollar figure",
+          low.index("not money you saved") < out.index("$"))
+    # Same fixture as the cli test above, so the two doors are compared on
+    # identical numbers: 24B at $5/M is $120,000.00, 1B at $1/M is $1,000.00.
+    check("the per-model breakdown is kept",
+          "$120,000.00" in out and "$1,000.00" in out)
+    check("the grand total is gone", "$121,000.00" not in out)
+    check("the pricing snapshot is still named", f"snapshot   {today}" in out)
+
+
 def test_summary_scans_the_transcripts_once_and_says_so_on_stderr():
     """summary is what the trial screen sends a stranger to run next. It used
     to collect every transcript on disk twice, in silence, so a first run sat

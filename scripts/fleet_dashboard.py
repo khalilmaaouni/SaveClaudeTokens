@@ -532,7 +532,11 @@ def aggregate_totals_by_tag(healthy_rows, tag_key):
 
     "machines" counts DISTINCT machines behind the tag, not records, so a
     single machine pushing thirty days of records is still one machine and
-    cannot pass the minimum group size on its own."""
+    cannot pass the minimum group size on its own. "machine_ids" carries
+    WHICH machines they are, because the count alone cannot answer the
+    question render_tag_totals has to ask: two groups of five can share four
+    machines, and only the union decides whether the residual left over
+    after publishing is anonymous."""
     totals = {}
     for r in healthy_rows:
         rec = r["record"]
@@ -544,7 +548,8 @@ def aggregate_totals_by_tag(healthy_rows, tag_key):
         bucket = totals.setdefault(tag, {"total": 0, "machines": set()})
         bucket["total"] += total
         bucket["machines"].add(r["machine_id"])
-    return {tag: {"total": b["total"], "machines": len(b["machines"])}
+    return {tag: {"total": b["total"], "machines": len(b["machines"]),
+                  "machine_ids": b["machines"]}
             for tag, b in totals.items()}
 
 
@@ -634,8 +639,10 @@ def _suppressed_note(suppressed, min_group):
         return ""
     return (f'<p class="nodata">{suppressed} row(s) suppressed: a cell backed by fewer than '
             f'{min_group} machines can be one person\'s own work, and this is a shared org '
-            f'page, so it is not published. The floor is {MIN_GROUP_MACHINES} machines and an '
-            f'admin can raise it, never lower it.</p>')
+            f'page, so it is not published. A larger group is suppressed alongside it whenever '
+            f'publishing that group would leave a residual smaller than {min_group} machines '
+            f'for a reader to subtract, so what is withheld is anonymous too. The floor is '
+            f'{MIN_GROUP_MACHINES} machines and an admin can raise it, never lower it.</p>')
 
 
 def _suppressed_cell(min_group, span=1):
@@ -782,6 +789,25 @@ def render_counters_by_day(by_day, min_group):
 
 
 def render_tag_totals(title, totals, min_group):
+    """SECONDARY SUPPRESSION, and why a per-cell check is not enough.
+
+    Checking each cell against the minimum group size only decides what to
+    PRINT. It says nothing about what the printed cells let a reader DERIVE.
+    Reproduced on a store of five machines tagged "eng" and one tagged
+    "ops": the team table published eng at 24.2M and the environment table
+    published the whole org at 27.3M, so the difference returned 3.1M
+    against a true 3,030,000 and recovered one person's total token volume
+    to within 2.3 percent, out of two cells this page had just declared safe
+    to publish. The day table hands over the same complement exactly.
+
+    The rule, which is the standard disclosure-control one: whatever is
+    withheld must ITSELF stand on at least min_group machines. So when any
+    group is too small, the smallest published groups are withheld with it
+    (cheapest to lose first) until the union of withheld machines reaches
+    the floor. On a five-plus-one split that withholds both groups, because
+    the complement of the five is the one. A table where nothing was small
+    is untouched: two teams of five each publish, since each is the other's
+    complement and each stands on five machines."""
     parts = [f'<h2>{ts.esc(title)}</h2>']
     if not totals:
         parts.append('<p class="nodata">NO DATA: no healthy records carried this tag.</p>')
@@ -793,6 +819,16 @@ def render_tag_totals(title, totals, min_group):
     # withhold.
     withheld = sorted((kv for kv in totals.items() if kv[1]["machines"] < min_group),
                       key=lambda kv: kv[0])
+    if withheld:
+        residual = set()
+        for _tag, b in withheld:
+            residual |= b["machine_ids"]
+        # Smallest total first: the group whose loss costs the reader least.
+        while len(residual) < min_group and published:
+            tag, b = published.pop()
+            withheld.append((tag, b))
+            residual |= b["machine_ids"]
+        withheld.sort(key=lambda kv: kv[0])
     rowlist = [f'<tr><td>{ts.esc(tag)}</td><td>{ts.human(b["total"])}</td></tr>'
                for tag, b in published]
     rowlist += [f'<tr><td>{ts.esc(tag)}</td>{_suppressed_cell(min_group)}</tr>'

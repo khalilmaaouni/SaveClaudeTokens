@@ -40,7 +40,14 @@ ADVANCED
                                       staleness, shared-hook facts (doctor.py)
   python3 cli.py uninstall           remove local Token Shield data: prints
                                       what exists, requires typing YES, deletes
+  python3 cli.py uninstall --yes     the same, without the prompt. The only
+                                      form that works from a management tool
+                                      or a script: without it and without a
+                                      terminal the command refuses and
+                                      deletes nothing
   python3 cli.py -h | --help         this text
+  python3 cli.py -V | --version      the installed version, read from
+                                      .claude-plugin/plugin.json
 
 The scripts underneath (measure_tokens, token_shield, pricing, experiment,
 optimize, profile, advisor, report) stay the source of truth; this only
@@ -191,10 +198,35 @@ def prices(days=90):
     return 0
 
 
-def uninstall():
+def _version():
+    """The version from the plugin manifest, or None when it cannot be read.
+
+    Read from .claude-plugin/plugin.json rather than kept as a second copy
+    here, because two copies of a version number drift and the manifest is
+    the one the marketplace actually installs from."""
+    manifest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            ".claude-plugin", "plugin.json")
+    try:
+        with open(manifest, encoding="utf-8") as f:
+            version = json.load(f).get("version")
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+def uninstall(argv=()):
     """Destructive. Print an inventory, print the VERIFIED savings a user is
     about to lose, require a typed YES, then delete. Never touches
-    ~/.claude/settings.json or CLAUDE.md; those are the user's own to edit."""
+    ~/.claude/settings.json or CLAUDE.md; those are the user's own to edit.
+
+    `--yes` skips the prompt, which is the only path that works under a
+    management tool: this used to call sys.stdin.readline() unconditionally,
+    so an MDM push, a CI job, or any run without a terminal attached blocked
+    forever waiting for a person who was never going to type. Without the
+    flag and without a terminal it now REFUSES and deletes nothing, because
+    a removal that guesses consent from an empty pipe is worse than one that
+    stops."""
+    assume_yes = "--yes" in argv
     token_shield_dir = os.path.expanduser("~/.token-shield")
     claude_token_shield_dir = os.path.expanduser("~/.claude/token-shield")
 
@@ -232,12 +264,19 @@ def uninstall():
     if found:
         print("Removal is irreversible: your measurement history and treatment "
               "memory will be gone for good.")
-        print("Type YES to remove everything listed above. Anything else aborts "
-              "with nothing deleted.")
-        answer = sys.stdin.readline().strip()
-        if answer != "YES":
-            print("Aborted. Nothing deleted.")
-            return 1
+        if not assume_yes:
+            if not sys.stdin.isatty():
+                print("Refused: nothing is attached to this command's input, so there is "
+                      "no one to type YES. Nothing was deleted.")
+                print("Re-run with --yes to remove everything listed above without a "
+                      "prompt: python3 cli.py uninstall --yes")
+                return 2
+            print("Type YES to remove everything listed above. Anything else aborts "
+                  "with nothing deleted.")
+            answer = sys.stdin.readline().strip()
+            if answer != "YES":
+                print("Aborted. Nothing deleted.")
+                return 1
         import shutil
         for base in (token_shield_dir, claude_token_shield_dir):
             if os.path.isdir(base):
@@ -262,6 +301,14 @@ def main(argv):
     # unknown-command branch below is what made -h and --help exit 2.
     if argv and argv[0] in ("-h", "--help"):
         print(__doc__)
+        return 0
+    # GNU's own standard for a command line tool is both --help AND --version;
+    # only the first existed, so an administrator holding a thousand installs
+    # had no way to ask any of them which build they were running.
+    if argv and argv[0] in ("-V", "--version"):
+        version = _version()
+        print(f"token-shield {version}" if version
+              else "token-shield NO DATA: .claude-plugin/plugin.json could not be read")
         return 0
     if not argv or argv[0] == "summary":
         return summary()
@@ -311,7 +358,7 @@ def main(argv):
         return subprocess.run(
             [sys.executable, os.path.join(here, "doctor.py")] + argv[1:]).returncode
     if cmd == "uninstall":
-        return uninstall()
+        return uninstall(argv[1:])
     if cmd == "experiment":
         # commands/optimize.md sends the reader here. Without this line it fell
         # into the usage error below, which named no working alternative, for a

@@ -800,8 +800,20 @@ def test_an_aggregate_backed_by_fewer_than_the_minimum_group_is_suppressed_with_
         # RED before the fix: every tag total was published whatever the group
         # size, so the three-machine team's 3.0K sat on the page beside the
         # six-machine team's 6.0K.
-        assert "6.0K" in body, "a team backed by six machines must still publish"
+        #
+        # CORRECTED, not weakened, when the differencing hole was found: this
+        # assertion used to read `assert "6.0K" in body, "a team backed by six
+        # machines must still publish"`, which asserted the defect. Publishing
+        # bigteam's 6.0K next to an org total of 9.0K hands a reader the
+        # three-machine smallteam residual by subtraction, so suppressing
+        # smallteam's cell while publishing bigteam's withheld nothing at all.
+        # The six-machine group is withheld alongside it: whatever is withheld
+        # must itself stand on at least five machines.
+        assert "6.0K" not in body, (
+            "the six-machine team was published while a three-machine team was "
+            "suppressed, so 9.0K minus 6.0K returns the suppressed team exactly")
         assert "3.0K" not in body, "a team backed by three machines was published"
+        assert "bigteam" in body, "the group withheld to protect the residual must name itself"
         assert "smallteam" in body, "the suppressed row must still name itself"
         assert "suppressed" in body
         assert "fewer than 5 machines" in body
@@ -1044,6 +1056,81 @@ def test_main_takes_days_and_min_group_and_refuses_a_negative_window():
             assert fd.main() == 2
         finally:
             sys.argv = argv_backup
+
+
+def test_a_suppressed_group_cannot_be_recovered_by_subtraction():
+    """The minimum group size is defeated by arithmetic unless the groups it
+    withholds are also withheld from the COMPLEMENT of what is published.
+
+    REPRODUCED BEFORE THE FIX, on a 5 plus 1 store: the team table published
+    "eng" at 24.2M over five machines and the environment table published
+    "prod" at 27.3M over all six, so 27.3M minus 24.2M returned 3.1M against
+    a true 3,030,000, recovering one machine's (one person's) total token
+    volume to within 2.3 percent from two cells the page had just declared
+    safe to publish. The day table gives the same complement exactly.
+
+    The rule enforced here: whatever is withheld must itself stand on at
+    least min_group machines, so the residual an administrator can subtract
+    is an aggregate too. On a 5 plus 1 split that means the five-machine
+    group is withheld as well, because its complement is one person."""
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i in range(5):
+            mid = f"eng{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="eng", environment="prod",
+                                          input_tokens=1_200_000, output_tokens=400_000,
+                                          cache_read=3_000_000, cache_write=250_000))
+        _write_record(d, "acme", "ops0", day,
+                      _healthy_record(day, "ops0", team="ops", environment="prod",
+                                      input_tokens=830_000, output_tokens=210_000,
+                                      cache_read=1_900_000, cache_write=90_000))
+
+        healthy = [r for r in fd.collect_org(d, "acme", days=0)[0] if r["error"] is None]
+        by_team = fd.aggregate_totals_by_tag(healthy, "team")
+        # The aggregate must carry WHICH machines stand behind it, not only
+        # how many: two groups of five can share four machines, and only the
+        # union decides whether the withheld residual is anonymous.
+        assert by_team["eng"]["machine_ids"] == {f"eng{i}" for i in range(5)}
+
+        page = fd.render_tag_totals("Tokens by team", by_team, 5)
+        assert "24.2M" not in page, (
+            "the five-machine group was published while a one-machine group was "
+            "suppressed, so subtracting it from the org total recovers that one "
+            "machine exactly")
+        # Both groups are named as withheld: "no row" and "a row we are not
+        # allowed to publish" stay different facts.
+        assert "eng" in page and "ops" in page
+        assert "suppressed" in page
+
+        # The whole page, not just one table, because the leak lived BETWEEN
+        # two tables that each passed on their own. The org-wide 27.3M stays
+        # published and must: it stands on all six machines and its
+        # complement is empty. What may not appear anywhere is the
+        # five-machine 24.2M, whose complement is one person.
+        body = fd.render(d, "acme", "2026-08-15 09:00", days=0)
+        assert "27.3M" in body
+        assert "24.2M" not in body
+
+
+def test_a_tag_table_still_publishes_when_nothing_is_withheld():
+    """The secondary suppression above must not swallow a table that had no
+    small group in it: ten machines in two teams of five publish both rows,
+    because the complement of either is the other, and the other stands on
+    five machines."""
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for team in ("eng", "ops"):
+            for i in range(5):
+                mid = f"{team}{i}"
+                _write_record(d, "acme", mid, day,
+                              _healthy_record(day, mid, team=team, environment="prod",
+                                              input_tokens=1000, output_tokens=0,
+                                              cache_read=0, cache_write=0))
+        healthy = [r for r in fd.collect_org(d, "acme", days=0)[0] if r["error"] is None]
+        page = fd.render_tag_totals("Tokens by team", fd.aggregate_totals_by_tag(healthy, "team"), 5)
+        assert page.count("5.0K") == 2
+        assert "suppressed" not in page
 
 
 if __name__ == "__main__":
