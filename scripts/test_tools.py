@@ -1482,6 +1482,35 @@ def test_proving_panel_last_day_of_window_still_reads_as_in_window():
     assert "closed" not in body.lower(), body
 
 
+def test_proving_panel_refuses_a_day_count_for_a_future_start_date():
+    # A start date AHEAD of today is reachable through clock skew, a restored
+    # backup, a hand edited baseline, or a timezone boundary. Without a guard
+    # the panel renders "day -28 of 7", which is the same class of impossible
+    # looking fraction as "day 8 of 7", just off the other end of the range.
+    # The honest answer is NO DATA naming the reason, not the arithmetic.
+    exp_mod = met.load_experiment()
+    open_experiments = [{
+        "label": "diet-claude-md", "started": "2026-09-01T00:00:00+0000",
+        "window_days": 7, "treats": exp_mod.CLAUDE_MD_PATH,
+        "fingerprint_excluded": [exp_mod.CLAUDE_MD_PATH],
+    }]
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=[], profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[], open_experiments=open_experiments,
+                         strategy_count=len(adv.load_strategies()), exp_mod=exp_mod,
+                         today="2026-08-03")
+    panel = re.search(r'<div class="proving-panel">(.*?)</div>', html, re.S)
+    assert panel, html
+    body = panel.group(1)
+    assert "day -" not in body, body
+    assert "NO DATA" in body, body
+    assert "future" in body.lower(), body
+
+
 def test_proving_panel_handles_unreadable_baseline_without_raising():
     # list_open_experiments fails CLOSED: a corrupt or unreadable baseline
     # file comes back as a marker carrying "_unreadable" and no "label". The

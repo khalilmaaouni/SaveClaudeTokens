@@ -648,7 +648,21 @@ def render_proving_panel(open_experiments, exp_mod, today_str):
         day = _proving_day_count(first.get("started"), first.get("window_days"), today_str)
         if day:
             n, m = day
-            if n > m:
+            if n < 1:
+                # The recorded start date is in the FUTURE. Reachable through
+                # clock skew, a restored backup, a hand edited record, or a
+                # timezone boundary. Without this branch the panel renders
+                # "day -28 of 7", which is the same class of impossible
+                # looking fraction as the "day 8 of 7" the n > m branch below
+                # exists to prevent, just off the other end of the range. Say
+                # what is actually wrong instead of printing the arithmetic.
+                ahead = 1 - n
+                day_word = "day" if ahead == 1 else "days"
+                parts.append(f'<p class="pv-day nodata">NO DATA: the recorded start date '
+                             f'is {ahead} {day_word} in the future, so no day count can be '
+                             f'trusted. Check this machine\'s clock and the baseline '
+                             f'record.</p>')
+            elif n > m:
                 closed_days = n - m
                 day_word = "day" if closed_days == 1 else "days"
                 close_cmd = f'python3 scripts/cli.py experiment end "{label}"'
