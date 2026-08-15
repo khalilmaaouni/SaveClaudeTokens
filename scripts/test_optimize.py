@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Calibrated checks for optimize.py. The load-bearing one: a hard rule is
-never classified movable, even when it also looks like history."""
+never classified movable, even when it also looks like history.
+Every case that reaches a real backup (cmd_apply's success path) also points
+ga.MUTATIONS_LOG at a temp path first (see _point_journal_at/_restore_journal,
+mirrored from test_guided_apply.py), so nothing here ever touches the real
+machine's ~/.token-shield/mutations.jsonl."""
+import json
 import os
 import tempfile
 
@@ -19,6 +24,16 @@ def _point_review_dir_at(td):
     os.makedirs(d, exist_ok=True)
     opt.review_dir = lambda: d
     return real
+
+
+def _point_journal_at(td):
+    saved = ga.MUTATIONS_LOG
+    ga.MUTATIONS_LOG = os.path.join(td, "mutations.jsonl")
+    return saved
+
+
+def _restore_journal(saved):
+    ga.MUTATIONS_LOG = saved
 
 
 HARD = ("## No attribution\n" + "We NEVER add a Co-Authored-By trailer. " * 30)
@@ -273,6 +288,7 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_claude_history():
     # both in the backup and in place.
     with tempfile.TemporaryDirectory() as td:
         real_review_dir = _point_review_dir_at(td)
+        saved_journal = _point_journal_at(td)
         try:
             src = os.path.join(td, "CLAUDE.md")
             hist = os.path.join(td, "claude-history.md")
@@ -290,6 +306,45 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_claude_history():
                       for f in os.listdir(td)))
         finally:
             opt.review_dir = real_review_dir
+            _restore_journal(saved_journal)
+
+
+def test_cmd_apply_journals_the_primary_claude_md_target():
+    # T6.1/defect 2: cmd_apply backs the flagship CLAUDE.md diet target up
+    # with its own inline backup (never through guided_apply.backup_file, on
+    # purpose, see the comment above that inline backup in optimize.py), so
+    # before the fix it produced a backup file but no journal line for path
+    # itself, only for its claude-history.md companion via backup_if_exists.
+    # A later one-command undo built on the journal would silently never
+    # cover the primary target. This must journal path with the same shape
+    # backup_file itself writes.
+    with tempfile.TemporaryDirectory() as td:
+        real_review_dir = _point_review_dir_at(td)
+        saved_journal = _point_journal_at(td)
+        try:
+            src = os.path.join(td, "CLAUDE.md")
+            original = HARD + "\n" + HISTORY + "\n"
+            with open(src, "w") as f:
+                f.write(original)
+            opt.cmd_propose(src)
+            rc = opt.cmd_apply()
+            check("cmd_apply succeeds", rc == 0)
+            with open(ga.MUTATIONS_LOG) as f:
+                records = [json.loads(l) for l in f if l.strip()]
+            target_records = [r for r in records if r["target"] == src]
+            check("exactly one journal line names the primary CLAUDE.md target",
+                  len(target_records) == 1)
+            record = target_records[0]
+            for field in ("timestamp", "target", "pre_hash", "backup_path", "producer"):
+                check(f"the primary target's journal record carries {field}",
+                      field in record)
+            check("pre_hash is the hash of the original content before the diet applied",
+                  record["pre_hash"] == ga.sha256_text(original))
+            check("backup_path names a real file on disk",
+                  os.path.exists(record["backup_path"]))
+        finally:
+            opt.review_dir = real_review_dir
+            _restore_journal(saved_journal)
 
 
 def _split(section_text):

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Calibrated checks for memory_trim.py. Every case that touches
 optimize.review_dir() repoints it at a temp directory first, so no test here
-ever writes into the real ~/.token-shield/optimize/ review directory."""
+ever writes into the real ~/.token-shield/optimize/ review directory.
+Every case that reaches a real backup (cmd_apply's success path) also points
+guided_apply.MUTATIONS_LOG at a temp path first (see
+_point_journal_at/_restore_journal, mirrored from test_guided_apply.py), so
+nothing here ever touches the real machine's ~/.token-shield/mutations.jsonl."""
 import contextlib
 import io
 import os
@@ -9,6 +13,7 @@ import sys
 import tempfile
 
 import context_lint
+import guided_apply
 import memory_trim as mtrim
 import optimize
 
@@ -24,6 +29,16 @@ def _point_review_dir_at(td):
     os.makedirs(d, exist_ok=True)
     optimize.review_dir = lambda: d
     return real
+
+
+def _point_journal_at(td):
+    saved = guided_apply.MUTATIONS_LOG
+    guided_apply.MUTATIONS_LOG = os.path.join(td, "mutations.jsonl")
+    return saved
+
+
+def _restore_journal(saved):
+    guided_apply.MUTATIONS_LOG = saved
 
 
 def _many_bullets(n):
@@ -152,6 +167,7 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_memory_archive():
     # back the existing archive up first, then append (never overwrite).
     with tempfile.TemporaryDirectory() as td:
         real_review_dir = _point_review_dir_at(td)
+        saved_journal = _point_journal_at(td)
         try:
             path = os.path.join(td, "MEMORY.md")
             archive = os.path.join(td, "memory-archive.md")
@@ -168,6 +184,7 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_memory_archive():
                   any(f.startswith("memory-archive.md.bak") for f in os.listdir(td)))
         finally:
             optimize.review_dir = real_review_dir
+            _restore_journal(saved_journal)
 
 
 def test_propose_trim_handles_a_byte_limited_file_with_few_lines():

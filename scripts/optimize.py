@@ -242,6 +242,14 @@ def cmd_apply():
     backup = f"{path}.bak-{stamp}"
     with open(backup, "w") as f:
         f.write(original)
+    # T6.1: journal this backup too. This is the flagship mutation (the
+    # CLAUDE.md diet itself), and it writes its own backup above instead of
+    # calling guided_apply.backup_file, deliberately, so it backs up from the
+    # 'original' string already read and verified against current_hash above
+    # rather than re-reading the file and reopening that check-then-backup
+    # window. journal_mutation reuses the exact hash already computed for
+    # that check: no second read, no second hashing helper.
+    guided_apply.journal_mutation(path, current_hash, backup)
     notes_dest = os.path.join(os.path.dirname(path), "claude-history.md")
     with open(notes) as f:
         notes_text = f.read()

@@ -36,11 +36,16 @@ import config as cfg  # ROOT, EXPERIMENT_DAYS: read from the foundation, never r
 
 # T6.1: the append-only mutation journal. One line per applied mutation
 # (timestamp, target path, pre hash, backup path, producer), written by
-# backup_file/backup_if_exists below, which are the one shared point every
-# producer's mutate_fn already calls to back a target up before overwriting
-# it. A module-level path, same seam as ex.EXP_DIR/ex.LEDGER (see
+# backup_file/backup_if_exists/journal_mutation below, which are the shared
+# points every producer's mutate_fn already calls to back a target up before
+# overwriting it. A module-level path, same seam as ex.EXP_DIR/ex.LEDGER (see
 # test_guided_apply.py's _point_exp_at), so a test can redirect it without
 # ever touching the founder's real ~/.token-shield/mutations.jsonl.
+# ANY test that can reach backup_file, backup_if_exists, or journal_mutation
+# (directly or through a producer's cmd_apply/cmd_guided_apply) MUST redirect
+# this path first. Use the _point_journal_at/_restore_journal helper pattern
+# from test_guided_apply.py, mirrored into every other test file that needs
+# it; do not invent a second pattern.
 MUTATIONS_LOG = os.path.expanduser("~/.token-shield/mutations.jsonl")
 
 # Which guided-apply run is currently mutating something, set by apply()
@@ -139,6 +144,21 @@ def _append_mutation(target_path, pre_hash, backup_path, producer):
               f"The mutation of {target_path} itself still applied; only this "
               f"history line is missing. Backup remains at {backup_path}.",
               file=sys.stderr)
+
+
+def journal_mutation(target_path, pre_hash, backup_path, producer=None):
+    """Public entry point to append one line to the mutation journal, for a
+    caller that writes its own backup instead of going through backup_file
+    (see optimize.cmd_apply, which backs the flagship CLAUDE.md diet target
+    up from the 'original' string it already read and hashed for its own
+    staleness check, deliberately not re-reading the file through
+    backup_file, which would reopen the window between that check and the
+    backup). Defers to _append_mutation, the single journal writer backup_file
+    itself also calls, so there is exactly one place that writes
+    MUTATIONS_LOG and the journal line's shape can never drift between the
+    two paths. producer defaults to whatever apply() has set as the current
+    producer (see _current_producer above), same default backup_file uses."""
+    _append_mutation(target_path, pre_hash, backup_path, producer or _current_producer)
 
 
 def backup_file(path):
