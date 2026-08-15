@@ -4,8 +4,10 @@
     python3 scripts/test_profile.py
 """
 
+import io
 import json
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -57,20 +59,23 @@ def _raw_line_bytes(path):
     return total
 
 
-def _assistant_line(ts, output_tokens=1, tool_uses=None):
+def _assistant_line(ts, output_tokens=1, tool_uses=None, model="claude-x", input_tokens=1):
     """One assistant transcript line. tool_uses is a list of
     (tool_id, name, input_dict) tuples, matching the real tool_use block
-    shape: {"type": "tool_use", "id", "name", "input", "caller"}."""
+    shape: {"type": "tool_use", "id", "name", "input", "caller"}. model and
+    input_tokens default to the original fixed values so every existing
+    caller is unaffected; the waste-score attack fixtures below pass both
+    explicitly."""
     content = [
         {"type": "tool_use", "id": tid, "name": name, "input": inp,
          "caller": {"type": "direct"}}
         for tid, name, inp in (tool_uses or [])
     ]
     msg = {
-        "model": "claude-x",
+        "model": model,
         "content": content,
         "usage": {
-            "input_tokens": 1,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0,
@@ -404,22 +409,158 @@ def _leaf(value, label="MEASURED"):
     return {"value": value, "label": label, "basis": "test fixture"}
 
 
-def _waste_profile(r=0.90, s=0.15, m=0.05, t=0.30, v=400,
+def _waste_profile(r=0.90, s=0.15, m=0.05, t=1000, v=400, sessions=20, n_messages=20,
                     r_label="MEASURED", s_label="MEASURED", m_label="MEASURED",
-                    t_label="MEASURED", v_label="MEASURED"):
-    """A minimal profile carrying only the five leaves compute_waste_score
-    reads, at the real profile.py field names and group nesting (see
-    docs/WASTE-SCORE.md's component table). Defaults sit at the no-penalty
-    anchor for every component."""
+                    t_label="MEASURED", v_label="MEASURED", sessions_label="MEASURED"):
+    """A minimal profile carrying only the leaves compute_waste_score reads,
+    at the real profile.py field names and group nesting (see
+    docs/WASTE-SCORE.md's component table, waste-score/2). Defaults sit at
+    the no-penalty anchor for every component, and sessions/n_messages
+    default comfortably above the sample floor so a test that only cares
+    about one component does not also have to think about the floor. t is
+    tool_result_avg_bytes (bytes, not a share); v is output_verbosity's
+    p90_output_tokens."""
     return {
         "usage": {"cache_hit_ratio_median": _leaf(r, r_label)},
         "instruction": {"startup_floor_share": _leaf(s, s_label)},
-        "behavior": {"model_switch_session_share": _leaf(m, m_label)},
+        "behavior": {
+            "model_switch_volume_share": _leaf(m, m_label),
+            "sessions": _leaf(sessions, sessions_label),
+        },
         "pressure": {
-            "structured_input_share": _leaf(t, t_label),
-            "output_verbosity": _leaf({"median_output_tokens": v}, v_label),
+            "tool_result_avg_bytes": _leaf(t, t_label),
+            "output_verbosity": _leaf({"p90_output_tokens": v, "n_assistant_messages": n_messages},
+                                       v_label),
         },
     }
+
+
+def _ws_session(prefix, n_calls=3, input_tokens=1000, output_tokens=500,
+                 model="claude-x", switch=False, tool_bytes=None, human_bytes=0):
+    """One session (the lines of one transcript file) for the waste-score
+    attack reproductions below. Every call in the session carries the SAME
+    input_tokens, which is what keeps first_request_share pinned at exactly
+    1.0 (first * calls / raw_input collapses to 1.0 whenever every call is
+    the same size) regardless of how many calls or sessions the attack adds;
+    read stays 0 throughout, which keeps hit_ratio pinned at 0.0 the same
+    way. That lets each attack test move exactly one metric and hold the
+    other four still, real fixture math throughout, not hand-picked leaves.
+
+    switch=True gives the LAST call a different model, tripping the
+    model-switch detector for this session. tool_bytes, given, attaches one
+    tool_use to the first call and a matching tool_result of that many
+    bytes; human_bytes adds a human-typed text block alongside it. calls
+    below 3 are deliberately excluded from measure_tokens's hit_ratio and
+    first_request_share aggregation (calls >= 3), which is how the filler
+    sessions in attack C stay invisible to components 1 and 2."""
+    lines = []
+    for i in range(n_calls):
+        ts = f"{prefix}T10:{i:02d}:00Z"
+        m = "claude-y" if (switch and i == n_calls - 1) else model
+        first_call = tool_bytes is not None and i == 0
+        tool_uses = [("t1", "Bash", {"cmd": "x"})] if first_call else None
+        lines.append(_assistant_line(ts, output_tokens=output_tokens, tool_uses=tool_uses,
+                                      model=m, input_tokens=input_tokens))
+        if first_call:
+            lines.append(_user_line(ts, tool_results=[("t1", "X" * tool_bytes)],
+                                     text=("H" * human_bytes if human_bytes else None)))
+    return lines
+
+
+def test_attack_C1A_pasted_human_text_games_v1_structured_input_share():
+    # FINDING C1.A (hostile review, fix round 2): padding every user turn
+    # with pasted human text lowers structured_input_share (v1's tool_output
+    # metric, structured_bytes / (structured_bytes + human_text_bytes)) and
+    # therefore RAISES the score, even though pasting more text strictly
+    # increases total tokens spent. Reproduced here on real fixtures pushed
+    # through the real pipeline (build_profile then compute_waste_score),
+    # not hand-picked leaves.
+    #
+    # Ten sessions, three calls each (the calls >= 3 floor for components 1
+    # and 2), one fixed 500-byte tool_result per session so component 4's
+    # numerator never moves; only the human-typed text alongside it grows by
+    # 8KB per session between the two builds, matching the reviewer's exact
+    # manoeuvre.
+    def build(human_bytes):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(10):
+                _write(os.path.join(d, f"s{i}.jsonl"),
+                       _ws_session(f"2026-08-{i + 1:02d}", tool_bytes=500, human_bytes=human_bytes))
+            return pf.build_profile(root=d, days=30)
+
+    baseline = pf.compute_waste_score(build(100))
+    padded = pf.compute_waste_score(build(100 + 8192))
+    assert baseline["label"] == "MEASURED", baseline
+    assert padded["label"] == "MEASURED", padded
+    # THE ACCEPTANCE RULE: no manoeuvre that strictly increases total tokens
+    # (pasting 8KB more human text into every turn) may increase the score.
+    assert padded["score"] <= baseline["score"], (baseline["score"], padded["score"])
+
+
+def test_attack_C1B_session_farming_games_v1_model_switch_session_share():
+    # FINDING C1.B: padding a machine's session count with cheap, unswitched
+    # sessions dilutes model_switch_session_share (a plain count of sessions
+    # that switched, over total sessions), so a machine that pays for a
+    # fresh startup floor twenty times over scores BETTER than one that pays
+    # for it ten times, purely because the extra sessions never switch
+    # models. The reviewer's own fixture padded 4 real sessions to 20; the
+    # baseline is 10 real sessions here instead of 4, because finding C2 in
+    # this same round adds a 10-session floor below which nothing scores at
+    # all, and a baseline that cannot score cannot demonstrate a score
+    # INCREASE. Ten real sessions (4 of them switching) meets that floor
+    # exactly; the manoeuvre padded on top is unchanged: pure session count.
+    #
+    # Real sessions carry input_tokens=1000/call; the padded, unswitched
+    # sessions carry input_tokens=10/call, ten times smaller. Under v1 (a
+    # plain session count) that difference does not matter at all, which is
+    # exactly the bug; under v2 (weighted by each session's own raw_input,
+    # already produced by measure_tokens.read_session) it does.
+    def build(n_trivial):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(10):
+                _write(os.path.join(d, f"real{i}.jsonl"),
+                       _ws_session(f"2026-08-{i + 1:02d}", input_tokens=1000, switch=(i < 4),
+                                    tool_bytes=500))
+            for j in range(n_trivial):
+                _write(os.path.join(d, f"trivial{j}.jsonl"),
+                       _ws_session(f"2026-08-{(j % 28) + 1:02d}", input_tokens=10, switch=False))
+            return pf.build_profile(root=d, days=30)
+
+    baseline = pf.compute_waste_score(build(0))
+    padded = pf.compute_waste_score(build(10))
+    assert baseline["label"] == "MEASURED", baseline
+    assert padded["label"] == "MEASURED", padded
+    # THE ACCEPTANCE RULE: ten more (strictly more tokens spent) sessions,
+    # none of them switching, may not raise the score.
+    assert padded["score"] <= baseline["score"], (baseline["score"], padded["score"])
+
+
+def test_attack_C1C_filler_messages_game_v1_median_verbosity():
+    # FINDING C1.C: appending cheap one-token filler assistant messages
+    # drags the MEDIAN output_tokens down, so output_verbosity's v1 penalty
+    # falls even though every filler message is pure additional spend. Ten
+    # honest sessions (three calls each, 2000 output tokens per call, so the
+    # calls >= 3 floor is met and the honest median/p90 both start at 2000)
+    # against 60 one-call filler sessions (excluded from components 1 and 2
+    # by the calls >= 3 floor, but not from output_verbosity, which counts
+    # every scanned assistant message).
+    def build(n_filler):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(10):
+                _write(os.path.join(d, f"honest{i}.jsonl"),
+                       _ws_session(f"2026-08-{i + 1:02d}", output_tokens=2000, tool_bytes=500))
+            for j in range(n_filler):
+                _write(os.path.join(d, f"filler{j}.jsonl"),
+                       _ws_session(f"2026-08-{(j % 28) + 1:02d}", n_calls=1, output_tokens=1))
+            return pf.build_profile(root=d, days=30)
+
+    baseline = pf.compute_waste_score(build(0))
+    padded = pf.compute_waste_score(build(60))
+    assert baseline["label"] == "MEASURED", baseline
+    assert padded["label"] == "MEASURED", padded
+    # THE ACCEPTANCE RULE: sixty more (strictly more tokens spent) filler
+    # messages may not raise the score.
+    assert padded["score"] <= baseline["score"], (baseline["score"], padded["score"])
 
 
 def test_waste_score_component_anchors_and_midpoints():
@@ -443,15 +584,15 @@ def test_waste_score_component_anchors_and_midpoints():
     assert pf._linear_penalty(0.35, 0.05, 0.35, 20) == 20
     assert abs(pf._linear_penalty(0.20, 0.05, 0.35, 20) - 10.0) < 1e-9
 
-    # structured_input: weight 15, good 0.30, bad 0.70
-    assert pf._linear_penalty(0.30, 0.30, 0.70, 15) == 0
-    assert pf._linear_penalty(0.70, 0.30, 0.70, 15) == 15
-    assert abs(pf._linear_penalty(0.50, 0.30, 0.70, 15) - 7.5) < 1e-9
+    # tool_result_avg_bytes (waste-score/2): weight 15, good 2000, bad 20000
+    assert pf._linear_penalty(2000, 2000, 20000, 15) == 0
+    assert pf._linear_penalty(20000, 2000, 20000, 15) == 15
+    assert abs(pf._linear_penalty(11000, 2000, 20000, 15) - 7.5) < 1e-9
 
-    # output_verbosity: weight 10, good 400, bad 1200
-    assert pf._linear_penalty(400, 400, 1200, 10) == 0
-    assert pf._linear_penalty(1200, 400, 1200, 10) == 10
-    assert abs(pf._linear_penalty(800, 400, 1200, 10) - 5.0) < 1e-9
+    # output_verbosity (waste-score/2, p90 not median): weight 10, good 800, bad 2500
+    assert pf._linear_penalty(800, 800, 2500, 10) == 0
+    assert pf._linear_penalty(2500, 800, 2500, 10) == 10
+    assert abs(pf._linear_penalty(1650, 800, 2500, 10) - 5.0) < 1e-9
 
     # Past either anchor the penalty stays flat, it never goes negative and
     # never exceeds the weight.
@@ -473,12 +614,22 @@ def test_waste_score_anchors_match_published_spec():
     assert by_name["model_switch"]["weight"] == 20
     assert by_name["model_switch"]["good"] == 0.05
     assert by_name["model_switch"]["bad"] == 0.35
-    assert by_name["structured_input"]["weight"] == 15
-    assert by_name["structured_input"]["good"] == 0.30
-    assert by_name["structured_input"]["bad"] == 0.70
+    # waste-score/2 (FINDING C1.B): model switching is weighted by each
+    # session's own token volume, not counted per session, or a machine can
+    # dilute a genuine switcher for free by padding on cheap sessions.
+    assert by_name["model_switch"]["group"] == "behavior"
+    assert by_name["model_switch"]["key"] == "model_switch_volume_share"
+    assert by_name["tool_result_avg_bytes"]["weight"] == 15
+    assert by_name["tool_result_avg_bytes"]["good"] == 2000
+    assert by_name["tool_result_avg_bytes"]["bad"] == 20000
+    # waste-score/2 (FINDING C1.A): tool_output reads the average tool_result
+    # payload size, not structured_input_share, or pasting more human-typed
+    # text raises the score by diluting a share's denominator.
+    assert by_name["tool_result_avg_bytes"]["group"] == "pressure"
+    assert by_name["tool_result_avg_bytes"]["key"] == "tool_result_avg_bytes"
     assert by_name["output_verbosity"]["weight"] == 10
-    assert by_name["output_verbosity"]["good"] == 400
-    assert by_name["output_verbosity"]["bad"] == 1200
+    assert by_name["output_verbosity"]["good"] == 800
+    assert by_name["output_verbosity"]["bad"] == 2500
     assert sum(c["weight"] for c in pf._WASTE_COMPONENTS) == 100
 
 
@@ -495,12 +646,13 @@ def test_waste_score_round_half_up():
 
 
 def test_waste_score_worked_example_from_doc():
-    # The exact worked example published in docs/WASTE-SCORE.md: r=0.75,
-    # s=0.25, m=0.15, t=0.55, v=650 tokens should score 61.3, band WASTEFUL.
-    prof = _waste_profile(r=0.75, s=0.25, m=0.15, t=0.55, v=650)
+    # The exact worked example published in docs/WASTE-SCORE.md
+    # (waste-score/2): r=0.75, s=0.25, m=0.15, t=8000 bytes, v=1500 p90
+    # tokens should score 64.6, band WASTEFUL.
+    prof = _waste_profile(r=0.75, s=0.25, m=0.15, t=8000, v=1500)
     result = pf.compute_waste_score(prof)
     assert result["label"] == "MEASURED", result
-    assert result["score"] == 61.3, result
+    assert result["score"] == 64.6, result
     assert result["band"] == "WASTEFUL", result
     assert result["version"] == pf.WASTE_SCORE_VERSION
 
@@ -510,7 +662,7 @@ def test_waste_score_perfect_machine_scores_100():
     # _WASTE_COMPONENTS does not move this test (every penalty is already 0
     # regardless of weight), which is exactly why the worst-case test below
     # is the one that catches a wrong weight.
-    prof = _waste_profile(r=1.0, s=0.0, m=0.0, t=0.0, v=0)
+    prof = _waste_profile(r=1.0, s=0.0, m=0.0, t=0, v=0)
     result = pf.compute_waste_score(prof)
     assert result["label"] == "MEASURED", result
     assert result["score"] == 100.0, result
@@ -522,7 +674,7 @@ def test_waste_score_worst_case_scores_0():
     # _WASTE_COMPONENTS (a plausible typo) makes this go red: score becomes
     # 100 - (30+25+2+15+10) = 18.0 instead of 0.0, because the weights no
     # longer sum to 100. Restoring weight 20 makes it green again.
-    prof = _waste_profile(r=0.0, s=1.0, m=1.0, t=1.0, v=3000)
+    prof = _waste_profile(r=0.0, s=1.0, m=1.0, t=20000, v=3000)
     result = pf.compute_waste_score(prof)
     assert result["label"] == "MEASURED", result
     assert result["score"] == 0.0, result
@@ -554,10 +706,10 @@ def test_waste_score_all_or_nothing_no_data():
 
     # Case 3: one input is entirely absent from the profile.
     prof3 = _waste_profile()
-    del prof3["pressure"]["structured_input_share"]
+    del prof3["pressure"]["tool_result_avg_bytes"]
     result3 = pf.compute_waste_score(prof3)
     assert result3["label"] == "NO DATA", result3
-    assert any("structured_input" in reason for reason in result3["missing"]), result3
+    assert any("tool_result" in reason for reason in result3["missing"]), result3
 
     # A single failure must not leak a partial score for the other four.
     assert "components" not in result
@@ -568,10 +720,144 @@ def test_waste_score_version_present_in_output():
     # return dict in compute_waste_score makes the second assertion below
     # go red with a KeyError; restoring it makes both green.
     ok = pf.compute_waste_score(_waste_profile())
-    assert ok["version"] == "waste-score/1"
+    assert ok["version"] == "waste-score/2"
 
     no_data = pf.compute_waste_score(_waste_profile(m_label="NO DATA"))
-    assert no_data["version"] == "waste-score/1"
+    assert no_data["version"] == "waste-score/2"
+
+
+def test_waste_score_sample_floor_no_data_named_with_counts():
+    # FINDING C2 (hostile review): a one-session, three-tool-call machine
+    # returned MEASURED, 49.9, HEAVY WASTE, the same units as a 229-session
+    # baseline. Below the published floor (10 sessions AND 10 assistant
+    # messages), the whole result is NO DATA naming the actual shortfall.
+    prof = _waste_profile(sessions=1, n_messages=3)
+    result = pf.compute_waste_score(prof)
+    assert result["label"] == "NO DATA", result
+    assert any("session" in reason and "1" in reason for reason in result["missing"]), result
+    assert any("assistant message" in reason and "3" in reason for reason in result["missing"]), result
+
+    # Either shortfall alone is enough to refuse the whole score.
+    only_thin_sessions = pf.compute_waste_score(_waste_profile(sessions=2))
+    assert only_thin_sessions["label"] == "NO DATA", only_thin_sessions
+    only_thin_messages = pf.compute_waste_score(_waste_profile(n_messages=4))
+    assert only_thin_messages["label"] == "NO DATA", only_thin_messages
+
+    # Ten and ten, the published floor exactly, must NOT be NO DATA.
+    at_floor = pf.compute_waste_score(_waste_profile(sessions=10, n_messages=10))
+    assert at_floor["label"] == "MEASURED", at_floor
+
+
+def test_waste_score_nonfinite_input_is_no_data():
+    # FINDING M3 (hostile review, plus the founder's own probe): a NaN
+    # cache ratio, with every other input healthy, silently failed every
+    # comparison in _linear_penalty's clamp and came back as a confident
+    # score (70.0, OK, MEASURED) instead of a refusal. Reachability from a
+    # real profile is low today, since the upstream divisions that build
+    # cache_hit_ratio_median are all guarded against a zero denominator;
+    # the guard here is three lines and this repository has already been
+    # broken once by exactly this class of silent-comparison bug.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        result = pf.compute_waste_score(_waste_profile(r=bad))
+        assert result["label"] == "NO DATA", (bad, result)
+        assert any("cache_hit_ratio" in reason for reason in result["missing"]), (bad, result)
+
+
+def test_waste_score_domain_guard_rejects_implausible_share():
+    # FINDING C2's second half (hostile review): the reviewer's own fixture
+    # produced a startup_floor_share of 1.981, a mathematically impossible
+    # "share" that the old clamp silently treated as full penalty. Any
+    # component value outside its plausible domain is NO DATA naming the
+    # actual value, never a silent clamp to full penalty.
+    result = pf.compute_waste_score(_waste_profile(s=1.981))
+    assert result["label"] == "NO DATA", result
+    assert any("startup_floor" in reason and "1.981" in reason for reason in result["missing"]), result
+
+    # A share below 0 is exactly as implausible as one above 1.
+    negative = pf.compute_waste_score(_waste_profile(r=-0.1))
+    assert negative["label"] == "NO DATA", negative
+    assert any("cache_hit_ratio" in reason for reason in negative["missing"]), negative
+
+
+def test_waste_score_band_edges_exact_values():
+    # FINDING M4 (hostile review's own probe): changing `if score >= floor`
+    # to `if score > floor` in pf._waste_band makes a machine scoring
+    # exactly 90 read OK instead of LEAN, and the rest of the suite stayed
+    # green. Pins every published band edge to its exact value.
+    assert pf._waste_band(100.0) == "LEAN"
+    assert pf._waste_band(90.0) == "LEAN"
+    assert pf._waste_band(89.9) == "OK"
+    assert pf._waste_band(70.0) == "OK"
+    assert pf._waste_band(69.9) == "WASTEFUL"
+    assert pf._waste_band(50.0) == "WASTEFUL"
+    assert pf._waste_band(49.9) == "HEAVY WASTE"
+    assert pf._waste_band(0.0) == "HEAVY WASTE"
+
+
+def test_waste_score_doc_tables_match_code_constants():
+    # FINDING M4 (hostile review): nothing tied the code to the published
+    # document. Parses the component and band tables straight out of
+    # docs/WASTE-SCORE.md and asserts they equal the code's own constants,
+    # so editing either one alone turns this test red.
+    doc_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                             "docs", "WASTE-SCORE.md")
+    text = open(doc_path, encoding="utf-8").read()
+
+    # "| 1 | cache_hit_ratio | 30 | 0.90 | 0.50 |"
+    comp_rows = re.findall(
+        r"^\|\s*\d\s*\|\s*([a-z_]+)\s*\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*$",
+        text, re.MULTILINE)
+    assert len(comp_rows) == 5, comp_rows
+    doc_components = {name: (int(w), float(good), float(bad)) for name, w, good, bad in comp_rows}
+    for comp in pf._WASTE_COMPONENTS:
+        assert comp["name"] in doc_components, (comp["name"], sorted(doc_components))
+        w, good, bad = doc_components[comp["name"]]
+        assert w == comp["weight"], (comp["name"], "weight", w, comp["weight"])
+        assert good == comp["good"], (comp["name"], "good", good, comp["good"])
+        assert bad == comp["bad"], (comp["name"], "bad", bad, comp["bad"])
+    assert sum(w for w, _, _ in doc_components.values()) == 100, doc_components
+
+    # "| 90 to 100 | LEAN |" / "| below 50 | HEAVY WASTE |"
+    threshold_rows = re.findall(
+        r"^\|\s*(\d+(?:\.\d+)?)\s+to\s+[\d.]+\s*\|\s*([A-Z ]+?)\s*\|\s*$", text, re.MULTILINE)
+    assert len(threshold_rows) == 3, threshold_rows
+    doc_bands = sorted(((float(f), n.strip()) for f, n in threshold_rows), reverse=True)
+    code_bands = sorted(((float(f), n) for f, n in pf.WASTE_BANDS), reverse=True)
+    assert doc_bands == code_bands, (doc_bands, code_bands)
+
+    below_rows = re.findall(r"^\|\s*below\s+(\d+(?:\.\d+)?)\s*\|\s*([A-Z ]+?)\s*\|\s*$",
+                             text, re.MULTILINE)
+    assert len(below_rows) == 1, below_rows
+    below_floor, below_name = below_rows[0]
+    assert float(below_floor) == min(f for f, _ in pf.WASTE_BANDS), below_floor
+    assert below_name.strip() == "HEAVY WASTE"
+
+
+def test_waste_score_printed_by_main():
+    # FINDING M5 (hostile review): compute_waste_score was dead code,
+    # nothing called it. Printed from profile.py's own main(), which
+    # cli.py picks up for free since it runs profile.py as a subprocess.
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "projects")
+        os.makedirs(root)
+        for i in range(10):
+            _write(os.path.join(root, f"s{i}.jsonl"),
+                   _ws_session(f"2026-08-{i + 1:02d}", tool_bytes=500))
+        out = os.path.join(d, "out", "profile.json")
+
+        argv = sys.argv
+        stdout = sys.stdout
+        sys.argv = ["profile.py", "--root", root, "--days", "30", "--out", out]
+        sys.stdout = captured = io.StringIO()
+        try:
+            rc = pf.main()
+        finally:
+            sys.argv = argv
+            sys.stdout = stdout
+    assert rc == 0, rc
+    text = captured.getvalue()
+    assert pf.WASTE_SCORE_VERSION in text, text
+    assert "waste score" in text.lower(), text
 
 
 def test_main_exits_2_on_empty_root():

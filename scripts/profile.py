@@ -177,6 +177,26 @@ def _model_switch_share(sessions):
     return switched / len(parent)
 
 
+def _model_switch_volume_share(sessions):
+    """Same switch detection as _model_switch_share, weighted by each
+    session's own token volume (raw_input, already computed by
+    measure_tokens.read_session) instead of counting sessions equally.
+
+    docs/WASTE-SCORE.md finding C1.B (hostile review, fix round 2): a plain
+    session count lets a machine dilute a genuine switcher's share for free
+    by padding on many small, unswitched sessions, since every session
+    counts the same regardless of size. Weighting by raw_input means a
+    padded session only moves the number as much as the real tokens it
+    actually spent, so sixteen near-empty sessions barely move it while
+    sixteen sessions the size of the real ones would."""
+    parent = [s for s in sessions if s["first_request"] > 0]
+    total = sum(s.get("raw_input") or 0 for s in parent)
+    if total == 0:
+        return None
+    switched = sum(s.get("raw_input") or 0 for s in parent if s["models"] >= 2)
+    return switched / total
+
+
 def _plugin_count(cache_root):
     if not os.path.isdir(cache_root):
         return None
@@ -393,6 +413,7 @@ def build_profile(root=None, days=30):
     }
 
     switch_share = _model_switch_share(sessions)
+    switch_volume_share = _model_switch_volume_share(sessions)
     idle_shares = _idle_gap_shares(gaps)
     sub_share = (sm["subagent_transcripts"] / sm["sessions"]) if sm.get("sessions") else None
 
@@ -405,6 +426,16 @@ def build_profile(root=None, days=30):
                    "share of parent sessions whose assistant records carried 2+ "
                    "distinct message.model values, from measure_tokens per-session "
                    "model counts")),
+        "model_switch_volume_share": (
+            no_data("no parent sessions with measured token volume in window")
+            if switch_volume_share is None else
+            metric(switch_volume_share, "MEASURED",
+                   "same switch detection as model_switch_session_share, weighted by "
+                   "each parent session's own raw_input (measure_tokens.read_session's "
+                   "total token volume) instead of counting every session equally; "
+                   "used instead of model_switch_session_share by the waste score "
+                   "(docs/WASTE-SCORE.md) so padding on many small unswitched sessions "
+                   "cannot dilute a genuine switcher's share for free")),
         "effort_values_seen": (
             metric(sorted(effort_values, key=str), "MEASURED",
                    f"distinct top-level effort field values across {files_scanned} "
@@ -500,6 +531,16 @@ def build_profile(root=None, days=30):
                    "share of user-message bytes (tool_result content plus "
                    "human-typed text blocks) that were tool_result content, "
                    "i.e. machine-generated rather than typed by a person")),
+        "tool_result_avg_bytes": (
+            no_data("no tool_result blocks found in window") if pa["tool_result_total"] == 0 else
+            metric(pa["structured_bytes"] / pa["tool_result_total"], "MEASURED",
+                   "average bytes per tool_result block: structured_bytes (sum of "
+                   "tool_result content bytes, the same numerator structured_input_share "
+                   "uses) divided by tool_result_total; used instead of "
+                   "structured_input_share by the waste score (docs/WASTE-SCORE.md) "
+                   "because it does not move when a person pastes more human-typed "
+                   "text into the conversation, only when the tool output itself "
+                   "gets bigger")),
     }
 
     skipped = {
@@ -534,29 +575,45 @@ def build_profile(root=None, days=30):
 # and updating that document first: a score is only comparable between
 # machines when it was computed the same way, and the version string is
 # how a later change can never be compared silently against an older one.
-WASTE_SCORE_VERSION = "waste-score/1"
+#
+# waste-score/2 (fix round 2, docs/WASTE-SCORE.md "Version history"): a
+# hostile review found three ways to raise the score by strictly adding
+# tokens (pasting human text, farming trivial sessions, appending filler
+# messages) plus two soundness holes (no sample floor, no guard on a
+# non-finite or out-of-domain input). Components 3-5 changed metric; a
+# sample floor and a finite/domain guard were added. See the doc's "How
+# this score can be gamed" section for what changed and what is still open.
+WASTE_SCORE_VERSION = "waste-score/2"
+
+# Below this many sessions, or this many assistant messages with a measured
+# output_tokens, the whole score is NO DATA rather than a number computed on
+# too thin a sample to mean anything (docs/WASTE-SCORE.md's sample floor).
+WASTE_SCORE_MIN_SESSIONS = 10
+WASTE_SCORE_MIN_ASSISTANT_MESSAGES = 10
 
 # name, problem_class, weight, profile group, profile key, good anchor (no
-# penalty), bad anchor (full penalty), and how to pull the scalar metric out
-# of that leaf's "value" (identity for every metric except output_verbosity,
-# whose leaf value is the {"median_output_tokens": ..., ...} dict that
+# penalty), bad anchor (full penalty), the plausible domain (min, max) a
+# MEASURED value must fall inside before it is trusted (max of None means
+# no upper bound), and how to pull the scalar metric out of that leaf's
+# "value" (identity for every metric except output_verbosity, whose leaf
+# value is the {"p90_output_tokens": ..., ...} dict that
 # _output_verbosity() builds).
 _WASTE_COMPONENTS = (
     {"name": "cache_hit_ratio", "problem_class": "cache_health", "weight": 30,
      "group": "usage", "key": "cache_hit_ratio_median", "good": 0.90, "bad": 0.50,
-     "extract": lambda v: v},
+     "domain": (0.0, 1.0), "extract": lambda v: v},
     {"name": "startup_floor", "problem_class": "startup_rent", "weight": 25,
      "group": "instruction", "key": "startup_floor_share", "good": 0.15, "bad": 0.45,
-     "extract": lambda v: v},
+     "domain": (0.0, 1.0), "extract": lambda v: v},
     {"name": "model_switch", "problem_class": "cache_health", "weight": 20,
-     "group": "behavior", "key": "model_switch_session_share", "good": 0.05, "bad": 0.35,
-     "extract": lambda v: v},
-    {"name": "structured_input", "problem_class": "tool_output", "weight": 15,
-     "group": "pressure", "key": "structured_input_share", "good": 0.30, "bad": 0.70,
-     "extract": lambda v: v},
+     "group": "behavior", "key": "model_switch_volume_share", "good": 0.05, "bad": 0.35,
+     "domain": (0.0, 1.0), "extract": lambda v: v},
+    {"name": "tool_result_avg_bytes", "problem_class": "tool_output", "weight": 15,
+     "group": "pressure", "key": "tool_result_avg_bytes", "good": 2000, "bad": 20000,
+     "domain": (0.0, None), "extract": lambda v: v},
     {"name": "output_verbosity", "problem_class": "verbosity", "weight": 10,
-     "group": "pressure", "key": "output_verbosity", "good": 400, "bad": 1200,
-     "extract": lambda v: v.get("median_output_tokens") if isinstance(v, dict) else None},
+     "group": "pressure", "key": "output_verbosity", "good": 800, "bad": 2500,
+     "domain": (0.0, None), "extract": lambda v: v.get("p90_output_tokens") if isinstance(v, dict) else None},
 )
 
 WASTE_BANDS = (
@@ -592,14 +649,53 @@ def _waste_band(score):
     return "HEAVY WASTE"
 
 
+def _waste_sample_counts(profile):
+    """(n_sessions, n_assistant_messages) for the sample floor, read from
+    leaves build_profile already computes: behavior.sessions, and
+    pressure.output_verbosity's own n_assistant_messages count. Either
+    leaf being NO DATA (or absent) reads as 0, not as "unknown": the floor
+    exists to refuse a too-thin sample, and a metric that could not even be
+    measured is the thinnest sample of all."""
+    sessions_leaf = profile.get("behavior", {}).get("sessions") or {}
+    n_sessions = sessions_leaf.get("value") if sessions_leaf.get("label") == "MEASURED" else 0
+
+    verbosity_leaf = profile.get("pressure", {}).get("output_verbosity") or {}
+    verbosity_value = verbosity_leaf.get("value") if verbosity_leaf.get("label") == "MEASURED" else None
+    n_messages = verbosity_value.get("n_assistant_messages") if isinstance(verbosity_value, dict) else 0
+
+    return (n_sessions or 0), (n_messages or 0)
+
+
 def compute_waste_score(profile):
     """Score = 100 minus the sum of five component penalties, per
     docs/WASTE-SCORE.md. All-or-nothing: computed only when every one of
-    the five inputs carries the MEASURED label; otherwise the whole result
-    is NO DATA, naming every input that failed and why. Never substitutes a
-    zero and never scores over a subset: a score computed over a varying
-    subset of components is not comparable between machines, and
-    comparability is the entire reason this score exists."""
+    the five inputs carries the MEASURED label, is a finite number, and
+    falls inside its plausible domain, AND the sample clears the published
+    floor (WASTE_SCORE_MIN_SESSIONS sessions, WASTE_SCORE_MIN_ASSISTANT_MESSAGES
+    assistant messages); otherwise the whole result is NO DATA, naming
+    every input that failed and why. Never substitutes a zero and never
+    scores over a subset: a score computed over a varying subset of
+    components is not comparable between machines, and comparability is
+    the entire reason this score exists."""
+    n_sessions, n_messages = _waste_sample_counts(profile)
+    floor_failures = []
+    if n_sessions < WASTE_SCORE_MIN_SESSIONS:
+        floor_failures.append(
+            f"sample floor: {n_sessions} session(s) in window, need at least "
+            f"{WASTE_SCORE_MIN_SESSIONS}")
+    if n_messages < WASTE_SCORE_MIN_ASSISTANT_MESSAGES:
+        floor_failures.append(
+            f"sample floor: {n_messages} assistant message(s) with a measured "
+            f"output_tokens in window, need at least {WASTE_SCORE_MIN_ASSISTANT_MESSAGES}")
+    if floor_failures:
+        return {
+            "version": WASTE_SCORE_VERSION,
+            "score": None,
+            "band": None,
+            "label": "NO DATA",
+            "missing": floor_failures,
+        }
+
     values = {}
     failures = []
 
@@ -616,6 +712,14 @@ def compute_waste_score(profile):
         value = comp["extract"](leaf.get("value"))
         if value is None:
             failures.append(f"{comp['name']} ({path}): required field missing from value")
+            continue
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            failures.append(f"{comp['name']} ({path}): value {value!r} is not a finite number")
+            continue
+        dmin, dmax = comp["domain"]
+        if value < dmin or (dmax is not None and value > dmax):
+            bound = f"[{dmin}, {dmax if dmax is not None else 'unbounded'}]"
+            failures.append(f"{comp['name']} ({path}): value {value} is outside its plausible domain {bound}")
             continue
         values[comp["name"]] = value
 
@@ -706,6 +810,15 @@ def main():
 
     print(f"skipped while reading: {mt.fmt(sk['files']['value'])} files, "
           f"{mt.fmt(sk['lines']['value'])} lines")
+
+    ws = compute_waste_score(prof)
+    print(f"--- waste score ({ws['version']}) ---")
+    if ws["label"] == "NO DATA":
+        print("waste score: NO DATA")
+        for reason in ws["missing"]:
+            print(f"  - {reason}")
+    else:
+        print(f"waste score: {ws['score']} ({ws['band']})")
     return 0
 
 
