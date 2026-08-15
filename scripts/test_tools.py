@@ -1405,6 +1405,116 @@ def test_state_unrecognised_is_the_only_reason_for_no_data():
     assert state == "NO DATA", (state, reason)
 
 
+# T2.2: the four-state header and the PROVING panel on the dashboard itself
+# (docs/plan/2026-08-15-STATE-MODEL.md). command_center_state() is called
+# exactly once, inside render(); these tests hand render() the same fixture
+# shapes the primitives return and check the rendered HTML, never the state
+# priority logic again (that is T2.1's, already covered above).
+
+def test_dashboard_renders_proving_panel():
+    exp_mod = met.load_experiment()
+    open_experiments = [{
+        "label": "diet-claude-md", "started": "2026-08-01T00:00:00+0000",
+        "window_days": 7, "treats": exp_mod.CLAUDE_MD_PATH,
+        "fingerprint_excluded": [exp_mod.CLAUDE_MD_PATH],
+    }]
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=[], profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[], open_experiments=open_experiments,
+                         strategy_count=len(adv.load_strategies()), exp_mod=exp_mod,
+                         today="2026-08-08")
+
+    # The four-state header, state and reason verbatim from command_center_state.
+    band = re.search(r'<div class="cc-band cc-proving">(.*?)</div>', html, re.S)
+    assert band, html
+    assert "PROVING" in band.group(1), band.group(1)
+    assert "diet-claude-md" in band.group(1), band.group(1)
+
+    # The PROVING panel: label, day n of m (2026-08-01 to 2026-08-08 inclusive
+    # is day 8 of a 7 day window), and a keep-stable list built from the
+    # record's own fingerprint fields. CLAUDE.md is this experiment's own
+    # treats/fingerprint_excluded file, so it must be named as the exception,
+    # never listed among what must hold still.
+    panel = re.search(r'<div class="proving-panel">(.*?)</div>', html, re.S)
+    assert panel, html
+    body = panel.group(1)
+    assert "diet-claude-md" in body, body
+    assert "day 8 of 7" in body, body
+    assert "settings.json" in body, body
+    assert ".claude.json" in body, body
+    assert "installed skills" in body.lower(), body
+    keep_section = body.split("Keep this stable")[1]
+    assert "CLAUDE.md" not in keep_section, keep_section
+
+
+def test_proving_panel_handles_unreadable_baseline_without_raising():
+    # list_open_experiments fails CLOSED: a corrupt or unreadable baseline
+    # file comes back as a marker carrying "_unreadable" and no "label". The
+    # panel must name the path, not invent a label, and never raise.
+    open_experiments = [{"_unreadable": "/tmp/some-baseline.json"}]
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=[], profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[], open_experiments=open_experiments,
+                         strategy_count=len(adv.load_strategies()),
+                         exp_mod=met.load_experiment(), today="2026-08-08")
+    assert "PROVING" in html, html
+
+    # Isolated to the panel's own fragment: the header's reason line already
+    # names the path too (metrics._proving_reason), so checking the whole
+    # page would pass even if the panel itself fell back to a guessed label.
+    panel = re.search(r'<div class="proving-panel">(.*?)</div>', html, re.S)
+    assert panel, html
+    body = panel.group(1)
+    assert "/tmp/some-baseline.json" in body, body
+    assert "(unlabeled)" not in body, body
+
+
+def test_dashboard_header_renders_every_state():
+    # Every surface renders whatever command_center_state returns, including
+    # HEALTHY and NO DATA: the header is not conditional on PROVING.
+    profile = _synthetic_profile(switch_share=0.1, floor_share=0.05, hit_ratio=0.95)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=[], profile=profile, advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=[], open_experiments=[],
+                         strategy_count=len(adv.load_strategies()), today="2026-08-08")
+    assert 'class="cc-band cc-healthy"' in html, html
+    assert '<div class="proving-panel">' not in html, html
+
+    no_data_html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                                 verified=[], profile=None, advise_result=None,
+                                 companions_data={"companions": [], "mentions": []},
+                                 experiment_rows=[], open_experiments=[],
+                                 strategy_count=0, today="2026-08-08")
+    assert 'class="cc-band cc-nodata"' in no_data_html, no_data_html
+
+
+def test_verified_state_is_visually_and_textually_distinct_from_verified_label():
+    # docs/plan/2026-08-15-STATE-MODEL.md's VERIFIED state (a steady state:
+    # healthy AND proven) is a different axis from the VERIFIED confidence
+    # label (a closed experiment's own evidence). They must never share a
+    # colour, and the state word must never appear bare, without a clarifier
+    # that names it a state rather than a fresh proof.
+    band = shield.render_command_center("VERIFIED", "diet-claude-md: floor reduction +4,200 tokens")
+    assert "steady state" in band.lower(), band
+
+    state_color = re.search(r'\.cc-band\.cc-verified \.cc-state\{color:([^;}]+)', shield.CSS)
+    ver_pill_color = re.search(r'\.cpill\.ver\{color:([^;]+);', shield.CSS)
+    assert state_color and ver_pill_color, shield.CSS
+    assert state_color.group(1) != ver_pill_color.group(1), (state_color.group(1),
+                                                              ver_pill_color.group(1))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
