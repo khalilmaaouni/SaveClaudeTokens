@@ -550,6 +550,222 @@ def test_the_trial_agrees_with_the_command_it_recommends_about_the_headline():
         f"{cli_v:,.0f} for the same data, in the same words")
 
 
+# --- the first-screen hero block: one number, one meaning, one action ------
+# Five tests below, one per branch of trial.py's `key == ...` chain (shrink,
+# cache, route, healthy, nodata), plus a cross-file contract test and a
+# NO-DATA-still-leads test. Each fixture independently confirms it actually
+# lands on the branch it claims via mt.dominant_lever(sm), so a fixture that
+# drifts off its intended branch fails loudly instead of passing on the wrong
+# code path.
+
+def test_hero_shrink_branch_leads_with_its_number():
+    # Calibrated: changing the "shrink" branch's `meaning` string in trial.py
+    # (for example dropping "whether it changed or not") makes this go red,
+    # because lines[1] is pinned to the exact sentence that branch prints.
+    with tempfile.TemporaryDirectory() as d:
+        recs = [_rec(f"2026-08-12T10:{i:02d}:00Z") for i in range(5)]
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+        sm = mt.summarize(mt.collect(d, 30))
+    assert rc == 0, rc
+    assert mt.dominant_lever(sm) == "shrink", (
+        "fixture drifted off the shrink branch, so this test proves nothing")
+    lines = text.splitlines()
+    share = sm["first_request_share_median"]
+    assert lines[0].startswith("MEASURED"), lines[0]
+    assert f"{share * 100:.0f}%" in lines[0], lines[0]
+    assert "paid for again and again" in lines[0], lines[0]
+    assert lines[1] == ("You are re-reading that block on every single "
+                          "message, whether it changed or not."), lines[1]
+    assert lines[2].startswith("Run python3 "), lines[2]
+    assert lines[2].endswith(" advise to see exactly what is safe to trim."), lines[2]
+    cli_path = lines[2][len("Run python3 "):-len(" advise to see exactly what is safe to trim.")]
+    assert os.path.isfile(cli_path), cli_path
+
+
+def test_hero_cache_branch_leads_with_its_number():
+    # Calibrated: changing the "cache" branch's `action` string in trial.py
+    # (for example "breaking the cache" to "breaking the cach") makes this go
+    # red, because the action line's ending is pinned exactly.
+    with tempfile.TemporaryDirectory() as d:
+        recs = ([_rec("2026-08-12T10:00:00Z", inp=10, read=10)]
+                + [_rec(f"2026-08-12T10:0{i}:00Z", inp=1000, read=1000)
+                   for i in range(1, 5)])
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+        sm = mt.summarize(mt.collect(d, 30))
+    assert rc == 0, rc
+    assert mt.dominant_lever(sm) == "cache", (
+        "fixture drifted off the cache branch, so this test proves nothing")
+    lines = text.splitlines()
+    hit = sm["hit_ratio_median"]
+    assert lines[0].startswith("MEASURED"), lines[0]
+    assert f"{hit * 100:.0f}%" in lines[0], lines[0]
+    assert "cache" in lines[0], lines[0]
+    assert lines[1] == ("Most of your context is being rebuilt from scratch "
+                          "instead of reused."), lines[1]
+    assert lines[2].startswith("Run python3 "), lines[2]
+    assert lines[2].endswith(" advise to see what keeps breaking the cache."), lines[2]
+    cli_path = lines[2][len("Run python3 "):-len(" advise to see what keeps breaking the cache.")]
+    assert os.path.isfile(cli_path), cli_path
+
+
+def test_hero_route_branch_leads_with_its_number():
+    # Calibrated: changing the "route" branch's `hero` string in trial.py
+    # (for example dropping the word "subagents") makes this go red, because
+    # that word is asserted present in lines[0].
+    with tempfile.TemporaryDirectory() as d:
+        recs = ([_rec("2026-08-12T10:00:00Z", inp=10, read=10, out=10)]
+                + [_rec(f"2026-08-12T10:0{i}:00Z", inp=10, read=1000, out=10)
+                   for i in range(1, 5)]
+                + [_rec(f"2026-08-12T10:1{i}:00Z", inp=1, read=0, out=50, sidechain=True)
+                   for i in range(0, 3)])
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+        sm = mt.summarize(mt.collect(d, 30))
+    assert rc == 0, rc
+    assert mt.dominant_lever(sm) == "route", (
+        "fixture drifted off the route branch, so this test proves nothing")
+    lines = text.splitlines()
+    sub = sm["subagent_output_share"]
+    assert lines[0].startswith("MEASURED"), lines[0]
+    assert f"{sub * 100:.0f}%" in lines[0], lines[0]
+    assert "subagents" in lines[0], lines[0]
+    assert lines[1] == ("That can be a smart trade or a wasted one, depending "
+                          "on what those subagents were doing."), lines[1]
+    assert lines[2].startswith("Run python3 "), lines[2]
+    assert lines[2].endswith(" advise to see whether that split is paying off."), lines[2]
+    cli_path = lines[2][len("Run python3 "):-len(" advise to see whether that split is paying off.")]
+    assert os.path.isfile(cli_path), cli_path
+
+
+def test_hero_healthy_branch_leads_with_its_number():
+    # Calibrated: changing the "healthy" branch's `hero` string in trial.py
+    # (for example dropping "healthy range") makes this go red, since
+    # lines[0] is pinned to the exact sentence that branch prints.
+    with tempfile.TemporaryDirectory() as d:
+        recs = ([_rec("2026-08-12T10:00:00Z", inp=10, read=10)]
+                + [_rec(f"2026-08-12T10:0{i}:00Z", inp=10, read=1000)
+                   for i in range(1, 5)])
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+        sm = mt.summarize(mt.collect(d, 30))
+    assert rc == 0, rc
+    assert mt.dominant_lever(sm) == "healthy", (
+        "fixture drifted off the healthy branch, so this test proves nothing")
+    lines = text.splitlines()
+    assert lines[0] == ("MEASURED  every signal this tool tracks is inside "
+                          "its healthy range"), lines[0]
+    assert lines[1] == "Nothing here is quietly wasting tokens right now.", lines[1]
+    assert lines[2].startswith("Run python3 "), lines[2]
+    assert lines[2].endswith(" dashboard for the full picture anyway."), lines[2]
+    cli_path = lines[2][len("Run python3 "):-len(" dashboard for the full picture anyway.")]
+    assert os.path.isfile(cli_path), cli_path
+
+
+def test_hero_nodata_branch_leads_with_its_number():
+    # Calibrated: changing the "nodata" branch's `action` string in trial.py
+    # (for example dropping "session or two") makes this go red, since
+    # lines[2] is pinned to the exact sentence that branch prints.
+    #
+    # Two calls per session, well under the calls >= 3 gate that
+    # measure_tokens.summarize() applies to both `hits` and `shares`, so both
+    # first_request_share_median and hit_ratio_median come back None even
+    # though sm itself is not empty (unlike the NO-DATA-lead test below,
+    # which covers sm being empty entirely).
+    with tempfile.TemporaryDirectory() as d:
+        recs = [_rec(f"2026-08-12T10:0{i}:00Z") for i in range(2)]
+        _write(os.path.join(d, "s.jsonl"), recs)
+        rc, text = _run(d)
+        sm = mt.summarize(mt.collect(d, 30))
+    assert rc == 0, rc
+    assert mt.dominant_lever(sm) == "nodata", (
+        "fixture drifted off the nodata branch, so this test proves nothing")
+    lines = text.splitlines()
+    assert lines[0] == "MEASURED  not enough usage yet to put one number on it", lines[0]
+    assert lines[1] == ("A few more Claude Code sessions will give this tool "
+                          "something real to measure."), lines[1]
+    assert lines[2] == "Use Claude Code for a session or two, then run this again.", lines[2]
+
+
+def test_hero_numeric_branches_never_receive_none():
+    """Pins the cross-file coupling trial.py's hero block silently depends on:
+    measure_tokens.dominant_lever only ever returns "shrink" when its own
+    share value is not None, only ever returns "cache" when hit is not None,
+    and only ever returns "route" when sub is not None. trial.py's three
+    numeric branches multiply those values by 100 with no None guard of
+    their own, so if a future change to dominant_lever's thresholds ever
+    breaks this guarantee, trial.py raises TypeError on the exact user this
+    screen was written for.
+
+    Driven straight through the real dominant_lever over a grid of inputs
+    (including None and values near, at, and past its 0.30/0.70/0.40
+    boundaries) rather than restating those threshold numbers here, so this
+    test tracks the function's actual behavior instead of a copy of it that
+    could quietly drift out of sync with it.
+
+    Calibrated by reinjecting the exact defect this guards against: a copy of
+    dominant_lever with `(share or 0) >= 0.30` in place of
+    `share is not None and share >= 0.30` (and the same `or 0` substitution
+    for hit and sub) returns "shrink"/"cache"/"route" for a None value sitting
+    at or past the threshold, and the assertions below go red against that
+    copy. Restoring the real measure_tokens.dominant_lever (never edited on
+    disk; the broken copy lived only in a throwaway calibration script) makes
+    it pass again. measure_tokens.py itself was not touched to run this
+    check.
+    """
+    import itertools
+    values = [None, 0.0, 0.05, 0.15, 0.25, 0.29, 0.30, 0.31, 0.39, 0.40, 0.41,
+              0.5, 0.6, 0.69, 0.70, 0.71, 0.8, 0.9, 0.99, 1.0]
+    keys_seen = set()
+    for share, hit, sub in itertools.product(values, repeat=3):
+        sm = {"first_request_share_median": share, "hit_ratio_median": hit,
+              "subagent_output_share": sub}
+        key = mt.dominant_lever(sm)
+        keys_seen.add(key)
+        if key == "shrink":
+            assert share is not None, ("shrink returned with a None share", sm)
+        elif key == "cache":
+            assert hit is not None, ("cache returned with a None hit", sm)
+        elif key == "route":
+            assert sub is not None, ("route returned with a None sub", sm)
+    # The grid must actually reach every branch, or the assertions above are
+    # vacuously true and this test proves nothing.
+    assert {"shrink", "cache", "route", "healthy", "nodata"} <= keys_seen, keys_seen
+
+
+def test_no_data_still_leads_before_any_hero_line():
+    # Not already covered: test_no_data_when_root_missing and
+    # test_no_data_when_root_empty both assert "NO DATA" appears in the text,
+    # but neither checks that it is the FIRST line, which is the actual claim
+    # "NO DATA beats a guess" makes now that a hero block exists above it.
+    #
+    # Calibrated: swapping the order of the two `print(...)` calls inside the
+    # `if not os.path.isdir(root)` block in trial.py (or inside the `if not
+    # sm` block) makes this go red, since lines[0] would then start with
+    # "Use Claude Code" instead of "NO DATA".
+    with tempfile.TemporaryDirectory() as d:
+        missing = os.path.join(d, "does-not-exist")
+        rc, text = _run(missing)
+    assert rc == 0, rc
+    lines = text.splitlines()
+    assert lines, "no output at all"
+    assert lines[0].startswith("NO DATA"), lines[0]
+    assert "MEASURED" not in text, (
+        "a hero line must never print when the root does not exist")
+
+    with tempfile.TemporaryDirectory() as d:
+        parsed_but_empty = '{"message": {"usage": {}}, "timestamp": "2026-08-12T10:00:00Z"}'
+        _write(os.path.join(d, "s.jsonl"), [parsed_but_empty])
+        rc2, text2 = _run(d)
+    assert rc2 == 0, rc2
+    lines2 = text2.splitlines()
+    assert lines2, "no output at all"
+    assert lines2[0].startswith("NO DATA"), lines2[0]
+    assert "MEASURED" not in text2, (
+        "a hero line must never print when there are no usage counters")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
