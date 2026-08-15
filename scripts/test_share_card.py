@@ -115,6 +115,40 @@ def test_cli_refuses_on_a_fixture_ledger_with_only_not_proven():
     check("main() exits nonzero when nothing qualifies", rc != 0)
 
 
+def test_a_later_not_proven_supersedes_an_earlier_verified():
+    """The card is the artifact designed to LEAVE THIS MACHINE, so a claim a
+    re-run could not reproduce must never travel on it.
+
+    RED before the fix: the card rendered "+24,000 startup tokens/call,
+    fewer, proven 2026-07-01" even though the newest record for that label
+    is a NOT_PROVEN from six weeks later. The cause was ordering: every
+    reader filtered to VERIFIED BEFORE picking the latest row, so a failed
+    re-run simply vanished instead of superseding.
+
+    The pre-existing latest-wins test could not catch this because both of
+    its rows were VERIFIED, which is the shape the defect hides behind."""
+    rows = [{"label": "claude-md-diet", "confidence": "VERIFIED",
+             "timestamp": "2026-07-01T00:00:00+00:00",
+             "floor_reduction_tokens": 24000},
+            {"label": "claude-md-diet", "confidence": "NOT_PROVEN",
+             "timestamp": "2026-08-14T00:00:00+00:00",
+             "floor_reduction_tokens": None}]
+    row, reason = sc.select_card_row(rows)
+    check("a superseded VERIFIED claim is refused, not published",
+          row is None and reason is not None)
+
+    # The mirror case: a genuine newer VERIFIED must still publish, so the
+    # fix cannot be "refuse whenever any NOT_PROVEN exists".
+    rows_ok = [{"label": "x", "confidence": "NOT_PROVEN",
+                "timestamp": "2026-07-01T00:00:00+00:00",
+                "floor_reduction_tokens": None},
+               {"label": "x", "confidence": "VERIFIED",
+                "timestamp": "2026-08-14T00:00:00+00:00",
+                "floor_reduction_tokens": 9000}]
+    row_ok, reason_ok = sc.select_card_row(rows_ok)
+    check("a newer VERIFIED still publishes", row_ok is not None and reason_ok is None)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

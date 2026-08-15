@@ -65,18 +65,20 @@ def select_card_row(rows, label=None):
     With no `label`, the row with the largest floor_reduction_tokens wins
     (the card's whole point is to show the best proven result on file).
     """
+    # Newest row per label FIRST (the shared rule in token_shield), THEN the
+    # confidence filter. The order used to be reversed here, which meant a
+    # later NOT_PROVEN run did not supersede an earlier VERIFIED one and this
+    # card kept printing "proven" for a claim the newest run could not
+    # reproduce. This card is the artifact designed to leave the machine, so
+    # that was the worst place in the codebase for this defect to live.
     latest = {}
-    for i, r in enumerate(rows or []):
+    for lbl, r in ts.latest_row_per_label(rows).items():
         if r.get("confidence") not in QUALIFYING_CONFIDENCE:
             continue
         fr = r.get("floor_reduction_tokens")
         if isinstance(fr, bool) or not isinstance(fr, (int, float)):
             continue
-        lbl = r.get("label") or "(unlabeled)"
-        ts_v = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
-        key = (ts_v, i)
-        if lbl not in latest or key > latest[lbl][0]:
-            latest[lbl] = (key, r)
+        latest[lbl] = ((r.get("timestamp") or "", 0), r)
 
     if not latest:
         if not rows:
