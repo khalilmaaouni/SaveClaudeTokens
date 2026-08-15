@@ -1216,6 +1216,195 @@ def test_base_input_units_is_defined_before_it_is_first_used():
     assert html.index("One base-input unit is") < html.index("base-input units"), html
 
 
+# command_center_state(): the four-state model, docs/plan/2026-08-15-STATE-MODEL.md.
+# Every fixture below hands the function the shape its three primitives
+# (list_open_experiments, advise, verified_by_label) actually return, never
+# the real machine's files, per the memo's "existing primitives only" rule.
+
+def test_state_proving_beats_opportunity():
+    open_experiments = [{"label": "diet-claude-md", "started": "2026-08-01T10:00:00",
+                          "window_days": 7}]
+    advise_result = {"do_nothing": False,
+                     "best": {"id": "cache.a", "title": "t", "why_selected": "cache hit is low"},
+                     "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "diet-claude-md" in reason, reason
+
+
+def test_state_healthy_when_do_nothing():
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now."}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "HEALTHY", (state, reason)
+    assert "healthy" in reason.lower(), reason
+
+
+def test_state_unreadable_baseline_still_proving():
+    open_experiments = [{"_unreadable": "/some/path.json"}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "/some/path.json" in reason, reason
+
+
+def test_state_all_triggers_insufficient_is_no_data():
+    advise_result = {"do_nothing": True, "insufficient": ["cache.a", "startup.b", "context.c"]}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "NO DATA", (state, reason)
+    assert state != "HEALTHY"
+
+
+def test_state_historical_verified_does_not_beat_healthy():
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000,
+                "historical": True, "historical_reason": "config fingerprint moved"}]
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now."}
+    state, reason = met.command_center_state([], advise_result, verified, 3)
+    assert state == "HEALTHY", (state, reason)
+
+
+def _opportunity_beats_verified_fixture():
+    advise_result = {"do_nothing": False,
+                     "best": {"id": "cache.a", "title": "t", "why_selected": "cache hit is low"},
+                     "insufficient": []}
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000, "historical": False}]
+    return advise_result, verified
+
+
+def test_state_opportunity_beats_verified():
+    advise_result, verified = _opportunity_beats_verified_fixture()
+    state, reason = met.command_center_state([], advise_result, verified, 3)
+    assert state == "OPPORTUNITY", (state, reason)
+
+
+def _unrecognised_format_fixture():
+    open_experiments = [{"label": "diet-claude-md", "started": "2026-08-01T10:00:00",
+                          "window_days": 7}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000, "historical": False}]
+    return open_experiments, advise_result, verified
+
+
+def test_state_unrecognised_format_beats_proving():
+    open_experiments, advise_result, verified = _unrecognised_format_fixture()
+    state, reason = met.command_center_state(open_experiments, advise_result, verified, 3,
+                                              parse_health="UNRECOGNISED")
+    assert state == "NO DATA", (state, reason)
+
+
+def test_state_parse_health_none_is_unchanged():
+    # Same fixture as test_state_opportunity_beats_verified: None must render
+    # OPPORTUNITY exactly as omitting the argument does.
+    advise_result, verified = _opportunity_beats_verified_fixture()
+    state, reason = met.command_center_state([], advise_result, verified, 3, parse_health=None)
+    assert state == "OPPORTUNITY", (state, reason)
+
+    # Same fixture as test_state_unrecognised_format_beats_proving, minus the
+    # UNRECOGNISED string: None must render PROVING, today's behaviour,
+    # unchanged by the new argument's mere presence.
+    open_experiments, advise_result2, verified2 = _unrecognised_format_fixture()
+    state2, reason2 = met.command_center_state(open_experiments, advise_result2, verified2, 3,
+                                                parse_health=None)
+    assert state2 == "PROVING", (state2, reason2)
+
+
+# Verification-review defects (independent review of an unmerged change),
+# fixed together: a suppressed strategy hitting `continue` before advisor.py's
+# insufficient check let len(insufficient) == strategy_count become
+# unreachable after a single suppression, so a completely unmeasured, fully
+# suppressed profile rendered HEALTHY instead of NO DATA.
+
+def test_state_suppressed_strategy_still_no_data():
+    # The reproduction from the review report, run against the real strategy
+    # registry: suppress the first strategy, leave the profile empty (every
+    # other strategy's trigger is insufficient). Before the fix this rendered
+    # HEALTHY with a reason line naming "NO DATA" twice; it must render the
+    # NO DATA state instead.
+    strategies = adv.load_strategies()
+    treatments = {strategies[0]["id"]: {"decision": "suppressed", "until": "2099-01-01T00:00:00"}}
+    res = adv.advise({}, treatments=treatments)
+    state, reason = met.command_center_state([], res, [], len(strategies))
+    assert state == "NO DATA", (state, reason)
+
+
+def test_state_every_strategy_suppressed_is_no_data():
+    # Denominator 0: advise_result["evaluated"] is 0 because every strategy
+    # was suppressed and none reached trigger evaluation at all. This must
+    # render NO DATA and say so honestly (suppressed, not insufficient).
+    advise_result = {"do_nothing": True, "insufficient": [], "evaluated": 0}
+    state, reason = met.command_center_state([], advise_result, [], 5)
+    assert state == "NO DATA", (state, reason)
+    assert "suppress" in reason.lower(), reason
+
+
+def test_state_all_suppressed_does_not_hide_a_running_experiment():
+    # Same denominator 0 as the test above, but with an open experiment on
+    # disk. PROVING must win. Suppressing every strategy is a CONFIGURATION
+    # choice and says nothing about whether the meter works, while the open
+    # experiment is read from a file rather than computed from the profile, so
+    # it is still a fact. Burying a running trial under NO DATA would lose real
+    # information and cost the user the stability warning PROVING exists to
+    # give. The two MEASUREMENT failures above (unrecognised format, unreadable
+    # advisor) do still outrank PROVING, and that asymmetry is the point.
+    advise_result = {"do_nothing": True, "insufficient": [], "evaluated": 0}
+    open_experiments = [{"label": "diet-claude-md", "window_days": 30}]
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 5)
+    assert state == "PROVING", (state, reason)
+    assert "diet-claude-md" in reason, reason
+
+
+def test_state_none_advise_result_is_no_data():
+    # token_shield.py sets advise_result to None when the advisor fails to
+    # load (scripts/token_shield.py:910). The first surface that wires this
+    # function up must degrade to NO DATA, not crash with AttributeError.
+    state, reason = met.command_center_state([], None, [], 3)
+    assert state == "NO DATA", (state, reason)
+    assert "advisor" in reason.lower(), reason
+
+
+def test_state_unreadable_baseline_keeps_the_other_count():
+    # _proving_reason returned early on the _unreadable marker before adding
+    # "(and N more open)", so a user with one unreadable baseline and other
+    # genuinely open experiments was told only about the unreadable one.
+    open_experiments = [{"_unreadable": "/some/path.json"},
+                         {"label": "a", "started": "2026-08-01T10:00:00", "window_days": 7},
+                         {"label": "b", "started": "2026-08-02T10:00:00", "window_days": 7}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "/some/path.json" in reason, reason
+    assert "2 more open" in reason, reason
+
+
+def test_state_healthy_reason_names_the_advisor_message():
+    # Mutant that survived: HEALTHY's reason line content was never checked,
+    # only that the word "healthy" appears somewhere. Pin the reason to
+    # advise_result's own message field verbatim.
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now. Your two strongest metrics: "
+                                "cache hit ratio 0.87, startup floor share 0.42."}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "HEALTHY", (state, reason)
+    assert reason == advise_result["message"], reason
+
+
+def test_state_unrecognised_is_the_only_reason_for_no_data():
+    # Mutant that survived: nothing proved parse_health="UNRECOGNISED" is
+    # actually load-bearing rather than redundant with an already-firing
+    # precondition. Use a fixture that would render a real state (HEALTHY)
+    # without it, then show UNRECOGNISED alone forces NO DATA.
+    advise_result = {"do_nothing": True, "insufficient": []}
+    without_flag_state, _ = met.command_center_state([], advise_result, [], 3)
+    assert without_flag_state == "HEALTHY", without_flag_state
+
+    state, reason = met.command_center_state([], advise_result, [], 3, parse_health="UNRECOGNISED")
+    assert state == "NO DATA", (state, reason)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

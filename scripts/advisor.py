@@ -709,6 +709,7 @@ def advise(profile, treatments=None, strategies=None, facts=None, today=None):
     main_fired = []
     companion_fired = []
     suppressed_by_companion = []
+    evaluated = 0
     for s in strategies:
         rec = (treatments or {}).get(s["id"])
         is_companion_rec = bool(rec) and rec.get("reason") == "companion"
@@ -722,6 +723,14 @@ def advise(profile, treatments=None, strategies=None, facts=None, today=None):
                 if is_companion_rec and band not in (None, False):
                     suppressed_by_companion.append(s["id"])
                 continue
+
+        # Reached only by strategies not skipped by the suppression `continue`
+        # above, so this is the count that actually reached trigger
+        # evaluation. A strategy suppressed and never evaluated must not
+        # inflate the denominator the NO DATA precondition divides by
+        # (metrics.command_center_state), or a fully suppressed, fully
+        # unmeasured profile can render HEALTHY instead of NO DATA.
+        evaluated += 1
 
         if band is None:
             insufficient.append(s["id"])
@@ -758,6 +767,7 @@ def advise(profile, treatments=None, strategies=None, facts=None, today=None):
         "do_nothing": do_nothing,
         "advisor_cost_tokens": 0,
         "insufficient": insufficient,
+        "evaluated": evaluated,
         "suppressed_by_companion": suppressed_by_companion,
         "tournaments": build_tournaments(strategies, profile,
                                          best_id=best_card["id"] if best_card else None),

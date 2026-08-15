@@ -1294,6 +1294,28 @@ def test_token_saver_strategy_card_matches_its_promoted_tier():
     assert went_red, "reinjection (old detect-only text) did not reproduce the defect"
 
 
+def test_evaluated_excludes_suppressed_but_counts_the_rest():
+    # Verification-review defect 1: a suppressed strategy hits `continue`
+    # before the insufficient check, so it must not inflate the denominator
+    # metrics.command_center_state divides the NO DATA precondition by.
+    # "evaluated" counts only strategies that actually reached trigger
+    # evaluation, i.e. were not skipped by the suppression `continue`.
+    strategies = [strategy("cache.s1", "cache", "usage.m1", ">=", 1, "HIGH"),
+                  strategy("cache.s2", "cache", "usage.m2", ">=", 1, "HIGH")]
+    profile = nest({"usage.m1": leaf(5), "usage.m2": leaf(None, label="NO DATA")})
+    future = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 86400))
+
+    one_suppressed = {"cache.s1": {"decision": "suppressed", "until": future}}
+    result = adv.advise(profile, one_suppressed, strategies)
+    assert result["evaluated"] == 1, result  # only cache.s2 reached evaluation
+    assert result["insufficient"] == ["cache.s2"], result
+
+    all_suppressed = {"cache.s1": {"decision": "suppressed", "until": future},
+                       "cache.s2": {"decision": "suppressed", "until": future}}
+    result_all = adv.advise(profile, all_suppressed, strategies)
+    assert result_all["evaluated"] == 0, result_all  # not len(strategies)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
