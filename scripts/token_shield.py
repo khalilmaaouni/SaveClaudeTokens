@@ -35,6 +35,7 @@ import importlib.util
 import json
 import os
 import sys
+from datetime import datetime
 
 import config as cfg
 import formatting as fmt
@@ -538,6 +539,154 @@ def render_alerts(profile):
     return "".join(parts)
 
 
+# THE COMMAND CENTER STATE, docs/plan/2026-08-15-STATE-MODEL.md. metrics.py's
+# command_center_state() is the single source of truth for which of the four
+# states (PROVING, OPPORTUNITY, VERIFIED, HEALTHY) or NO DATA renders; this
+# module only renders the (state, reason) pair it returns, never recomputes
+# the priority order.
+#
+# VERIFIED is a name shared with a different axis entirely: the five
+# confidence labels (VERIFIED, MEASURED, ESTIMATED, NATIVE, RECOMMENDED) that
+# the cpills carry on every figure elsewhere on this page. Confusing them
+# would read as if a fresh proof had just landed when in fact the state means
+# "healthy, and something is proven" (a steady state, not news). Kept apart
+# three ways, so a reader loses the thread on none of them alone: (1) the
+# word "VERIFIED" here always carries an explicit "(a steady state...)"
+# clarifier the confidence pill never does; (2) the state band uses its own
+# colour, --accent, never the confidence pill's --good green (see .cc-band.
+# cc-verified in CSS below and test_verified_state_is_visually_and_textually_
+# distinct_from_verified_label); (3) the two live in physically separate
+# containers with different shapes (a rectangular banner vs. a small pill)
+# and the band is titled "Command center status", a phrase that appears
+# nowhere near a confidence pill.
+_CC_STATE_CLASS = {"PROVING": "cc-proving", "OPPORTUNITY": "cc-opportunity",
+                   "VERIFIED": "cc-verified", "HEALTHY": "cc-healthy"}
+
+
+def render_command_center(state, reason):
+    """The four-state header, rendered exactly as command_center_state()
+    returns it: state and reason verbatim, no re-deriving either one."""
+    cls = _CC_STATE_CLASS.get(state, "cc-nodata")
+    clarifier = (" (a steady state: healthy and already proven, not a fresh "
+                "result)" if state == "VERIFIED" else "")
+    return (f'<div class="cc-band {cls}">'
+           f'<p class="cc-eyebrow">Command center status</p>'
+           f'<p class="cc-state">{fmt.esc(state)}</p>'
+           f'<p class="cc-reason">{fmt.esc(reason)}{fmt.esc(clarifier)}</p></div>')
+
+
+def _proving_day_count(started, window_days, today_str):
+    """(n, m) for the PROVING panel, n counting the start date as day 1.
+    n can exceed m: the window is n days long only up to and including day
+    m, so n > m means the window has closed and the caller (render_proving_
+    panel) renders that as "closed", never as an impossible "day n of m"
+    fraction. Returns None when started, window_days or today_str is
+    missing or unparsable, rather than guess a day count: this is panel
+    text, not a computed state, and the memo's own refusal to guess (section
+    2) applies here too. Never raises. today_str is a plain "YYYY-MM-DD" (or
+    fuller ISO) string, always supplied by the caller (render()'s own `today`
+    parameter, itself derived once from the CLI's --stamp / clock read, per
+    "no Date.now in library code paths" above): nothing in this function
+    reads the clock, which is what keeps it testable with a fixed date."""
+    if not started or not window_days or not today_str:
+        return None
+    try:
+        start_date = datetime.fromisoformat(str(started).replace("Z", "+00:00")).date()
+        today_date = datetime.fromisoformat(str(today_str).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None  # sbe: allow-silent an unparsable date becomes "day NO DATA" in the panel, never a guessed day count
+    return (today_date - start_date).days + 1, window_days
+
+
+def _keep_stable_list(exp_mod, baseline):
+    """The config surface this open experiment's fingerprint watches, minus
+    whatever the record's own treats/fingerprint_excluded fields say the
+    treatment is allowed to touch (experiment.py's excluded_by_treats, run
+    once at experiment start and stored on the baseline). Named from the
+    static path constants experiment.py already defines, never a live
+    filesystem glob of SKILLS_DIR: that would make the list depend on
+    whichever skills happen to be installed on the machine rendering the
+    page, which is neither a fact recorded on the experiment itself nor
+    reproducible from a test fixture."""
+    if exp_mod is None or not baseline:
+        return []
+    watched = [
+        ("CLAUDE.md", getattr(exp_mod, "CLAUDE_MD_PATH", None)),
+        ("settings.json", getattr(exp_mod, "SETTINGS_PATH", None)),
+        (".claude.json", getattr(exp_mod, "CLAUDE_JSON_PATH", None)),
+        ("installed skills (every SKILL.md)", getattr(exp_mod, "SKILLS_DIR", None)),
+    ]
+    excluded = set(baseline.get("fingerprint_excluded") or [])
+    treats = baseline.get("treats")
+    if treats:
+        excluded.add(os.path.abspath(os.path.expanduser(str(treats))))
+    return [name for name, path in watched
+           if path is not None and os.path.abspath(path) not in excluded]
+
+
+def render_proving_panel(open_experiments, exp_mod, today_str):
+    """The PROVING panel: which open experiment, how far through its window,
+    and what must hold still for the result to stay honest. Shown only when
+    the command center state is PROVING (render() gates the call). Mirrors
+    metrics._proving_reason's own handling of an "_unreadable" marker
+    (list_open_experiments fails CLOSED per its own docstring): names the
+    file path, never invents a label, never raises."""
+    if not open_experiments:
+        return ""
+    first = open_experiments[0] or {}
+    more = len(open_experiments) - 1
+    parts = ['<div class="proving-panel">', '<h2>Proving</h2>']
+    path = first.get("_unreadable")
+    if path:
+        parts.append(f'<p class="pv-label">Baseline unreadable: <code>{fmt.esc(path)}</code></p>')
+        parts.append('<p class="n">This baseline file could not be read, so an open trial '
+                     'cannot be ruled out. No label, day count or stable list can be shown '
+                     'for it.</p>')
+    else:
+        label = first.get("label") or "(unlabeled)"
+        parts.append(f'<p class="pv-label">{fmt.esc(label)}</p>')
+        day = _proving_day_count(first.get("started"), first.get("window_days"), today_str)
+        if day:
+            n, m = day
+            if n < 1:
+                # The recorded start date is in the FUTURE. Reachable through
+                # clock skew, a restored backup, a hand edited record, or a
+                # timezone boundary. Without this branch the panel renders
+                # "day -28 of 7", which is the same class of impossible
+                # looking fraction as the "day 8 of 7" the n > m branch below
+                # exists to prevent, just off the other end of the range. Say
+                # what is actually wrong instead of printing the arithmetic.
+                ahead = 1 - n
+                day_word = "day" if ahead == 1 else "days"
+                parts.append(f'<p class="pv-day nodata">NO DATA: the recorded start date '
+                             f'is {ahead} {day_word} in the future, so no day count can be '
+                             f'trusted. Check this machine\'s clock and the baseline '
+                             f'record.</p>')
+            elif n > m:
+                closed_days = n - m
+                day_word = "day" if closed_days == 1 else "days"
+                close_cmd = f'python3 scripts/cli.py experiment end "{label}"'
+                parts.append(f'<p class="pv-day pv-closed">Window closed {closed_days} '
+                             f'{day_word} ago. Run <code>{fmt.esc(close_cmd)}</code> for a '
+                             f'verdict.</p>')
+            else:
+                parts.append(f'<p class="pv-day">day {n} of {m}</p>')
+        else:
+            parts.append('<p class="pv-day nodata">day NO DATA</p>')
+        keep = _keep_stable_list(exp_mod, first)
+        if keep:
+            parts.append('<p class="n">Keep this stable until the window closes:</p>')
+            parts.append('<ul class="pv-keep">'
+                         + "".join(f'<li>{fmt.esc(k)}</li>' for k in keep) + '</ul>')
+        else:
+            parts.append('<p class="n nodata">NO DATA: could not determine what to keep '
+                         'stable for this experiment.</p>')
+    if more:
+        parts.append(f'<p class="n">and {more} more open experiment(s)</p>')
+    parts.append('</div>')
+    return "".join(parts)
+
+
 CSS = """
 :root{
   --bg:#16131f; --panel:#1e1a2b; --panel2:#251f36; --line:#332a47;
@@ -643,6 +792,26 @@ table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-num
 .chip{font-size:11.5px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:6px 9px;}
 .chip b{display:block;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:3px;}
 .chip code{font-family:var(--mono);font-size:11px;color:var(--ink);}
+.cc-band{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;padding:16px 18px;margin:16px 0 22px;background:var(--panel);}
+.cc-eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;}
+.cc-state{font-size:22px;font-weight:750;letter-spacing:.01em;margin:0 0 6px;}
+.cc-reason{font-size:13.5px;color:var(--muted);margin:0;max-width:70ch;}
+.cc-band.cc-proving{border-left-color:var(--shield);}
+.cc-band.cc-proving .cc-state{color:var(--shield);}
+.cc-band.cc-opportunity{border-left-color:var(--warn);}
+.cc-band.cc-opportunity .cc-state{color:var(--warn);}
+.cc-band.cc-verified{border-left-color:var(--accent);}
+.cc-band.cc-verified .cc-state{color:var(--accent);}
+.cc-band.cc-healthy{border-left-color:var(--good);}
+.cc-band.cc-healthy .cc-state{color:var(--good);}
+.cc-band.cc-nodata{border-left-color:var(--muted);}
+.cc-band.cc-nodata .cc-state{color:var(--muted);}
+.proving-panel{background:var(--panel2);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin:0 0 22px;}
+.pv-label{font-size:16px;font-weight:650;margin:0 0 4px;}
+.pv-day{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 0 10px;}
+.pv-day.pv-closed{color:var(--warn);}
+.pv-keep{margin:6px 0 0;padding-left:18px;font-size:13.5px;color:var(--ink);}
+.pv-keep li{margin:2px 0;}
 """
 
 SHIELD_SVG = (
@@ -667,11 +836,21 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
            experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0,
            waterfall_core_label=met.WATERFALL_CORE_LABEL,
-           waterfall_companion_label=met.WATERFALL_COMPANION_LABEL):
+           waterfall_companion_label=met.WATERFALL_COMPANION_LABEL,
+           open_experiments=None, strategy_count=0, parse_health=None, today=None,
+           exp_mod=None):
     # usd_res is accepted for signature compatibility with callers (main()
     # still measures it for the separate `prices` command's use elsewhere)
     # but is never rendered here: the dashboard shows only figures the user
     # can act on, not a dollar estimate of Anthropic's own caching.
+    #
+    # open_experiments/strategy_count/parse_health feed command_center_state()
+    # unchanged (T2.1's one function, the single source of truth per
+    # docs/plan/2026-08-15-STATE-MODEL.md); exp_mod and today are used only
+    # here, to render the PROVING panel's keep-stable list and day count, and
+    # are never passed into command_center_state itself.
+    state, cc_reason = met.command_center_state(open_experiments or [], advise_result,
+                                                 verified, strategy_count, parse_health)
     pp = met.pain_points(sessions)
     rx = met.prescriptions(sm, sessions)
     ranked_rx = sorted(rx, key=lambda x: -x["saving"])
@@ -689,6 +868,15 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                  f'{days:g} days. Every figure is read from the API usage counters, never '
                  f'estimated. Measured on this machine; the method is portable, these numbers '
                  f'are not.</p>')
+
+    # THE FOUR-STATE HEADER, above the confidence-label key on purpose: the
+    # state answers "what do I do right now", the key below answers "what do
+    # these words mean", and the two must never sit close enough to blur
+    # together (see render_command_center's docstring on keeping the VERIFIED
+    # state apart from the VERIFIED confidence label).
+    parts.append(render_command_center(state, cc_reason))
+    if state == "PROVING":
+        parts.append(render_proving_panel(open_experiments or [], exp_mod, today))
 
     # THE KEY, here and not at the foot of the page: it explains the four
     # words every figure below is labelled with, so it has to arrive before
@@ -884,13 +1072,19 @@ def main():
         import time
         stamp = time.strftime("%Y-%m-%d %H:%M")
 
+    # "today" for the PROVING panel's day count (docs/plan/2026-08-15-STATE-
+    # MODEL.md section 2a: command_center_state is deliberately clock free,
+    # so the day count is computed here, at the CLI edge, from the same
+    # stamp the pricing lookup below already derives a date from) rather than
+    # a fresh clock read inside the renderer.
+    today = stamp.split()[0] if stamp else None
+
     # Optional honest enrichment: per-model USD from the pricing snapshot, and
     # the VERIFIED total from the experiment ledger. Both degrade to None without
     # breaking the render, and a failure is surfaced, not swallowed.
     usd_res = None
     try:
         import pricing as pr
-        today = stamp.split()[0]
         usd_res = pr.price_saving(pr.saving_by_model(a.root, a.days),
                                   pr.load_pricing(), today)
     except (OSError, ValueError, ImportError) as e:
@@ -905,17 +1099,31 @@ def main():
         print(f"note: historical-drift check skipped ({e})", file=sys.stderr)
     verified = met.verified_by_label(experiment_rows, exp_mod)
 
+    # Open experiments: the PROVING primitive (docs/plan/2026-08-15-STATE-
+    # MODEL.md). list_open_experiments() itself never raises on a missing
+    # directory (it degrades to []), but the read still goes through the same
+    # degrade-to-empty-and-say-so pattern as every other optional surface
+    # here, in case the module failed to load at all above.
+    open_experiments = []
+    if exp_mod is not None:
+        try:
+            open_experiments = exp_mod.list_open_experiments()
+        except OSError as e:
+            print(f"note: open experiment check skipped ({e})", file=sys.stderr)
+
     # v1.7 advisor surfaces: profile, advice, and the companion registry. Each
     # degrades to None on any failure, rather than take the whole render down.
     profile = None
     advise_result = None
     suppressed_n = 0
     companion_suppressed_n = 0
+    strategy_count = 0
     try:
         import advisor as adv
         profile = met.load_profile(adv.PROFILE_PATH)
         if profile is not None:
             strategies = adv.load_strategies()
+            strategy_count = len(strategies)
             treatments = adv.load_treatments()
             advise_result = adv.advise(profile, treatments, strategies)
             suppressed_n, companion_suppressed_n = met.suppressed_recommendation_counts(
@@ -929,7 +1137,9 @@ def main():
                   companions_data=companions_data, experiment_rows=experiment_rows,
                   companion_suppressed_n=companion_suppressed_n,
                   waterfall_core_label=a.waterfall_core,
-                  waterfall_companion_label=a.waterfall_companion)
+                  waterfall_companion_label=a.waterfall_companion,
+                  open_experiments=open_experiments, strategy_count=strategy_count,
+                  today=today, exp_mod=exp_mod)
     out_html = body if a.body_only else render_standalone(body)
     out = os.path.expanduser(a.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
