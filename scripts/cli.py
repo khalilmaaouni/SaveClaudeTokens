@@ -2,11 +2,21 @@
 """
 cli.py: one entry point for Token Shield.
 
-  python3 cli.py                     quick honest summary (same as `summary`)
-  python3 cli.py summary
-  python3 cli.py dashboard           render the HTML dashboard and print its path
+START HERE (three commands are a whole first run)
+  python3 cli.py summary             where your tokens went and the one biggest
+                                      thing you could still cut. This is also
+                                      what runs with no argument at all.
   python3 cli.py experiment start|end <label> [--treats PATH]
-  python3 cli.py prices              per-model USD-equivalent of the saving
+                                      prove a change: start before you make it,
+                                      end after, and the ledger judges it
+  python3 cli.py dashboard           render the HTML dashboard and print its path
+
+ADVANCED
+  python3 cli.py experiment report   one row per experiment label, from the
+                                      ledger (never summed across labels)
+  python3 cli.py prices              per-model API-list-price equivalent of the
+                                      native caching saving (not money anyone
+                                      saved: the command says so first)
   python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
   python3 cli.py prune propose <id> [<id> ...] --bundle-id <bundle-id>
                                       propose a named bundle of plugins to
@@ -30,6 +40,14 @@ cli.py: one entry point for Token Shield.
                                       staleness, shared-hook facts (doctor.py)
   python3 cli.py uninstall           remove local Token Shield data: prints
                                       what exists, requires typing YES, deletes
+  python3 cli.py uninstall --yes     the same, without the prompt. The only
+                                      form that works from a management tool
+                                      or a script: without it and without a
+                                      terminal the command refuses and
+                                      deletes nothing
+  python3 cli.py -h | --help         this text
+  python3 cli.py -V | --version      the installed version, read from
+                                      .claude-plugin/plugin.json
 
 The scripts underneath (measure_tokens, token_shield, pricing, experiment,
 optimize, profile, advisor, report) stay the source of truth; this only
@@ -95,13 +113,26 @@ def summary(days=30):
     if not os.path.isdir(ROOT):
         print("NO DATA: no Claude Code transcripts found.")
         return 2
-    sm = mt.summarize(mt.collect(ROOT, days))
+    # One scan, reused. Collecting twice read every transcript on disk twice
+    # and doubled the wait on the exact command a stranger is told to run
+    # first. The line goes to stderr so a pipe stays clean, and it goes out
+    # before the scan so the screen is never blank while a first timer decides
+    # the thing has hung.
+    print(f"Reading your Claude Code transcripts under {ROOT} (last {days:g} "
+          "days). On a long history this takes a minute.", file=sys.stderr)
+    sessions = mt.collect(ROOT, days)
+    sm = mt.summarize(sessions)
     if not sm:
         print("NO DATA: no transcripts carried usage counters yet.")
         return 0
-    native = ts.savings_breakdown(sm)["saved"]
-    rx = ts.prescriptions(sm, mt.collect(ROOT, days))
-    tool = sum(r["saving"] for r in rx)
+    sv = ts.savings_breakdown(sm)
+    native = sv["saved"]
+    rx = ts.prescriptions(sm, sessions)
+    # The largest lever, never the sum. The levers overlap (they all cut the
+    # same startup floor), so summing them double counts, and trial.py already
+    # takes the max: a stranger who runs the trial and then this command has to
+    # see one number, not two that contradict each other.
+    tool = max((r["saving"] for r in rx), default=0)
     ver = _verified_by_label()
 
     print("Token Shield")
@@ -112,7 +143,7 @@ def summary(days=30):
     else:
         print("  VERIFIED     none yet. Run: python3 cli.py experiment start \"my-change\"")
     print(f"  NATIVE       {native/1e9:.1f}B token-units saved by Claude Code's caching "
-          f"(Anthropic's, not this tool)")
+          f"(Anthropic's, not this tool){ts.native_note(sv)}")
     print(f"  OPPORTUNITY  {tool/1e6:.0f}M token-units you could still cut (estimated, "
           f"from your own sessions)")
     if rx:
@@ -146,19 +177,56 @@ def prices(days=90):
         print(f"NO PRICE DATA: {res['reason']}. Saving still measured: "
               f"{res['saved_units']/1e9:.2f}B units.")
         return 0
+    # The caveat leads, on its own line, before any figure. It used to sit at
+    # the tail of the total line, in the same weight, under a six figure
+    # headline: a reader takes the number and leaves the caveat there. The
+    # grand total is gone with it, because summed these rows become one big
+    # number that travels alone, and the saving it describes is Anthropic's
+    # caching doing its job, never anything this tool did.
+    print("This is not money you saved.")
+    print("Claude Code's caching (Anthropic's own mechanism, not Token Shield) "
+          "kept these tokens off the wire for you. No bill went down: on a "
+          "subscription you pay the same either way.")
+    print("The figures below are only what those same tokens would have cost at "
+          "API list prices. They are worth reading one model at a time, when you "
+          "are choosing a model, and worth nothing added together.")
+    print()
     print(f"API-equivalent of the native caching saving (snapshot {res['snapshot']}):")
     for row in res["rows"]:
         u = f"${row['usd']:,.2f}" if row["usd"] is not None else "UNPRICED"
         print(f"  {row['model']:<26} {row['units']/1e9:6.2f}B units  {u}")
-    print(f"  total  ${res['usd']:,.2f} API-equivalent. On a subscription the bill did not "
-          f"drop by this; it is API-list-price equivalent.")
     return 0
 
 
-def uninstall():
+def _version():
+    """The version from the plugin manifest, or None when it cannot be read.
+
+    Read from .claude-plugin/plugin.json rather than kept as a second copy
+    here, because two copies of a version number drift and the manifest is
+    the one the marketplace actually installs from."""
+    manifest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            ".claude-plugin", "plugin.json")
+    try:
+        with open(manifest, encoding="utf-8") as f:
+            version = json.load(f).get("version")
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+def uninstall(argv=()):
     """Destructive. Print an inventory, print the VERIFIED savings a user is
     about to lose, require a typed YES, then delete. Never touches
-    ~/.claude/settings.json or CLAUDE.md; those are the user's own to edit."""
+    ~/.claude/settings.json or CLAUDE.md; those are the user's own to edit.
+
+    `--yes` skips the prompt, which is the only path that works under a
+    management tool: this used to call sys.stdin.readline() unconditionally,
+    so an MDM push, a CI job, or any run without a terminal attached blocked
+    forever waiting for a person who was never going to type. Without the
+    flag and without a terminal it now REFUSES and deletes nothing, because
+    a removal that guesses consent from an empty pipe is worse than one that
+    stops."""
+    assume_yes = "--yes" in argv
     token_shield_dir = os.path.expanduser("~/.token-shield")
     claude_token_shield_dir = os.path.expanduser("~/.claude/token-shield")
 
@@ -196,12 +264,19 @@ def uninstall():
     if found:
         print("Removal is irreversible: your measurement history and treatment "
               "memory will be gone for good.")
-        print("Type YES to remove everything listed above. Anything else aborts "
-              "with nothing deleted.")
-        answer = sys.stdin.readline().strip()
-        if answer != "YES":
-            print("Aborted. Nothing deleted.")
-            return 1
+        if not assume_yes:
+            if not sys.stdin.isatty():
+                print("Refused: nothing is attached to this command's input, so there is "
+                      "no one to type YES. Nothing was deleted.")
+                print("Re-run with --yes to remove everything listed above without a "
+                      "prompt: python3 cli.py uninstall --yes")
+                return 2
+            print("Type YES to remove everything listed above. Anything else aborts "
+                  "with nothing deleted.")
+            answer = sys.stdin.readline().strip()
+            if answer != "YES":
+                print("Aborted. Nothing deleted.")
+                return 1
         import shutil
         for base in (token_shield_dir, claude_token_shield_dir):
             if os.path.isdir(base):
@@ -222,6 +297,19 @@ def uninstall():
 
 
 def main(argv):
+    # Asking for help is not an error, so it exits 0. Falling through to the
+    # unknown-command branch below is what made -h and --help exit 2.
+    if argv and argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    # GNU's own standard for a command line tool is both --help AND --version;
+    # only the first existed, so an administrator holding a thousand installs
+    # had no way to ask any of them which build they were running.
+    if argv and argv[0] in ("-V", "--version"):
+        version = _version()
+        print(f"token-shield {version}" if version
+              else "token-shield NO DATA: .claude-plugin/plugin.json could not be read")
+        return 0
     if not argv or argv[0] == "summary":
         return summary()
     cmd = argv[0]
@@ -270,10 +358,16 @@ def main(argv):
         return subprocess.run(
             [sys.executable, os.path.join(here, "doctor.py")] + argv[1:]).returncode
     if cmd == "uninstall":
-        return uninstall()
+        return uninstall(argv[1:])
     if cmd == "experiment":
+        # commands/optimize.md sends the reader here. Without this line it fell
+        # into the usage error below, which named no working alternative, for a
+        # report experiment.py has implemented all along.
+        if len(argv) > 1 and argv[1] == "report":
+            return ex.cmd_report()
         if len(argv) < 3 or argv[1] not in ("start", "end"):
             print("usage: cli.py experiment start|end <label> [--treats PATH]")
+            print("       cli.py experiment report")
             return 2
         import time
         # cmd_start and cmd_end take epoch seconds and do their own window
@@ -289,6 +383,9 @@ def main(argv):
                 treats = argv[i + 1]
         return ex.cmd_start(argv[2], ROOT, EXPERIMENT_DAYS, now_ts, treats)
     print(__doc__)
+    # Same text as --help, so the exit code alone would not tell a user their
+    # command was wrong. Name it, on stderr.
+    print(f"unknown command: {cmd}", file=sys.stderr)
     return 2
 
 

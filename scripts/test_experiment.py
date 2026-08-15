@@ -1153,6 +1153,162 @@ def test_a_cohort_that_skipped_files_or_lines_is_not_proven():
           rec_ok["confidence"] == "VERIFIED")
 
 
+# --- Wave 2: the four proof-ledger defects (D18, D19, D8, D21a) --------------
+
+def test_an_unproven_delta_never_rides_the_verified_row():
+    """D18. aggregate_by_label collected floor_reduction_tokens from EVERY
+    record whatever its confidence, and cmd_report prints the LAST one on a
+    line that opens with the VERIFIED count. So a label with two proven runs
+    and one later unproven one printed
+
+        diet   3 runs   2 VERIFIED   1 NOT_PROVEN   latest floor reduction 99,999
+
+    where 99,999 is the UNPROVEN number, sitting in the column a reader takes
+    as the verified result. This is the product's own promise inverted: the
+    whole point of the confidence label is that an unproven number cannot
+    borrow a proven one's authority.
+
+    The rule: reductions carries VERIFIED records only, and a label with no
+    verified run reports nothing rather than its newest guess."""
+    records = [
+        {"label": "diet", "confidence": "VERIFIED", "floor_reduction_tokens": 1000},
+        {"label": "diet", "confidence": "VERIFIED", "floor_reduction_tokens": 2000},
+        {"label": "diet", "confidence": "NOT_PROVEN", "floor_reduction_tokens": 99999},
+        {"label": "onlybad", "confidence": "NOT_PROVEN", "floor_reduction_tokens": 4242},
+    ]
+    by_label = ex.aggregate_by_label(records)
+    check("counts still see every record", by_label["diet"]["count"] == 3)
+    check("the verified and unproven tallies are unchanged",
+          by_label["diet"]["verified"] == 2 and by_label["diet"]["not_proven"] == 1)
+    check("the unproven delta is not in the reductions list",
+          99999 not in by_label["diet"]["reductions"])
+    check("the newest VERIFIED delta is what remains",
+          by_label["diet"]["reductions"][-1] == 2000)
+    check("a label with no verified run reports no reduction at all",
+          by_label["onlybad"]["reductions"] == [])
+    check("...while still counting its run", by_label["onlybad"]["count"] == 1)
+
+
+def test_the_overlap_refusal_never_advises_a_smaller_window():
+    """D19. The refusal told the reader to 'wait longer, or end with a smaller
+    --days window'. Taking the second half of that advice is strictly harmful:
+    a smaller window trips build_record's own window-length guard, which is an
+    unconditional downgrade, and cmd_end writes that NOT_PROVEN permanently
+    into an APPEND-ONLY ledger. The reader follows our instruction and buys a
+    permanent unproven verdict, which then feeds D18 above.
+
+    Waiting longer is the only sound path, so it is the only one offered.
+
+    Checked by RUNNING the refusal and reading what it printed, not by
+    grepping the source: a source grep would also match the comment in
+    experiment.py explaining why the advice was removed, which is how a
+    wording test quietly stops testing anything."""
+    import contextlib
+    import io
+
+    now = 3_600_000
+    with tempfile.TemporaryDirectory() as d:
+        saved_dir, saved_ledger = ex.EXP_DIR, ex.LEDGER
+        ex.EXP_DIR = os.path.join(d, "experiments")
+        ex.LEDGER = os.path.join(d, "savings.jsonl")
+        os.makedirs(ex.EXP_DIR)
+        # cohort_end_ts sits at "now", so the after cohort (now - 30 days)
+        # starts well before the before cohort ended: a guaranteed overlap.
+        b = _baseline()
+        b["cohort_end_ts"] = now
+        with open(os.path.join(ex.EXP_DIR, "t.json"), "w") as f:
+            json.dump(b, f)
+        temp_ledger = ex.LEDGER  # read BEFORE the restore below, or this
+                                 # checks the real machine's ledger instead
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                rc = ex.cmd_end("t", os.path.join(d, "root"), 30, now)
+            ledger_written = os.path.exists(temp_ledger)
+        finally:
+            ex.EXP_DIR, ex.LEDGER = saved_dir, saved_ledger
+        printed = out.getvalue()
+
+    check("an overlapping close is refused", rc == 2)
+    check("it still refuses without writing to the append-only ledger",
+          not ledger_written)
+    check("the refusal no longer advises shortening the window",
+          "smaller --days" not in printed)
+    check("it says what to do instead", "wait" in printed.lower())
+    check("and warns that forcing it through costs a permanent verdict",
+          "NOT_PROVEN" in printed)
+
+    # And the reason that advice was harmful, proven rather than asserted.
+    rec = ex.build_record(_baseline(window=30), _after(window=7), "2026-08-30T00:00:00")
+    check("a smaller window is indeed an unconditional downgrade",
+          rec["confidence"] == "NOT_PROVEN"
+          and any("window changed" in r for r in rec["reasons"]))
+
+
+def test_a_legacy_baseline_can_actually_be_closed():
+    """D8. list_open_experiments matched a baseline against the ledger on
+    (label, cohort_end_ts), but only admitted a ledger record to `closed` when
+    its cohort_before.end was not None. A legacy baseline has no
+    cohort_end_ts, so its close record carries end=None, is refused entry to
+    `closed`, and the baseline's own (label, None) can never match anything.
+
+    The result: closing it appends a NOT_PROVEN record and it STILL reads as
+    open. Every close appends another. And guided_apply refuses to run while
+    any experiment is open, so one legacy baseline blocks every guided change
+    on the machine, permanently.
+
+    Closing it must be possible. The verdict stays NOT_PROVEN naming the
+    missing fields; nothing is invented to fill them."""
+    with tempfile.TemporaryDirectory() as d:
+        exp_dir = os.path.join(d, "experiments")
+        os.makedirs(exp_dir)
+        ledger = os.path.join(d, "savings.jsonl")
+        # A v1.6 snapshot: no cohort_start_ts, no cohort_end_ts, no
+        # fingerprint_start, no treats.
+        legacy = {"label": "old", "started": "2026-07-01T00:00:00",
+                  "window_days": 30, "schema": mt.SCHEMA,
+                  "summary": {"first_request_median": 80000, "parent_sessions": 10}}
+        with open(os.path.join(exp_dir, "old.json"), "w") as f:
+            json.dump(legacy, f)
+
+        check("the legacy baseline reads as open before any close",
+              [b.get("label") for b in ex.list_open_experiments(exp_dir, ledger)] == ["old"])
+
+        rec = ex.build_record(legacy, _after(), "2026-08-30T00:00:00")
+        check("closing it is honest about why it cannot be proven",
+              rec["confidence"] == "NOT_PROVEN")
+        check("...and names the missing fields rather than inventing them",
+              any("cohort_end_ts" in r for r in rec["reasons"]))
+        with open(ledger, "w") as f:
+            f.write(json.dumps(rec) + "\n")
+
+        still_open = [b.get("label") for b in ex.list_open_experiments(exp_dir, ledger)]
+        check("after its close record is written it is no longer open", still_open == [])
+
+
+def test_a_non_numeric_floor_refuses_instead_of_crashing():
+    """D21a. The guard three lines above names a non-numeric metric and
+    downgrades instead of raising, and then the floor subtraction runs on the
+    same unvalidated values guarded only by `is not None`. For the default
+    metric those ARE the same two values, so a summary carrying a string where
+    the median belongs is named as not comparable and then subtracted anyway:
+    TypeError out of build_record, which takes the whole close with it.
+
+    A guard that is undone by the next statement is not a guard."""
+    b = _baseline()
+    b["summary"]["first_request_median"] = "80000"  # a string, as a hostile or
+    a = _after()                                    # half-migrated file gives it
+    a["first_request_median"] = 60000
+
+    rec = ex.build_record(b, a, "2026-08-30T00:00:00")
+    check("a non-numeric floor downgrades rather than raising",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason names it as not comparable",
+          any("non-numeric" in r for r in rec["reasons"]))
+    check("no floor reduction is invented from unsubtractable values",
+          rec["floor_reduction_tokens"] is None)
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):

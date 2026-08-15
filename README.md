@@ -30,22 +30,35 @@ That is the whole setup. The skill loads on demand, so it adds one listing line 
 
 Then run `/token-shield:start` once: it measures your usage, names the one thing most worth fixing, and asks before it touches anything.
 
-Or skip the walkthrough and run any command directly:
+Or skip the walkthrough and use the slash commands, which work anywhere once the plugin is installed:
+
+| Slash command | What it shows you |
+|---|---|
+| `/token-shield:stats` | where your tokens went, in one screen |
+| `/token-shield:optimize` | a safe, reversible way to shrink what loads at startup |
+| `/token-shield:token-audit` | prove a change actually worked, before and after |
+| `/token-shield:advisor` | your next best move, ranked |
+| `/token-shield:monthly` | a monthly report |
+
+**If you cloned the repository** rather than installing the plugin, the same things are Python commands. These paths are relative to the checkout, so run them from inside it:
 
 ```bash
+python3 scripts/cli.py --help                # start here
 python3 scripts/cli.py summary               # /token-shield:stats
-python3 scripts/cli.py dashboard             # open the GUI
-python3 scripts/cli.py optimize              # /token-shield:optimize
-python3 scripts/cli.py experiment start "X"  # /token-shield:token-audit
-python3 scripts/cli.py advise                # /token-shield:advisor
-python3 scripts/cli.py report                # /token-shield:monthly
+python3 scripts/cli.py dashboard             # render the visual dashboard
 ```
 
 > Formerly published as `SaveClaudeTokens`. If you installed the old plugin, remove it and re-add: `claude plugin uninstall save-claude-tokens`, then run the two commands above. GitHub redirects the old repository URL, but the plugin and skill ids changed, so a reinstall is needed.
 
 ## MCP server (optional)
 
-One config line installs a read-only MCP server over the same data, for any client that speaks MCP (Claude Desktop, Cursor, Codex-style agents):
+A read-only MCP server over the same data, for any client that speaks MCP (Claude Desktop, Cursor, Codex-style agents). Install it first: it has a dependency the plugin itself does not, so the config alone will not start it.
+
+```bash
+python3 -m pip install ./mcp-server
+```
+
+Then point your client at it:
 
 ```json
 {
@@ -292,14 +305,31 @@ Token Shield writes to three locations:
 - `~/.claude/token-shield/savings.jsonl` (experiment ledger, once you start one)
 - `~/.claude/settings.json`: one optional `SessionEnd` hook line (only if you ran `/token-shield:start`)
 
-To uninstall with full cleanup:
+To uninstall with full cleanup, clear the data **first**, while the plugin is still on disk, then remove the plugin:
 
 ```bash
+ls -d ~/.claude/plugins/cache/token-shield/token-shield/*/
+python3 ~/.claude/plugins/cache/token-shield/token-shield/<newest-version>/scripts/cli.py uninstall
 claude plugin uninstall token-shield
-python3 ~/.claude/plugins/cache/token-shield/*/scripts/cli.py uninstall
 ```
 
 The uninstall script will print what exists on your machine, ask before removing each item, and print a short exit summary of any verified savings to keep. Removal deletes your local measurement history and is irreversible.
+
+Running it from a management tool, a script, or any place with no terminal attached: add `--yes`. Without a terminal and without that flag the command refuses and deletes nothing, rather than waiting forever for a person to type `YES`.
+
+To ask an installed copy which build it is: `python3 .../scripts/cli.py --version`.
+
+The version directory matters: Claude Code keeps every version you have installed side by side, so a `*` glob there expands to several paths and `python3` would run the first and treat the rest as arguments. Run the `ls` line, pick the newest, and use that one path.
+
+## For teams and enterprises
+
+Everything above is one developer on one machine. There is also an opt-in fleet layer for an organisation that wants an aggregate view across many machines: `docs/FLEET.md` is the administrator's guide, and `SECURITY.md` describes the trust model for both layers, including the two network calls the fleet layer makes and the ones the core does not.
+
+Three things a security or procurement reviewer will want up front:
+
+- **The core makes no network call. The fleet layer makes exactly two**, `git clone` and `git push`, against a git remote your own organisation owns. There is no third party in the path and no account with us. `SECURITY.md` gives you the greps and tells you exactly what each one prints.
+- **No view produces a per-person performance number.** The org dashboard suppresses any aggregate backed by fewer than a minimum number of machines. This is deliberate: a tool that measures developer behaviour sits inside employee-monitoring law (the UK ICO requires the least intrusive means, German works councils hold co-determination rights over systems that can monitor performance, and New York requires prior written notice), and the safe design is to make the per-person number impossible rather than discouraged.
+- **Anthropic already ships org-wide usage reporting**, and this tool does not replace it. See `docs/ATTRIBUTION.md` for what is theirs and what is ours. Where the two overlap, theirs is the source of truth for spend, and ours is for finding and proving what to change.
 
 ## License
 

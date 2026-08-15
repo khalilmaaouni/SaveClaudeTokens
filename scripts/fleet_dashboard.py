@@ -53,6 +53,50 @@ pricing.py and never computes a dollar figure. There is nothing to guard
 beyond that, since NATIVE savings are Anthropic's own and this page does not
 touch them.
 
+A DATE WINDOW, AND A ROW CAP THAT SAYS WHAT IT DROPPED
+---------------------------------------------------------
+The loader reads a WINDOW (--days, default DEFAULT_DAYS), never the whole
+store history: a thousand machines over a year is hundreds of thousands of
+file opens and table rows in one self-contained page. The window is applied
+to the FILENAME date, before the file is opened, which costs one string
+comparison instead of one file read; the filename already carries the date
+and collect_org already prefers it over the record body. Every table is
+capped at MAX_TABLE_ROWS rendered rows, and a table that dropped rows prints
+the count: a silent truncation reads to an administrator exactly like "this
+is everything".
+
+MINIMUM GROUP SIZE: THIS PAGE IS NOT A PER-PERSON PRODUCTIVITY TABLE
+------------------------------------------------------------------------
+In almost every organisation one machine is one person, so a table of
+per-machine token counts is a table of per-person output, which is what
+employee-monitoring law is about (the UK ICO requires the least intrusive
+means that achieves the purpose; German works councils hold co-determination
+rights over technical systems capable of monitoring employee performance).
+The remedy here is the established one, a minimum group size:
+
+  no aggregate cell backed by fewer than MIN_GROUP_MACHINES distinct
+  machines is published, it is suppressed and named as suppressed with the
+  reason; the per-machine table carries operational health only (did this
+  machine report, when, is it stale, which team it joined as) and never a
+  per-machine token or experiment number.
+
+An administrator may RAISE the threshold with --min-group and can never
+lower it below MIN_GROUP_MACHINES: render() clamps, so no caller of this
+module can lower it either. A suppressed cell is never silently dropped,
+because "no row" and "a row we are not allowed to publish" are different
+facts and only one of them is true.
+
+WHY THERE IS NO PER-MODEL TABLE (defect D9)
+-----------------------------------------------
+The telemetry ledger these records are built from carries a token COUNT and
+never a model IDENTITY (see fleet._day_counters, which buckets every counter
+under the literal string "unknown" for exactly that reason). A per-model
+table could therefore only ever print one row reading "unknown", which is a
+promise the data cannot keep, so the day table sums across buckets and the
+page says NO DATA for the model breakdown and names the reason. The real fix
+is capturing model identity at the telemetry boundary, which lives outside
+this file.
+
 
 # --- FIX ROUND (adversarial review, F3) -------------------------------------
 #
@@ -119,9 +163,11 @@ touch them.
 USAGE
   python3 fleet_dashboard.py --store-dir PATH --org ORG --out OUT.html
   python3 fleet_dashboard.py --store-dir PATH --org ORG --out OUT.html --stamp "2026-08-15 09:00"
+  python3 fleet_dashboard.py --store-dir PATH --org ORG --out OUT.html --days 7 --min-group 10
 """
 
 import argparse
+import datetime
 import json
 import math
 import os
@@ -134,6 +180,26 @@ import token_shield as ts
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 REQUIRED_RECORD_FIELDS = ("schema", "date")
+
+# How many calendar days of records the loader reads, counting today, when
+# --days says nothing. A month of history answers every question this page
+# is for; the whole store is available with --days 0 and is opt-in because
+# it is the expensive read, not the default one.
+DEFAULT_DAYS = 30
+
+# Rendered rows per table. ponytail: one flat cap for every table rather
+# than a per-table knob; the page is a single self-contained HTML file, so
+# the number that matters is how many rows a browser is asked to lay out.
+MAX_TABLE_ROWS = 200
+
+# Minimum distinct machines behind any published aggregate. 5 is the common
+# disclosure-control convention. An admin can raise it (--min-group), never
+# lower it: render() clamps every caller to this floor.
+MIN_GROUP_MACHINES = 5
+
+# A machine whose newest record on disk is older than this many days is
+# reported as stale rather than as reporting.
+STALE_AFTER_DAYS = 7
 
 # A whitelisted per-day record is a few KB in normal use (a handful of
 # counter buckets plus a handful of experiment entries). This cap refuses an
@@ -173,6 +239,37 @@ def _validate_record_shape(record):
                     if value < 0:
                         return f"negative token count in counters.{bucket_name}.{key}"
     return None
+
+
+def _valid_day(text):
+    """True when `text` is exactly YYYY-MM-DD AND a real calendar date.
+
+    fleet._validate_day's own pattern is a shape check only, so "9999-99-99"
+    passes it: a record filed under that name used to render as a day of the
+    year in the counters table. Both checks are needed and neither is
+    reimplemented here: the shape comes from fleet.py, the calendar comes
+    from datetime. FleetValidationError is a ValueError subclass, so one
+    except clause covers both."""
+    try:
+        fl._validate_day(text)
+        datetime.date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _window(days, today):
+    """(today, cutoff): the day the window ends on and the oldest filename
+    date it keeps, or None for no cutoff at all (days <= 0 reads all
+    history). `days` counts today, so --days 1 is today only. An unusable
+    `today` falls back to the real calendar rather than raising out of
+    collect_org, which promises never to raise."""
+    if not _valid_day(today):
+        today = datetime.date.today().isoformat()
+    if days is None or days <= 0:
+        return today, None
+    cutoff = datetime.date.fromisoformat(today) - datetime.timedelta(days=days - 1)
+    return today, cutoff.isoformat()
 
 
 def _scrub_paths(message):
@@ -238,14 +335,35 @@ def _load_one(path):
     return record, None
 
 
-def collect_org(store_dir, org):
+def collect_org(store_dir, org, days=DEFAULT_DAYS, today=None):
     """Walk fleet/<org>/<machine-id>/<date>.json under `store_dir`. Returns
-    (rows, empty_machines), never raising. `rows` is one entry per record
-    file found: {"machine_id", "date", "record" (or None), "error" (or
-    None)}. `empty_machines` lists machine ids whose directory exists but
-    held zero ".json" files. A missing store, org, or machine directory
-    yields empty results rather than an error: the normal state before a
-    machine has ever pushed.
+    (rows, empty_machines, meta), never raising. `rows` is one entry per
+    record file INSIDE THE WINDOW: {"machine_id", "date", "record" (or
+    None), "error" (or None)}. `empty_machines` lists machine ids whose
+    directory exists but held zero ".json" files. `meta` carries what the
+    render needs to describe its own coverage honestly:
+    {"window_days", "today", "cutoff", "outside_window", "last_seen"}.
+    A missing store, org, or machine directory yields empty results rather
+    than an error: the normal state before a machine has ever pushed.
+
+    THE WINDOW IS APPLIED TO THE FILENAME, BEFORE THE FILE IS OPENED. This
+    loader used to read every record in the store on every render: a
+    thousand machines over a year is hundreds of thousands of file opens
+    held in one list and rendered as one table. The filename already carries
+    the date and this function already trusts it over the record body, so a
+    record dated before the cutoff costs one string comparison and is never
+    read. Every skipped file is counted into meta["outside_window"] and the
+    page prints that count: a window nobody can see is indistinguishable
+    from a store that holds nothing older.
+
+    meta["last_seen"] is the newest filename date seen per machine
+    REGARDLESS of the window, so a machine that stopped reporting months ago
+    still gets its operational row (last report, stale) instead of silently
+    vanishing from the page along with its records.
+
+    A filename that is not a real calendar date ("9999-99-99.json") is that
+    file's own NO DATA row: it cannot be windowed, it cannot be a day, and
+    rendering it as one was a number about nothing.
 
     Every machine directory and every record path is checked with
     fleet._refuse_symlinks_under (reused from fleet.py's own write-side
@@ -269,6 +387,9 @@ def collect_org(store_dir, org):
     org_dir = os.path.join(store_dir, "fleet", org)
     rows = []
     empty_machines = []
+    today, cutoff = _window(days, today)
+    meta = {"window_days": days, "today": today, "cutoff": cutoff,
+            "outside_window": 0, "last_seen": {}}
     # Refuse a symlink AT or ABOVE the org directory, not only below it.
     # _refuse_symlinks_under walks components strictly below its root, so
     # passing org_dir as the root left fleet/<org> and fleet/ themselves
@@ -280,10 +401,20 @@ def collect_org(store_dir, org):
     except fl.FleetSymlinkError as e:
         rows.append({"machine_id": org, "date": None, "record": None,
                      "error": f"refusing to read: {e}"})
-        return rows, empty_machines
+        return rows, empty_machines, meta
     if not os.path.isdir(org_dir):
-        return rows, empty_machines
-    for machine_id in sorted(os.listdir(org_dir)):
+        return rows, empty_machines, meta
+    try:
+        machine_ids = sorted(os.listdir(org_dir))
+    except OSError as e:
+        # The per-machine listdir was already guarded and this one was not,
+        # so an unreadable org directory raised PermissionError straight out
+        # of a function whose docstring promises it never raises, and out of
+        # render() with it.
+        rows.append({"machine_id": org, "date": None, "record": None,
+                     "error": f"could not list org directory: {e}"})
+        return rows, empty_machines, meta
+    for machine_id in machine_ids:
         if machine_id == fl.ORG_PROFILE_FILENAME:
             continue
         machine_dir = os.path.join(org_dir, machine_id)
@@ -308,8 +439,21 @@ def collect_org(store_dir, org):
             empty_machines.append(machine_id)
             continue
         for fname in json_files:
-            path = os.path.join(machine_dir, fname)
             date = fname[:-len(".json")]
+            if not _valid_day(date):
+                rows.append({"machine_id": machine_id, "date": None, "record": None,
+                            "error": f"filename {fname!r} is not a real YYYY-MM-DD "
+                                     f"calendar date"})
+                continue
+            seen = meta["last_seen"].get(machine_id)
+            if seen is None or date > seen:
+                meta["last_seen"][machine_id] = date
+            if cutoff is not None and date < cutoff:
+                # Windowed out on the FILENAME, before any open(): this is
+                # the whole point of the window. Counted, never silent.
+                meta["outside_window"] += 1
+                continue
+            path = os.path.join(machine_dir, fname)
             try:
                 fl._refuse_symlinks_under(machine_dir, path)
             except fl.FleetSymlinkError as e:
@@ -323,7 +467,7 @@ def collect_org(store_dir, org):
                 record = None
             rows.append({"machine_id": machine_id, "date": date,
                         "record": record, "error": error})
-    return rows, empty_machines
+    return rows, empty_machines, meta
 
 
 def _record_total(record):
@@ -346,10 +490,16 @@ def _record_total(record):
 
 
 def aggregate_counters_by_day(healthy_rows):
-    """{date: {model_bucket: {field: total}}}, summed only over rows whose
-    record loaded and validated cleanly. A record with an empty or absent
-    counters object contributes nothing to any bucket, never a fabricated
-    zero."""
+    """{date: {"totals": {field: total}, "machines": n}}, summed only over
+    rows whose record loaded and validated cleanly. A record with an empty
+    or absent counters object contributes nothing at all, never a fabricated
+    zero and never an empty day bucket.
+
+    "machines" is how many DISTINCT machines stand behind that day's cell,
+    which is what the minimum-group-size rule is checked against before the
+    cell is published (see the module docstring). The model dimension is
+    gone on purpose: the ledger records a count, not an identity (D9), so
+    the fields are summed across buckets."""
     by_day = {}
     for r in healthy_rows:
         rec = r["record"]
@@ -357,22 +507,36 @@ def aggregate_counters_by_day(healthy_rows):
         counters = rec.get("counters")
         if not isinstance(date, str) or not isinstance(counters, dict):
             continue
-        day_bucket = by_day.setdefault(date, {})
-        for model, fields in counters.items():
+        one = {}
+        for fields in counters.values():
             if not isinstance(fields, dict):
                 continue
-            model_bucket = day_bucket.setdefault(model, {})
             for key, value in fields.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    model_bucket[key] = model_bucket.get(key, 0) + value
-    return by_day
+                    one[key] = one.get(key, 0) + value
+        if not one:
+            continue
+        day = by_day.setdefault(date, {"totals": {}, "machines": set()})
+        for key, value in one.items():
+            day["totals"][key] = day["totals"].get(key, 0) + value
+        day["machines"].add(r["machine_id"])
+    return {date: {"totals": d["totals"], "machines": len(d["machines"])}
+            for date, d in by_day.items()}
 
 
 def aggregate_totals_by_tag(healthy_rows, tag_key):
-    """{tag_value: total_tokens_across_all_counter_fields}, summed only over
+    """{tag_value: {"total": tokens, "machines": n}}, summed only over
     healthy rows. A record with no value for `tag_key` (team or
     environment; both are optional per data/fleet.schema.json, set by
-    `fleet join`) is bucketed under "(untagged)" rather than dropped."""
+    `fleet join`) is bucketed under "(untagged)" rather than dropped.
+
+    "machines" counts DISTINCT machines behind the tag, not records, so a
+    single machine pushing thirty days of records is still one machine and
+    cannot pass the minimum group size on its own. "machine_ids" carries
+    WHICH machines they are, because the count alone cannot answer the
+    question render_tag_totals has to ask: two groups of five can share four
+    machines, and only the union decides whether the residual left over
+    after publishing is anonymous."""
     totals = {}
     for r in healthy_rows:
         rec = r["record"]
@@ -381,49 +545,35 @@ def aggregate_totals_by_tag(healthy_rows, tag_key):
             continue
         tag = rec.get(tag_key)
         tag = tag if isinstance(tag, str) and tag else "(untagged)"
-        totals[tag] = totals.get(tag, 0) + total
-    return totals
+        bucket = totals.setdefault(tag, {"total": 0, "machines": set()})
+        bucket["total"] += total
+        bucket["machines"].add(r["machine_id"])
+    return {tag: {"total": b["total"], "machines": len(b["machines"]),
+                  "machine_ids": b["machines"]}
+            for tag, b in totals.items()}
 
 
 def latest_experiment_by_label(healthy_rows):
-    """One experiment item per (label, confidence), the newest by timestamp
-    across every machine in the org.
+    """One experiment item per LABEL, the newest by timestamp, across every
+    machine AND every confidence in the org.
 
-    This used to keep its OWN copy of the "newest wins" tiebreak
-    token_shield.verified_by_label already applies on the single-machine
-    ledger, and had drifted to the OPPOSITE rule: on a timestamp tie it kept
-    whichever row was seen FIRST, while verified_by_label keeps whichever is
-    seen LAST (ledger order is append-only, so the row written most
-    recently should win a tie, not the one written first). Two machines
-    pushing the same label at the same timestamp could therefore disagree
-    with the single-machine page about which record won. Fixed by calling
-    verified_by_label directly for the pick, so the tiebreak itself runs in
-    exactly one place.
+    D20: this used to key latest-wins on (label, confidence) while the page
+    copy under the table read "One row per label, the newest record only",
+    so a stale VERIFIED sat beside a newer NOT_PROVEN for the same label
+    under a sentence promising it could not. The pick is now made once,
+    across all confidences, and the confidence rendered is whatever the
+    winning record actually carried. Fixing the copy instead would have been
+    the dishonest half of that choice.
 
-    Bridging the two record shapes: verified_by_label was built for the
-    single-machine proof ledger, so it (a) hard-filters to rows whose
-    "confidence" key is the literal string "VERIFIED" and (b) requires a
-    "floor_reduction_tokens" field that is a plain number, that ledger's own
-    name and type-gate for its default-metric delta. A fleet experiment
-    item's confidence can also be "NOT_PROVEN" (the fleet schema
-    deliberately keeps both, so a regression still gets its own row), its
-    delta field is the generic "metric_delta" (any target_metric, not just
-    the floor), and it can carry no numeric delta at all. Neither difference
-    is bridged by reimplementing the tiebreak itself, which depends only on
-    timestamp and iteration order, never on the delta's value (see
-    verified_by_label's own docstring): verified_by_label is called once
-    per confidence value actually present in the data, against a throwaway
-    reshaped copy of each row (confidence forced to "VERIFIED" so its
-    filter passes; a missing or non-numeric metric_delta is replaced with a
-    0.0 placeholder purely to satisfy its type gate, since that placeholder
-    cannot change which row the timestamp/index tiebreak picks). The
-    winning (label, timestamp) pick is then matched back to the LAST
-    original fleet item with that label, confidence, and timestamp in
-    iteration order -- matching verified_by_label's own tie resolution
-    exactly -- to recover the REAL metric_delta, target_metric, direction,
-    and machine_id for rendering: verified_by_label's own return shape
-    (built from the reshaped, placeholder-bearing copy) is used only to
-    learn WHICH (label, timestamp) won, never to source a rendered value."""
+    The pick itself is token_shield.latest_row_per_label, called directly,
+    never reimplemented: that function exists precisely because this rule
+    had three drifting copies, and one of them (this file's own, before this
+    fix) had inverted its tiebreak. Its contract is exactly what is wanted
+    here, newest timestamp across EVERY confidence, ties keeping the last
+    row in iteration order, and confidence filtering left to the caller.
+    Because no filtering happens after it, the whole reshape-and-match-back
+    bridge this function used to need for verified_by_label is gone with
+    it."""
     items = []
     for r in healthy_rows:
         rec = r["record"]
@@ -440,130 +590,272 @@ def latest_experiment_by_label(healthy_rows):
             # raised "'<' not supported between 'str' and 'int'", either of
             # which killed the whole org page rather than this one record.
             # Coerced here, where the entry is built, so no downstream user
-            # of these two fields has to remember.
+            # of these two fields has to remember. The empty string is
+            # folded into "(unlabeled)" here too, because that is what
+            # latest_row_per_label keys it as.
             label = entry.get("label")
-            entry["label"] = label if isinstance(label, str) else "(unlabeled)"
+            entry["label"] = label if isinstance(label, str) and label else "(unlabeled)"
             conf = entry.get("confidence")
             entry["confidence"] = conf if isinstance(conf, str) else "NO DATA"
             entry["machine_id"] = r["machine_id"]
             items.append(entry)
 
-    confidences = sorted({item.get("confidence") for item in items},
-                         key=lambda c: (c is None, str(c)))
     out = []
-    for confidence in confidences:
-        subset = [it for it in items if it.get("confidence") == confidence]
-        shaped = []
-        for it in subset:
-            delta = it.get("metric_delta")
-            if isinstance(delta, bool) or not isinstance(delta, (int, float)):
-                # verified_by_label's numeric-type gate is a coarse "is this
-                # a number at all" check that has nothing to do with WHICH
-                # row it picks (the pick is timestamp/index only, see its
-                # own docstring); a real fleet item can carry no
-                # metric_delta at all (an experiment with no numeric metric
-                # comparison on either side, or an F2 registration record's
-                # own experiments list), and must still be eligible to win
-                # its label. 0.0 is a throwaway placeholder that satisfies
-                # the gate without affecting the pick; the REAL delta shown
-                # to a reader always comes from `match` below, never from
-                # this placeholder or from verified_by_label's own return.
-                delta = 0.0
-            shaped.append({
-                "label": it.get("label"),
-                "confidence": "VERIFIED",  # forced: this is only how verified_by_label's own filter passes
-                "timestamp": it.get("timestamp"),
-                "floor_reduction_tokens": delta,
-            })
-        for w in ts.verified_by_label(shaped, exp_mod=None):
-            w_ts = w.get("timestamp") if isinstance(w.get("timestamp"), str) else ""
-            match = None
-            for it in subset:
-                label = it.get("label")
-                label = label if isinstance(label, str) and label else "(unlabeled)"
-                it_ts = it.get("timestamp") if isinstance(it.get("timestamp"), str) else ""
-                if label == w["label"] and it_ts == w_ts:
-                    match = it  # last match in iteration order is the real tiebreak winner
-            out.append({
-                "label": w["label"],
-                "confidence": confidence,
-                "timestamp": w.get("timestamp"),
-                "target_metric": match.get("target_metric") if match else None,
-                "metric_delta": match.get("metric_delta") if match else None,
-                "direction": match.get("direction") if match else None,
-                "machine_id": match.get("machine_id") if match else None,
-            })
+    for label, winner in ts.latest_row_per_label(items).items():
+        out.append({
+            "label": label,
+            "confidence": winner.get("confidence"),
+            "timestamp": winner.get("timestamp"),
+            "target_metric": winner.get("target_metric"),
+            "metric_delta": winner.get("metric_delta"),
+            "direction": winner.get("direction"),
+            "machine_id": winner.get("machine_id"),
+        })
     return sorted(out, key=lambda x: x["label"])
 
 
 # --- rendering ---------------------------------------------------------------
 
-def render_machines_table(rows, empty_machines):
+def _cap(rowlist):
+    """(kept, dropped): at most MAX_TABLE_ROWS rows, and how many were left
+    out. Every table on this page goes through it. A truncation that says
+    nothing reads to an administrator exactly like "this is everything", so
+    the count comes back with the rows and every caller prints it."""
+    if len(rowlist) <= MAX_TABLE_ROWS:
+        return rowlist, 0
+    return rowlist[:MAX_TABLE_ROWS], len(rowlist) - MAX_TABLE_ROWS
+
+
+def _capped_note(dropped, unit):
+    if not dropped:
+        return ""
+    return (f'<p class="nodata">{dropped} more {unit} not shown: this table is capped at '
+            f'{MAX_TABLE_ROWS} rows. Narrow the window with --days to see a different slice '
+            f'of the store.</p>')
+
+
+def _suppressed_note(suppressed, min_group):
+    if not suppressed:
+        return ""
+    return (f'<p class="nodata">{suppressed} row(s) suppressed: a cell backed by fewer than '
+            f'{min_group} machines can be one person\'s own work, and this is a shared org '
+            f'page, so it is not published. A larger group is suppressed alongside it whenever '
+            f'publishing that group would leave a residual smaller than {min_group} machines '
+            f'for a reader to subtract, so what is withheld is anonymous too. The floor is '
+            f'{MIN_GROUP_MACHINES} machines and an admin can raise it, never lower it.</p>')
+
+
+def _suppressed_cell(min_group, span=1):
+    span_attr = f' colspan="{span}"' if span > 1 else ""
+    return (f'<td class="nodata"{span_attr}>suppressed: backed by fewer than {min_group} '
+            f'machines</td>')
+
+
+def _stale(last_seen, today):
+    """True when `last_seen` (a filename date) is more than STALE_AFTER_DAYS
+    older than `today`. An unusable date on either side is not stale: NO
+    DATA is said elsewhere, and a guess here would be worse."""
+    if not _valid_day(last_seen) or not _valid_day(today):
+        return False
+    gap = datetime.date.fromisoformat(today) - datetime.date.fromisoformat(last_seen)
+    return gap.days > STALE_AFTER_DAYS
+
+
+def _machine_health(entry, last_seen, today):
+    """(status, detail) for one machine's operational row. Neither carries a
+    token count: see render_machines_table's own docstring for the rule."""
+    detail = []
+    if entry["records"]:
+        detail.append(f'team {ts.esc(entry["team"] or "(untagged)")}, '
+                      f'env {ts.esc(entry["env"] or "(untagged)")}')
+    elif last_seen is None:
+        detail.append("no records found for this machine")
+    else:
+        detail.append("no records inside this window")
+    if entry["errors"]:
+        detail.append(f'{entry["errors"]} record(s) unreadable: '
+                      f'{ts.esc(_scrub_paths(entry["reason"]))}')
+    detail = "; ".join(detail)
+    if last_seen is None:
+        return '<span class="nodata">NO DATA</span>', detail
+    if _stale(last_seen, today):
+        return f"stale (no report for over {STALE_AFTER_DAYS} days)", detail
+    return "reporting", detail
+
+
+def render_machines_table(rows, empty_machines, meta):
+    """One row per MACHINE, carrying operational health only: did it report,
+    when was its newest record, is it stale, which team and environment it
+    joined as, and how many of its records could not be read.
+
+    THE RULE THIS TABLE IMPLEMENTS: no per-machine token count and no
+    per-machine experiment result is published anywhere on this page.
+    In almost every organisation one machine is one person, so the Tokens
+    column this table used to carry was a per-person output column on a
+    shared org artifact. What is left is the operational half an
+    administrator actually needs (is this machine reporting at all), which
+    is not a measure of anybody's output; every published NUMBER on the page
+    is an aggregate standing on at least min_group distinct machines."""
+    summaries = {}
+
+    def _entry(machine_id):
+        return summaries.setdefault(machine_id, {"records": 0, "errors": 0, "reason": None,
+                                                 "team": None, "env": None})
+
+    for r in rows:
+        entry = _entry(r["machine_id"])
+        if r["error"] is not None:
+            entry["errors"] += 1
+            if entry["reason"] is None:
+                entry["reason"] = r["error"]
+            continue
+        entry["records"] += 1
+        rec = r["record"]
+        team = rec.get("team")
+        env = rec.get("environment")
+        # isinstance, not `or`: a dict in "team" reached ts.esc(), which
+        # calls str(), and printed a Python repr into the org's page.
+        if isinstance(team, str) and team:
+            entry["team"] = team
+        if isinstance(env, str) and env:
+            entry["env"] = env
+    for machine_id in empty_machines:
+        _entry(machine_id)
+    for machine_id in meta.get("last_seen", {}):
+        _entry(machine_id)
+
     parts = ['<h2>Machines reporting</h2>']
-    if not rows and not empty_machines:
+    if not summaries:
         parts.append('<p class="nodata">NO DATA: no machines found for this org in the store.'
                      '</p>')
         return "".join(parts)
+    last_seen = meta.get("last_seen", {})
+    today = meta.get("today")
+    shown, dropped = _cap(sorted(summaries))
     rowlist = []
-    for r in sorted(rows, key=lambda r: (r["machine_id"], r["date"] or "")):
-        mid = ts.esc(r["machine_id"])
-        date = ts.esc(r["date"] or "n/a")
-        if r["error"] is not None:
-            rowlist.append(
-                f'<tr><td>{mid}</td><td>{date}</td><td class="nodata">NO DATA</td>'
-                f'<td>{ts.esc(_scrub_paths(r["error"]))}</td></tr>')
-            continue
-        rec = r["record"]
-        team = ts.esc(rec.get("team") or "(untagged)")
-        env = ts.esc(rec.get("environment") or "(untagged)")
-        total = _record_total(rec)
-        rowlist.append(
-            f'<tr><td>{mid}</td><td>{date}</td><td>{ts.human(total)}</td>'
-            f'<td>team {team}, env {env}</td></tr>')
-    for machine_id in sorted(empty_machines):
-        rowlist.append(
-            f'<tr><td>{ts.esc(machine_id)}</td><td>n/a</td><td class="nodata">NO DATA</td>'
-            f'<td>no records found for this machine</td></tr>')
+    for machine_id in shown:
+        seen = last_seen.get(machine_id)
+        status, detail = _machine_health(summaries[machine_id], seen, today)
+        rowlist.append(f'<tr><td>{ts.esc(machine_id)}</td><td>{ts.esc(seen or "n/a")}</td>'
+                       f'<td>{status}</td><td>{detail}</td></tr>')
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
-                 '<th>Machine</th><th>Date</th><th>Tokens</th><th>Detail</th>'
+                 '<th>Machine</th><th>Last report</th><th>Status</th><th>Detail</th>'
                  '</tr></thead><tbody>' + "".join(rowlist) + '</tbody></table></div>')
+    parts.append(_capped_note(dropped, "machines"))
+    parts.append('<p class="n">Operational health only. No per-machine token count and no '
+                 'per-machine experiment result is published here: one machine is one person '
+                 'in most organisations, so such a column would be a per-person productivity '
+                 'table on a page the whole org can open.</p>')
     return "".join(parts)
 
 
-def render_counters_by_day(by_day):
+def render_counters_by_day(by_day, min_group):
     parts = ['<h2>Token counters by day</h2>']
+    # D9. The model breakdown is absent and says why, rather than rendering
+    # a table whose only row could ever read "unknown".
+    parts.append('<p class="nodata">NO DATA: per-model breakdown. The telemetry ledger these '
+                 'records are built from carries a token COUNT and never a model identity, so '
+                 'every counter arrives in one unnamed bucket and a per-model table could only '
+                 'ever print one row reading "unknown". The day totals below are summed across '
+                 'buckets instead. Capturing model identity at the telemetry boundary is the '
+                 'real fix and lives outside this page.</p>')
     if not by_day:
         parts.append('<p class="nodata">NO DATA: no healthy records carried token counters.</p>')
         return "".join(parts)
     rowlist = []
+    suppressed = 0
     for date in sorted(by_day):
-        for model in sorted(by_day[date]):
-            f = by_day[date][model]
-            rowlist.append(
-                f'<tr><td>{ts.esc(date)}</td><td>{ts.esc(model)}</td>'
-                f'<td>{ts.human(f.get("input_tokens"))}</td>'
-                f'<td>{ts.human(f.get("output_tokens"))}</td>'
-                f'<td>{ts.human(f.get("cache_read_input_tokens"))}</td>'
-                f'<td>{ts.human(f.get("cache_creation_input_tokens"))}</td></tr>')
+        cell = by_day[date]
+        if cell["machines"] < min_group:
+            suppressed += 1
+            rowlist.append(f'<tr><td>{ts.esc(date)}</td>{_suppressed_cell(min_group, span=4)}'
+                           '</tr>')
+            continue
+        f = cell["totals"]
+        rowlist.append(
+            f'<tr><td>{ts.esc(date)}</td>'
+            f'<td>{ts.human(f.get("input_tokens"))}</td>'
+            f'<td>{ts.human(f.get("output_tokens"))}</td>'
+            f'<td>{ts.human(f.get("cache_read_input_tokens"))}</td>'
+            f'<td>{ts.human(f.get("cache_creation_input_tokens"))}</td></tr>')
+    shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
-                 '<th>Date</th><th>Model</th><th>Input</th><th>Output</th>'
+                 '<th>Date</th><th>Input</th><th>Output</th>'
                  '<th>Cache read</th><th>Cache write</th></tr></thead><tbody>'
-                 + "".join(rowlist) + '</tbody></table></div>')
+                 + "".join(shown) + '</tbody></table></div>')
+    parts.append(_capped_note(dropped, "days"))
+    parts.append(_suppressed_note(suppressed, min_group))
     return "".join(parts)
 
 
-def render_tag_totals(title, totals):
+def render_tag_totals(title, totals, min_group):
+    """SECONDARY SUPPRESSION, and why a per-cell check is not enough.
+
+    Checking each cell against the minimum group size only decides what to
+    PRINT. It says nothing about what the printed cells let a reader DERIVE.
+    Reproduced on a store of five machines tagged "eng" and one tagged
+    "ops": the team table published eng at 24.2M and the environment table
+    published the whole org at 27.3M, so the difference returned 3.1M
+    against a true 3,030,000 and recovered one person's total token volume
+    to within 2.3 percent, out of two cells this page had just declared safe
+    to publish. The day table hands over the same complement exactly.
+
+    The rule, which is the standard disclosure-control one: whatever is
+    withheld must ITSELF stand on at least min_group machines. So when any
+    group is too small, the smallest published groups are withheld with it
+    (cheapest to lose first) until the union of withheld machines reaches
+    the floor. On a five-plus-one split that withholds both groups, because
+    the complement of the five is the one. A table where nothing was small
+    is untouched: two teams of five each publish, since each is the other's
+    complement and each stands on five machines."""
     parts = [f'<h2>{ts.esc(title)}</h2>']
     if not totals:
         parts.append('<p class="nodata">NO DATA: no healthy records carried this tag.</p>')
         return "".join(parts)
-    rowlist = "".join(
-        f'<tr><td>{ts.esc(tag)}</td><td>{ts.human(total)}</td></tr>'
-        for tag, total in sorted(totals.items(), key=lambda kv: -kv[1]))
+    published = sorted((kv for kv in totals.items() if kv[1]["machines"] >= min_group),
+                       key=lambda kv: -kv[1]["total"])
+    # Suppressed tags are ordered by NAME, never by their own hidden total:
+    # ranking them would republish the ordering the suppression exists to
+    # withhold.
+    withheld = sorted((kv for kv in totals.items() if kv[1]["machines"] < min_group),
+                      key=lambda kv: kv[0])
+    if withheld:
+        residual = set()
+        for _tag, b in withheld:
+            residual |= b["machine_ids"]
+        # Smallest total first: the group whose loss costs the reader least.
+        while len(residual) < min_group and published:
+            tag, b = published.pop()
+            withheld.append((tag, b))
+            residual |= b["machine_ids"]
+        withheld.sort(key=lambda kv: kv[0])
+    rowlist = [f'<tr><td>{ts.esc(tag)}</td><td>{ts.human(b["total"])}</td></tr>'
+               for tag, b in published]
+    rowlist += [f'<tr><td>{ts.esc(tag)}</td>{_suppressed_cell(min_group)}</tr>'
+                for tag, _b in withheld]
+    shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Tag</th><th>Tokens</th></tr></thead><tbody>'
-                 + rowlist + '</tbody></table></div>')
+                 + "".join(shown) + '</tbody></table></div>')
+    parts.append(_capped_note(dropped, "tags"))
+    parts.append(_suppressed_note(len(withheld), min_group))
     return "".join(parts)
+
+
+def _delta_text(delta):
+    """A metric delta exactly as measured, or a named non-number. NaN used
+    to render as "+nan", which reads like a measured saving with a plus sign
+    in front of it. math.isfinite raises OverflowError on an int too big for
+    a float; such an int is still finite and still formats, so that case
+    falls through to the formatter rather than being called NO DATA."""
+    if isinstance(delta, bool) or not isinstance(delta, (int, float)):
+        return "n/a"
+    try:
+        if not math.isfinite(delta):
+            return "NO DATA"
+    except OverflowError:
+        pass
+    return f"{delta:+,}"
 
 
 def render_experiments(items):
@@ -574,30 +866,42 @@ def render_experiments(items):
         return "".join(parts)
     rowlist = []
     for item in items:
-        delta = item.get("metric_delta")
-        delta_txt = (f'{delta:+,}' if isinstance(delta, (int, float))
-                    and not isinstance(delta, bool) else "n/a")
         conf = item.get("confidence") if isinstance(item.get("confidence"), str) else "NO DATA"
         rowlist.append(
             f'<tr><td>{ts.esc(item["label"])}</td><td>{ts._cpill(conf)}</td>'
             f'<td>{ts.esc(item.get("target_metric") or "n/a")}</td>'
-            f'<td>{delta_txt}</td><td>{ts.esc(item.get("direction") or "n/a")}</td>'
-            f'<td>{ts.esc(str(item.get("timestamp") or "n/a")[:19])}</td>'
-            f'<td>{ts.esc(item.get("machine_id") or "n/a")}</td></tr>')
+            f'<td>{_delta_text(item.get("metric_delta"))}</td>'
+            f'<td>{ts.esc(item.get("direction") or "n/a")}</td>'
+            f'<td>{ts.esc(str(item.get("timestamp") or "n/a")[:19])}</td></tr>')
+    shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Label</th><th>Confidence</th><th>Metric</th><th>Delta</th>'
-                 '<th>Direction</th><th>Timestamp</th><th>Machine</th>'
-                 '</tr></thead><tbody>' + "".join(rowlist) + '</tbody></table></div>')
-    parts.append('<p class="n">One row per label, the newest record only. Never summed across '
-                 'labels or across repeated runs of the same label; a regression shows its '
-                 'delta exactly as measured, never clipped to zero.</p>')
+                 '<th>Direction</th><th>Timestamp</th>'
+                 '</tr></thead><tbody>' + "".join(shown) + '</tbody></table></div>')
+    parts.append(_capped_note(dropped, "labels"))
+    parts.append('<p class="n">One row per label, the newest record only, across every '
+                 'confidence: a newer NOT_PROVEN supersedes an older VERIFIED for the same '
+                 'label. Never summed across labels or across repeated runs of the same label; '
+                 'a regression shows its delta exactly as measured, never clipped to zero. '
+                 'Which machine ran an experiment is withheld: the result describes a '
+                 'configuration change, not a person.</p>')
     return "".join(parts)
 
 
-def render(store_dir, org, stamp):
+def render(store_dir, org, stamp, days=DEFAULT_DAYS, min_group=MIN_GROUP_MACHINES,
+           today=None):
     """Render the full dashboard body (no <html> wrapper) for one org. Reads
-    only; never writes into `store_dir`, never runs git."""
-    rows, empty_machines = collect_org(store_dir, org)
+    only; never writes into `store_dir`, never runs git.
+
+    `days` is the read window (0 for all history), `min_group` the minimum
+    number of distinct machines behind any published aggregate. min_group is
+    CLAMPED to MIN_GROUP_MACHINES here, not in main(), so no caller of this
+    module can publish a smaller group than the floor by any route."""
+    try:
+        min_group = max(int(min_group), MIN_GROUP_MACHINES)
+    except (TypeError, ValueError):
+        min_group = MIN_GROUP_MACHINES
+    rows, empty_machines, meta = collect_org(store_dir, org, days=days, today=today)
     healthy = [r for r in rows if r["error"] is None]
     by_day = aggregate_counters_by_day(healthy)
     by_team = aggregate_totals_by_tag(healthy, "team")
@@ -611,18 +915,29 @@ def render(store_dir, org, stamp):
     parts.append(f'<p class="stamp">Rendered {ts.esc(stamp)} from the fleet store at '
                  f'{ts.esc(fl._display_path(store_dir))}. Read-only: this page never writes to '
                  f'the store, never runs git, never sends anything anywhere.</p>')
-    if not rows and not empty_machines:
+    window = (f'the {meta["window_days"]} days ending {ts.esc(meta["today"])}'
+              if meta["cutoff"] else "all history (--days 0)")
+    parts.append(f'<p class="n">Window: {window}. {meta["outside_window"]} record file(s) '
+                 f'dated outside it were skipped on their filename and never opened. Minimum '
+                 f'group size {min_group}: no aggregate backed by fewer than {min_group} '
+                 f'distinct machines is published, it is marked suppressed instead, and the '
+                 f'machines table carries operational health only, never a per-machine token '
+                 f'count.</p>')
+    if not rows and not empty_machines and not meta["last_seen"]:
         parts.append(f'<p class="nodata">NO DATA: no machines found for org '
                      f'&quot;{ts.esc(org)}&quot; in this store.</p>')
-    parts.append(render_machines_table(rows, empty_machines))
-    parts.append(render_counters_by_day(by_day))
-    parts.append(render_tag_totals("Tokens by team", by_team))
-    parts.append(render_tag_totals("Tokens by environment", by_env))
+    parts.append(render_machines_table(rows, empty_machines, meta))
+    parts.append(render_counters_by_day(by_day, min_group))
+    parts.append(render_tag_totals("Tokens by team", by_team, min_group))
+    parts.append(render_tag_totals("Tokens by environment", by_env, min_group))
     parts.append(render_experiments(experiments))
     parts.append('<footer>Token Shield Fleet dashboard. Every figure is read from records '
                  'machines pushed themselves; a machine that has not pushed, or whose record '
                  'could not be read, renders its own NO DATA row and never blocks the rest of '
-                 'this page. No cross-label totals anywhere.</footer>')
+                 'this page. No cross-label totals anywhere. Nothing here is a per-person '
+                 'measure: numbers are published only as aggregates over the minimum group '
+                 'size named above, and what a window or a row cap left out is counted on the '
+                 'page rather than dropped in silence.</footer>')
     parts.append("</div>")
     return "\n".join(parts) + "\n"
 
@@ -636,7 +951,23 @@ def main():
     ap.add_argument("--stamp", default=None, help="snapshot label for the header")
     ap.add_argument("--body-only", action="store_true",
                     help="emit body content without the html wrapper (for artifact publish)")
+    ap.add_argument("--days", type=int, default=DEFAULT_DAYS,
+                    help=f"read only records dated within the last N calendar days, counting "
+                         f"today (default {DEFAULT_DAYS}); 0 reads the whole store history")
+    ap.add_argument("--min-group", type=int, default=MIN_GROUP_MACHINES,
+                    help=f"minimum distinct machines behind any published aggregate "
+                         f"(default and floor {MIN_GROUP_MACHINES}); may be raised, never "
+                         f"lowered")
     a = ap.parse_args()
+
+    if a.days < 0:
+        print(f"refused: --days {a.days} must be 0 (whole history) or a positive number of "
+              f"days", file=sys.stderr)
+        return 2
+    min_group = max(a.min_group, MIN_GROUP_MACHINES)
+    if a.min_group < MIN_GROUP_MACHINES:
+        print(f"--min-group {a.min_group} is below the floor of {MIN_GROUP_MACHINES} machines; "
+              f"using {MIN_GROUP_MACHINES}", file=sys.stderr)
 
     # --org reaches a filesystem path (store_dir/fleet/<org>/...) below, via
     # collect_org: refused here, before that, rather than letting something
@@ -658,7 +989,7 @@ def main():
     if stamp is None:
         stamp = time.strftime("%Y-%m-%d %H:%M")
 
-    body = render(store_dir, a.org, stamp)
+    body = render(store_dir, a.org, stamp, days=a.days, min_group=min_group)
     out_html = (body if a.body_only
                else ts.render_standalone(body, title=f"Token Shield Fleet: {a.org}"))
     out = os.path.expanduser(a.out)

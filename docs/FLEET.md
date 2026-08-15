@@ -286,3 +286,99 @@ Concretely:
 None of this changes what a healthy record looks like or how it renders;
 it only bounds what a hostile or malformed one can do to the page around
 it.
+
+## The individual-privacy position, stated as a rule you can audit
+
+This is the section to hand to a works council, a data protection
+officer, or anyone who asks what the tool does to people. It is written
+as a rule rather than a reassurance, so it can be checked.
+
+**The rule: no Token Shield view produces a per-person performance
+number.** An organisation-wide page reports aggregates, and it
+suppresses any aggregate backed by fewer than a minimum number of
+machines rather than publishing a cell that identifies one person. The
+per-machine table exists to answer operational questions (did this
+machine report, is its data stale) and not to rank people.
+
+Why the rule is this strict, rather than a matter of taste:
+
+- A tool that measures developer behaviour and aggregates it for an
+  administrator is inside employee-monitoring law, not next to it.
+- The UK Information Commissioner's Office requires an employer to
+  identify a lawful basis, be clear about the purpose, and choose the
+  **least intrusive means** that achieves it, collecting no more than
+  is needed.
+- In Germany, section 87(1) no. 6 of the Works Constitution Act gives
+  a works council co-determination over introducing technical systems
+  capable of monitoring employee behaviour or performance. That right
+  attaches to what a system is CAPABLE of, not to what you intend, so
+  a per-person view you never open is still a per-person view.
+- New York Civil Rights Law 52-c requires prior written notice to
+  employees subject to electronic monitoring, acknowledged in writing.
+
+The design consequence: making the per-person number IMPOSSIBLE is
+worth more than a policy saying nobody should look at it. A suppressed
+cell says it was suppressed and why, because a silently missing number
+reads as a measured zero.
+
+The machine identifier is a salted hash of the hostname, not the
+hostname. Be honest with your reviewers about the limit of that: the
+raw salt is written to every joined machine, so anyone holding a copy
+of the store and the salt can hash candidate hostnames and recover the
+mapping. It raises the cost of identifying a machine; it does not make
+it impossible. Treat the store as internal data, not as anonymised
+data, and say so in your own records.
+
+## Retention and erasure
+
+The question a reviewer always asks, answered plainly, including where
+the answer is currently uncomfortable.
+
+**What Claude Code itself keeps.** Session transcripts live locally in
+plaintext under `~/.claude/projects/` and expire after 30 days by
+default, adjustable with `cleanupPeriodDays`. Token Shield derives its
+numbers from those files and never extends their life.
+
+**What the fleet store keeps.** Records accumulate in the org's own git
+repository and are kept until an administrator removes them. There is
+no automatic expiry, which means the store's retention period is
+whatever your organisation writes down. Write it down.
+
+**Removing one machine.** `fleet leave` removes that machine's LOCAL
+config and queue. It does not, and cannot, remove anything from the
+org store. To erase a machine's data an administrator deletes its
+directory in the store:
+
+```bash
+git rm -r fleet/<org>/<machine-id>
+git commit -m "erase machine records on request"
+git push
+```
+
+**Read this before you promise anyone erasure.** That deletes the files
+from the current tree, and git history still contains every earlier
+version of them. A real erasure requires rewriting the store's history
+(`git filter-repo` or equivalent) and force pushing, which invalidates
+every clone. If your organisation has to honour erasure requests, the
+practical options are to keep the store's retention window short and
+rebuild it periodically, or to treat the store as a system of record
+with a documented retention period from the start. Decide which before
+you roll out, not after the first request arrives.
+
+## What an administrator sees that a developer does not, which is nothing
+
+Stated plainly because a reviewer will find it anyway: there is no
+access control layer. Push access to the store is read and write access
+to the whole store, because a push clones it. Any machine that can push
+can read every other machine's records, and can rewrite them.
+
+Records are **not signed**. Anything with write access can forge a
+record attributed to another machine, and the dashboard will render it
+as truth. Git history attributes each record to the machine that claims
+to have written it, which is a trail, not a proof.
+
+If that model does not meet your bar, the shape that does is a
+write-only ingestion path: per-machine deploy keys against a repository
+developers cannot read, with the aggregation running on the ingestion
+side. That is not what ships today, and this section exists so nobody
+discovers it during a security review instead of before one.

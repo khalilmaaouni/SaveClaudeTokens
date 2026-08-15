@@ -1351,6 +1351,369 @@ def test_leave_removes_the_queue_dir_too():
     assert not os.path.isdir(queue_dir)  # GREEN: no trace anywhere under HOME
 
 
+# --- Fleet at scale: the five defects that kept the org view empty ------------
+#
+# Every test below was written and run RED against the pre-fix fleet.py
+# before the fix existed; the verbatim failures are quoted in the build
+# report. They cover, in order: the store URL join saved but push never
+# read, the unbounded clone, the collision that lost a record, the silent
+# queue, the disclosure the machine owner never saw, and the shared commit
+# identity.
+
+def _push_config(d, store=None):
+    """A local fleet config on disk, shaped exactly like the one cmd_join
+    writes. When `store` is given it carries the "store" key join has always
+    saved and nothing ever read back."""
+    config_path = os.path.join(d, "fleet-config.json")
+    config = dict(LOCAL_CONFIG)
+    if store is not None:
+        config["store"] = store
+    with open(config_path, "w") as f:
+        json.dump(config, f)
+    return config_path
+
+
+def _push_ledger(d, day="2026-08-14"):
+    ledger = os.path.join(d, "ledger.jsonl")
+    _write_ledger(ledger, [_telem_row(f"{day}T09:00:00", input=100, cache_read=900)])
+    return ledger
+
+
+PUSH_MACHINE_ID = fl.compute_machine_id("khalils-mbp.local", "org-salt-xyz")
+
+
+def test_push_defaults_the_store_url_to_the_one_fleet_join_saved():
+    # RED before the fix: cmd_push ignored local_config["store"] entirely,
+    # so a call with no --store handed None to git clone and blew up with a
+    # TypeError instead of pushing. --store was required on every single
+    # invocation, which is why no cron line could be short.
+    if not GIT_AVAILABLE:
+        _skip("test_push_defaults_the_store_url_to_the_one_fleet_join_saved", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        config_path = _push_config(d, store=bare)
+        ledger = _push_ledger(d)
+        queue_dir = os.path.join(d, "queue")
+        rc, out = _capture_stdout(
+            fl.cmd_push, "2026-08-14", config_path, ledger,
+            os.path.join(d, "savings.jsonl"), "fp-1", "1.8.0",
+            None,  # no --store: it must come from the saved config
+            queue_dir)
+        assert rc == 0, out
+        assert "pushed" in out
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        landed = os.path.join(check, "fleet", "acme", PUSH_MACHINE_ID,
+                              "2026-08-14.json")
+        assert os.path.isfile(landed)
+        assert not os.path.isdir(queue_dir) or not os.listdir(queue_dir)
+
+
+def test_push_store_flag_still_overrides_the_saved_one():
+    if not GIT_AVAILABLE:
+        _skip("test_push_store_flag_still_overrides_the_saved_one", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        stale = os.path.join(d, "does-not-exist", "old-store.git")
+        config_path = _push_config(d, store=stale)  # saved store is wrong
+        ledger = _push_ledger(d)
+        queue_dir = os.path.join(d, "queue")
+        rc, out = _capture_stdout(
+            fl.cmd_push, "2026-08-14", config_path, ledger,
+            os.path.join(d, "savings.jsonl"), "fp-1", "1.8.0",
+            bare,  # --store wins
+            queue_dir)
+        assert rc == 0, out
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        assert os.path.isfile(os.path.join(check, "fleet", "acme",
+                                           PUSH_MACHINE_ID, "2026-08-14.json"))
+
+
+def test_push_without_a_saved_store_or_a_flag_refuses_naming_fleet_join():
+    # A config written before the store key existed, and no --store: a named
+    # refusal, never a traceback out of subprocess.
+    with tempfile.TemporaryDirectory() as d:
+        config_path = _push_config(d)  # no "store" key at all
+        ledger = _push_ledger(d)
+        rc, err = _capture_stderr(
+            fl.cmd_push, "2026-08-14", config_path, ledger,
+            os.path.join(d, "savings.jsonl"), "fp-1", "1.8.0", None,
+            os.path.join(d, "queue"))
+    assert rc == 2
+    assert "refused" in err
+    assert "fleet join" in err
+
+
+def test_push_clone_is_shallow_under_a_named_timeout_constant():
+    # RED before the fix: the push clone carried no --depth at all, so at a
+    # thousand machines over a year it could not finish inside the timeout,
+    # and the timeout was silently downgraded to a local queue on every
+    # machine. The profile-check clone a few dozen lines below already
+    # passed --depth 1.
+    if not GIT_AVAILABLE:
+        _skip("test_push_clone_is_shallow_under_a_named_timeout_constant", "no git binary")
+        return
+    calls = []
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        record = {"schema": 1, "date": "2026-08-14", "counters": {}, "experiments": []}
+        real_run_git = fl._run_git
+
+        def _recording_run_git(args, cwd=None, **kwargs):
+            calls.append(list(args))
+            return real_run_git(args, cwd=cwd, **kwargs)
+
+        fl._run_git = _recording_run_git
+        try:
+            ok = fl.push_record(record, bare, "acme", "ff" * 32, "2026-08-14",
+                                queue_dir=os.path.join(d, "queue"))
+        finally:
+            fl._run_git = real_run_git
+    assert ok is True
+    clones = [c for c in calls if c and c[0] == "clone"]
+    assert len(clones) == 1, calls
+    assert "--depth" in clones[0], clones[0]
+    assert clones[0][clones[0].index("--depth") + 1] == "1", clones[0]
+    # The timeout every git call runs under is visible and changeable, not a
+    # number buried in a call.
+    assert isinstance(fl.GIT_TIMEOUT_SECONDS, int)
+    assert fl.GIT_TIMEOUT_SECONDS > 0
+
+
+def test_push_rejected_by_a_same_day_collision_rebases_once_and_still_lands():
+    # The after-standup case: a second machine lands its own record between
+    # our clone and our push, so ours is rejected non-fast-forward. RED
+    # before the fix (no fetch, no pull, no rebase anywhere in fleet.py):
+    # ours queued locally and never reached the store, on most machines,
+    # every day.
+    if not GIT_AVAILABLE:
+        _skip("test_push_rejected_by_a_same_day_collision_rebases_once_and_still_lands",
+              "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        machine_id = "cc" * 32
+        other_id = "dd" * 32
+        record = {"schema": 1, "date": "2026-08-14", "counters": {}, "experiments": []}
+        queue_dir = os.path.join(d, "queue")
+        collided = []
+        real_run_git = fl._run_git
+
+        def _colliding_run_git(args, cwd=None, **kwargs):
+            if args and args[0] == "push" and not collided:
+                collided.append(True)
+                other = os.path.join(d, "other-machine")
+                _git(["clone", "--quiet", bare, other], d)
+                rec_dir = os.path.join(other, "fleet", "acme", other_id)
+                os.makedirs(rec_dir)
+                with open(os.path.join(rec_dir, "2026-08-14.json"), "w") as f:
+                    json.dump({"schema": 1, "date": "2026-08-14"}, f)
+                _git(["add", "-A"], other)
+                _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit",
+                      "--quiet", "-m", "the other machine got there first"], other)
+                _git(["push", "--quiet"], other)
+            return real_run_git(args, cwd=cwd, **kwargs)
+
+        fl._run_git = _colliding_run_git
+        try:
+            ok, err = _capture_stderr(fl.push_record, record, bare, "acme",
+                                      machine_id, "2026-08-14",
+                                      queue_dir=queue_dir)
+        finally:
+            fl._run_git = real_run_git
+
+        assert collided, "the fixture never forced a collision"
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        ours = os.path.isfile(
+            os.path.join(check, "fleet", "acme", machine_id, "2026-08-14.json"))
+        theirs = os.path.isfile(
+            os.path.join(check, "fleet", "acme", other_id, "2026-08-14.json"))
+        queued = os.listdir(queue_dir) if os.path.isdir(queue_dir) else []
+    assert ok is True, err
+    assert ours    # our record reached the store after the rebase
+    assert theirs  # and the other machine's record survived it
+    assert queued == []
+
+
+def test_drain_replays_the_queue_and_names_what_it_skips():
+    # RED before the fix: fleet.py had no drain path at all, so a queued
+    # record sat on disk forever (AttributeError: module 'fleet' has no
+    # attribute 'drain_queue').
+    if not GIT_AVAILABLE:
+        _skip("test_drain_replays_the_queue_and_names_what_it_skips", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        queue_dir = os.path.join(d, "queue")
+        machine_id = "ee" * 32
+        record = {"schema": 1, "date": "2026-08-13", "counters": {}, "experiments": []}
+        _capture_stderr(fl.push_record, record, unreachable, "acme", machine_id,
+                        "2026-08-13", queue_dir=queue_dir)
+        assert len(os.listdir(queue_dir)) == 1
+        # A file the queue itself never wrote: a drain must count and name
+        # it, never drop it silently.
+        with open(os.path.join(queue_dir, "junk.json"), "w") as f:
+            f.write("{}")
+
+        (counts, out), err = _capture_stderr(
+            _capture_stdout, fl.drain_queue, bare, queue_dir)
+        delivered, left = counts
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        landed = os.path.isfile(
+            os.path.join(check, "fleet", "acme", machine_id, "2026-08-13.json"))
+        remaining = sorted(os.listdir(queue_dir))
+    assert delivered == 1
+    assert left == 1                      # the junk file, still counted
+    assert landed                         # the real queued record reached the store
+    assert remaining == ["junk.json"]     # delivered records leave the queue
+    assert "junk.json" in err             # named, never silently dropped
+    assert "1" in out
+
+
+def test_cmd_push_drain_flag_delivers_the_backlog_and_the_day():
+    if not GIT_AVAILABLE:
+        _skip("test_cmd_push_drain_flag_delivers_the_backlog_and_the_day", "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        queue_dir = os.path.join(d, "queue")
+        backlog_id = "ba" * 32
+        _capture_stderr(fl.push_record,
+                        {"schema": 1, "date": "2026-08-13", "counters": {},
+                         "experiments": []},
+                        unreachable, "acme", backlog_id, "2026-08-13",
+                        queue_dir=queue_dir)
+        assert len(os.listdir(queue_dir)) == 1
+
+        config_path = _push_config(d, store=bare)
+        ledger = _push_ledger(d)
+        rc, out = _capture_stdout(
+            fl.cmd_push, "2026-08-14", config_path, ledger,
+            os.path.join(d, "savings.jsonl"), "fp-1", "1.8.0", None, queue_dir,
+            True)  # --drain
+
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        # Resolved inside the temp dir's lifetime: every path below is gone
+        # the moment this block exits.
+        backlog_landed = os.path.isfile(
+            os.path.join(check, "fleet", "acme", backlog_id, "2026-08-13.json"))
+        today_landed = os.path.isfile(
+            os.path.join(check, "fleet", "acme", PUSH_MACHINE_ID, "2026-08-14.json"))
+        queued = os.listdir(queue_dir) if os.path.isdir(queue_dir) else []
+    assert rc == 0, out
+    assert backlog_landed
+    assert today_landed
+    assert queued == []
+
+
+def test_cmd_push_that_queues_says_not_delivered_and_exits_nonzero():
+    # THE one that matters: a queued push has not succeeded. RED before the
+    # fix, cmd_push printed nothing at all on this path and returned 0, so a
+    # cron line reading the exit code saw success on every machine while the
+    # org view stayed empty.
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        config_path = _push_config(d, store=unreachable)
+        ledger = _push_ledger(d)
+        queue_dir = os.path.join(d, "queue")
+        rc, err = _capture_stderr(
+            fl.cmd_push, "2026-08-14", config_path, ledger,
+            os.path.join(d, "savings.jsonl"), "fp-1", "1.8.0", None, queue_dir)
+        waiting = len(os.listdir(queue_dir))
+    assert rc == fl.EXIT_QUEUED
+    assert rc != 0                    # a cron line reading only this now sees it
+    assert "NOT DELIVERED" in err
+    assert waiting == 1
+    assert "1 record" in err          # names how many are waiting
+    assert "--drain" in err           # names the command that replays them
+
+
+def test_join_prints_the_disclosure_and_leaves_a_copy_beside_the_config():
+    # RED before the fix: DISCLOSURE_TEXT was printed only by cmd_init, run
+    # once by the ADMIN on the ADMIN's machine, so on a managed rollout the
+    # developer whose machine is enrolled never saw it at all.
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+        rc, out = _capture_stdout(fl.cmd_join,
+                                  *_join_args(unreachable, config_path, queue_dir))
+        assert rc == 0
+        assert "NEVER SHARED" in out
+        assert "prompts" in out
+
+        copy_path = os.path.join(d, fl.DISCLOSURE_FILENAME)
+        assert os.path.isfile(copy_path)
+        with open(copy_path) as f:
+            copied = f.read()
+        assert "NEVER SHARED" in copied
+        assert "machine id" in copied
+
+        # And leaving still leaves no trace, now including this copy.
+        _capture_stdout(fl.cmd_leave, config_path, queue_dir)
+        assert not os.path.isfile(copy_path)
+
+
+def test_join_disclosure_prints_before_the_local_config_is_written():
+    # Ordering calibration, the same one cmd_init already carries: the
+    # machine owner must see what will be shared before this machine is
+    # enrolled, not after. Breaking _write_local_config proves the print
+    # happened first.
+    with tempfile.TemporaryDirectory() as d:
+        unreachable = os.path.join(d, "does-not-exist", "store.git")
+        config_path = os.path.join(d, "fleet-config.json")
+        queue_dir = os.path.join(d, "queue")
+
+        real_write = fl._write_local_config
+
+        def _failing_write(path, config):
+            raise OSError("disk full")
+
+        fl._write_local_config = _failing_write
+        try:
+            rc, out = _capture_stdout(fl.cmd_join,
+                                      *_join_args(unreachable, config_path, queue_dir))
+        finally:
+            fl._write_local_config = real_write
+    assert rc == 2                 # the join itself refused
+    assert "NEVER SHARED" in out   # but the disclosure had already been shown
+
+
+def test_push_commits_as_the_machine_identifier_not_one_shared_identity():
+    # RED before the fix: every machine in the org committed as
+    # "token-shield-fleet <fleet@token-shield.local>", so git history could
+    # not attribute a record even to the machine that claims to have
+    # written it.
+    if not GIT_AVAILABLE:
+        _skip("test_push_commits_as_the_machine_identifier_not_one_shared_identity",
+              "no git binary")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        bare = _make_bare_store(d)
+        machine_id = "ab" * 32
+        record = {"schema": 1, "date": "2026-08-14", "counters": {}, "experiments": []}
+        ok = fl.push_record(record, bare, "acme", machine_id, "2026-08-14",
+                            queue_dir=os.path.join(d, "queue"))
+        assert ok is True
+        check = os.path.join(d, "check")
+        _git(["clone", "--quiet", bare, check], d)
+        proc = subprocess.run(["git", "log", "-1", "--format=%an <%ae>"],
+                              cwd=check, capture_output=True, text=True, check=True)
+        author = proc.stdout.strip()
+    assert machine_id in author
+    assert "token-shield-fleet" not in author
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

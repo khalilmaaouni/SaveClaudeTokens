@@ -160,20 +160,48 @@ def savings_breakdown(sm):
     premium on every write token (0.25x extra at the 5 minute TTL, 1.0x extra
     at the 1 hour TTL). The NET saving subtracts that premium, so the headline
     is not the gross read saving dressed up as the net benefit.
+
+    Writes whose TTL the transcript never split are charged at the MOST
+    expensive rate (1.0x), not skipped. Skipping them made this headline
+    largest exactly where the evidence was weakest. NATIVE is attributed to
+    Anthropic rather than claimed by this tool, so it has to be a lower bound:
+    understating their benefit is a caveat, overstating it is the dishonesty
+    this whole product exists against. The unsplit volume is returned beside
+    the number so a surface can disclose it instead of printing a quietly
+    weaker figure that looks identical to a fully priced one.
     """
     read = sm["read_total"] or 0
     paid = CACHE_READ * read          # what reads actually cost, at 0.1x
     unblocked = 1.0 * read            # what they would cost uncached
     gross = unblocked - paid          # the 0.9x earned on reads
     w5, w1 = sm["write_5m_total"] or 0, sm["write_1h_total"] or 0
-    write_premium = 0.25 * w5 + 1.0 * w1   # extra paid over uncached input
+    # .get: an older schema's summary, and the partial dicts callers build,
+    # carry no unsplit key at all. A missing key is zero, never a crash.
+    wu = sm.get("write_unsplit_total") or 0
+    write_premium = 0.25 * w5 + 1.0 * w1 + 1.0 * wu   # extra over uncached
     return {
         "read": read, "paid": paid, "unblocked": unblocked,
         "gross": gross, "write_premium": write_premium,
         "saved": gross - write_premium,     # NET
-        "write_cost": 1.25 * w5 + 2.0 * w1,
+        "write_cost": 1.25 * w5 + 2.0 * w1 + 2.0 * wu,
+        "write_unsplit": wu,
         "raw_input": sm["input_total"] or 0,
     }
+
+
+def native_note(sv):
+    """The caveat that travels with a NATIVE figure, or "" when there is none.
+
+    Empty whenever every cache write carried a TTL, so a fully priced headline
+    stays clean. When some writes could not be priced, the reader is told on
+    the same line as the number rather than in a footnote, because a quietly
+    weaker figure prints identically to a solid one otherwise.
+    """
+    wu = sv.get("write_unsplit") or 0
+    if not wu:
+        return ""
+    return (f" (includes {human(wu)} of cache writes with no TTL split, "
+            f"charged at the most expensive rate, so this is a lower bound)")
 
 
 def prescriptions(sm, sessions):
@@ -812,10 +840,16 @@ def render_observed_pattern(profile):
     fr = _leaf(profile, "usage", "first_request_median_tokens")
     hit = _leaf(profile, "usage", "cache_hit_ratio_median")
     sw = _leaf(profile, "behavior", "model_switch_session_share")
+    # Same pill helper, same shape as the top strip: a number never travels
+    # without its label, and an absent leaf says NO DATA rather than wearing
+    # MEASURED over a blank.
     parts.append('<div class="grid">'
-                 + stat("First-request median", human(fr), "tokens paid before any work", fr is None)
-                 + stat("Cache hit ratio median", pct(hit), "share of reads served from cache", hit is None)
-                 + stat("Model-switch share", pct(sw), "sessions that ran more than one model", sw is None)
+                 + stat(f'First-request median {_cpill("MEASURED" if fr is not None else "NO DATA")}',
+                        human(fr), "tokens paid before any work", fr is None)
+                 + stat(f'Cache hit ratio median {_cpill("MEASURED" if hit is not None else "NO DATA")}',
+                        pct(hit), "share of reads served from cache", hit is None)
+                 + stat(f'Model-switch share {_cpill("MEASURED" if sw is not None else "NO DATA")}',
+                        pct(sw), "sessions that ran more than one model", sw is None)
                  + '</div>')
     return "".join(parts)
 
@@ -825,10 +859,21 @@ def render_recommendation_queue(advise_result, suppressed_n, companion_suppresse
     if not advise_result:
         parts.append('<p class="nodata">NO DATA: no profile to advise on.</p>')
         return "".join(parts)
-    queue = (advise_result.get("queue") or [])[:3]
+    # The best card owns the Next best move section above, chips and all.
+    # Repeating it here printed the same recommendation three times on one
+    # page, so the queue lists only what is NOT already shown.
+    best_id = (advise_result.get("best") or {}).get("id")
+    full_queue = advise_result.get("queue") or []
+    queue = [c for c in full_queue if c.get("id") != best_id][:3]
     if not queue:
-        parts.append('<p class="n">Queue is empty: profile is healthy right now '
-                     '(see Next best move).</p>')
+        # Two different empty states, and they must never share a sentence:
+        # a queue emptied by the card above is not a healthy profile.
+        if full_queue:
+            parts.append('<p class="n">Nothing else queued: the only recommendation that '
+                         'fired is the card above.</p>')
+        else:
+            parts.append('<p class="n">Queue is empty: profile is healthy right now '
+                         '(see Next best move).</p>')
     else:
         rows = []
         for i, c in enumerate(queue, 1):
@@ -837,8 +882,12 @@ def render_recommendation_queue(advise_result, suppressed_n, companion_suppresse
                 f'<div class="t">{esc(c["title"])}'
                 f'<span class="cpill est" style="margin:0 0 0 8px">{esc(c["evidence"])}</span></div>'
                 f'<div class="fix">{esc(c["drawback"])}</div>'
-                f'{_render_how(c.get("how"))}{_render_chips(c["id"])}</div>')
+                f'{_render_how(c.get("how"))}</div>')
         parts.append('<div class="pain">' + "".join(rows) + '</div>')
+        # The copy-paste chips live on the Next best move card only, so this
+        # one line keeps the queue actionable without reprinting them.
+        parts.append('<p class="n">Decide on any of these in '
+                     '<code>/token-shield:advisor</code>.</p>')
     # A companion-caused suppression is never the user's own choice, so it
     # gets its own honest line rather than being folded into "your earlier
     # choices": that phrase used to render after a companion-only sync, with
@@ -921,8 +970,16 @@ def render_verified_hero(verified_rows):
                      f'verified on <b>{esc(r["label"])}</b>, but {esc(r["historical_reason"])}. '
                      f'Re-run the experiment to confirm it still holds.')
             return big, under
-        cls = "g" if r["floor_reduction"] >= 0 else "w"
-        big = f'<span class="big {cls}">{human(r["floor_reduction"])}</span>'
+        # A regression carries its own colour AND its own word. Colour alone
+        # would leave a colour-blind reader unable to tell it from a saving
+        # (WCAG 2.2 SC 1.4.1), and the figure is never clipped either way.
+        if r["floor_reduction"] < 0:
+            big = f'<span class="big w">{human(r["floor_reduction"])} REGRESSION</span>'
+            under = (f'the startup floor GREW by {human(abs(r["floor_reduction"]))} tokens per '
+                     f'call on <b>{esc(r["label"])}</b>: this experiment measured a regression, '
+                     f'not a saving. Shown as it measured, never clipped.')
+            return big, under
+        big = f'<span class="big g">{human(r["floor_reduction"])}</span>'
         under = (f'fewer startup tokens per call on <b>{esc(r["label"])}</b>, proven by a '
                  f'before/after experiment. Regressions are shown as they measured, '
                  f'never clipped.')
@@ -964,10 +1021,11 @@ def _cpill(label):
     """A confidence badge, reusing the cpill classes already styled in CSS:
     ver (good/green) for VERIFIED, est (warn) for ESTIMATED and HISTORICAL
     (a warning, not a proof failure: it was proven once, the environment
-    just moved since), and the bare muted cpill for everything else
-    (MEASURED, NO DATA)."""
+    just moved since), nat (accent) for NATIVE so the pill matches the colour
+    the label key paints that word, and the bare muted cpill for everything
+    else (MEASURED, NO DATA)."""
     cls = {"VERIFIED": "cpill ver", "ESTIMATED": "cpill est",
-          "HISTORICAL": "cpill est"}.get(label, "cpill")
+          "HISTORICAL": "cpill est", "NATIVE": "cpill nat"}.get(label, "cpill")
     return f'<span class="{cls}">{esc(label)}</span>'
 
 
@@ -1127,13 +1185,20 @@ CSS = """
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --mono:"SF Mono",Menlo,Consolas,monospace;
 }
+/* Light theme. --good and --warn are darker than their dark-theme twins on
+   purpose: they carry the confidence pills and the evidence lines at 9px, so
+   WCAG 2.2 SC 1.4.3 asks 4.5:1, not the 3:1 large-text exception. Measured
+   against every surface they sit on (--bg, --panel, --panel2): --good #0f7a4e
+   is 4.84 / 5.37 / 4.96, --warn #8a6508 is 4.80 / 5.32 / 4.92. The old
+   #1f9d68 and #b8860b were 3.11 and 2.93 on --bg. Dark mode already passes
+   (11.58 and 9.61) and is untouched. */
 @media (prefers-color-scheme: light){
   :root{--bg:#f4f2fa;--panel:#ffffff;--panel2:#f7f5fc;--line:#e4dff0;
-        --ink:#211b30;--muted:#6b6284;--shield:#e2542a;--good:#1f9d68;
-        --warn:#b8860b;--accent:#6a5ad0;}
+        --ink:#211b30;--muted:#6b6284;--shield:#e2542a;--good:#0f7a4e;
+        --warn:#8a6508;--accent:#6a5ad0;}
 }
 :root[data-theme="light"]{--bg:#f4f2fa;--panel:#ffffff;--panel2:#f7f5fc;--line:#e4dff0;
-      --ink:#211b30;--muted:#6b6284;--shield:#e2542a;--good:#1f9d68;--warn:#b8860b;--accent:#6a5ad0;}
+      --ink:#211b30;--muted:#6b6284;--shield:#e2542a;--good:#0f7a4e;--warn:#8a6508;--accent:#6a5ad0;}
 :root[data-theme="dark"]{--bg:#16131f;--panel:#1e1a2b;--panel2:#251f36;--line:#332a47;
       --ink:#efeaf7;--muted:#a99fc0;--shield:#ff6a3d;--good:#5ad19a;--warn:#ffcf5c;--accent:#8b7be8;}
 *{box-sizing:border-box}
@@ -1146,7 +1211,15 @@ h1{font-size:26px;margin:2px 0 0;font-weight:650;letter-spacing:-.01em;}
 .stamp{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:14px 0 26px;border-left:2px solid var(--line);padding-left:11px;}
 .hero{background:linear-gradient(135deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:26px 26px 22px;margin-bottom:16px;}
 .hero .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;}
-.hero .big{font-size:clamp(40px,9vw,68px);font-weight:750;line-height:1;letter-spacing:-.02em;color:var(--good);}
+.hero .big{font-size:clamp(40px,9vw,68px);font-weight:750;line-height:1;letter-spacing:-.02em;color:var(--ink);}
+/* One colour per hero state. The base above is deliberately neutral: a hero
+   that forgets its modifier must never inherit success green, which is how a
+   regression, a HISTORICAL caveat and NONE YET all used to read as a win. The
+   words differ too (see render_verified_hero), because WCAG 2.2 SC 1.4.1
+   forbids colour as the only carrier of a distinction. */
+.hero .big.g{color:var(--good);}
+.hero .big.w{color:var(--warn);}
+.hero .big.muted{color:var(--muted);}
 .hero .unit{font-size:16px;color:var(--muted);font-weight:500;margin-left:6px;}
 .hero .sub{margin:12px 0 0;font-size:14px;color:var(--muted);max-width:60ch;}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:13px;margin:16px 0;}
@@ -1187,6 +1260,7 @@ table.se td{padding:5px 7px;border-bottom:1px solid var(--line);font-variant-num
 .cpill{display:inline-block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:20px;border:1px solid var(--line);margin-bottom:10px;color:var(--muted);}
 .cpill.ver{color:var(--good);border-color:var(--good);}
 .cpill.est{color:var(--warn);border-color:var(--warn);}
+.cpill.nat{color:var(--accent);border-color:var(--accent);}
 .usdline{font-size:13.5px;color:var(--muted);margin:2px 0 8px;max-width:66ch;}
 .usdline b{color:var(--ink);}
 .wins{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px;}
@@ -1255,6 +1329,17 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                  f'estimated. Measured on this machine; the method is portable, these numbers '
                  f'are not.</p>')
 
+    # THE KEY, here and not at the foot of the page: it explains the four
+    # words every figure below is labelled with, so it has to arrive before
+    # the first pill does, not thirteen screens after it.
+    parts.append('<h2>What the labels mean</h2>')
+    parts.append('<div class="legend">'
+                 '<span><b style="color:var(--good)">VERIFIED</b> before/after, proven</span>'
+                 '<span><b style="color:var(--muted)">MEASURED</b> from counters, cause not proven</span>'
+                 '<span><b style="color:var(--warn)">ESTIMATED</b> a transparent projection</span>'
+                 '<span><b style="color:var(--accent)">NATIVE</b> Claude Code\'s own saving</span>'
+                 '</div>')
+
     # TOP STRIP, above even the alerts band: four things a non-technical
     # reader can take in in ten seconds. Every cell reuses a number this
     # render already computed, never a re-derived figure.
@@ -1313,7 +1398,12 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
                      '<div class="m">every session pattern is inside its healthy range</div>'
                      '<div class="fix">Keep the shield on and re-check monthly.</div></div></div>')
     else:
-        pain = ['<div class="pain">']
+        # The unit the card math is about to quote, defined once, right where
+        # a reader first meets it. Without it the closing figure is unreadable
+        # as either big or small.
+        pain = ['<p class="n">One base-input unit is one token at the ordinary input '
+                'price, so a cached read costs a tenth of one.</p>',
+                '<div class="pain">']
         for i, r in enumerate(ranked_rx, 1):
             impact = 'HIGH' if i == 1 else 'MEDIUM'
             lt = r.get("longterm", "")
@@ -1369,18 +1459,13 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     # (0.1x reads, 1.25x/2x write premiums) lives in docs/METHODOLOGY.md, not
     # here, because every number on this page is one the user can move by
     # acting; the native saving is not this tool's, and it does not claim it.
+    # This sentence is the page's one NATIVE instance, so it carries the pill:
+    # the key defines the word, and here is the thing it names.
     parts.append(
-        '<p class="usdline">Anthropic\'s own caching also works underneath every session; '
-        'that saving is not this tool\'s, and it does not claim it. The accounting lives in '
-        '<code>docs/METHODOLOGY.md</code>, not on this page.</p>')
+        f'<p class="usdline">{_cpill("NATIVE")} Anthropic\'s own caching also works underneath '
+        'every session; that saving is not this tool\'s, and it does not claim it. The '
+        'accounting lives in <code>docs/METHODOLOGY.md</code>, not on this page.</p>')
 
-    parts.append('<h2>What the labels mean</h2>')
-    parts.append('<div class="legend">'
-                 '<span><b style="color:var(--good)">VERIFIED</b> before/after, proven</span>'
-                 '<span><b style="color:var(--muted)">MEASURED</b> from counters, cause not proven</span>'
-                 '<span><b style="color:var(--warn)">ESTIMATED</b> a transparent projection</span>'
-                 '<span><b style="color:var(--accent)">NATIVE</b> Claude Code\'s own saving</span>'
-                 '</div>')
     parts.append('<footer>Token Shield. Every figure is measured from local API usage '
                  'counters; NO DATA means it could not be measured, never a guess. Aggregates '
                  'only: no conversation text, file paths, or session identifiers reach this '

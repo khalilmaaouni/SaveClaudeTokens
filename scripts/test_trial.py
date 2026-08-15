@@ -229,6 +229,129 @@ def test_follow_on_command_points_at_a_cli_that_actually_exists():
         f"exists from the caller's working directory")
 
 
+def test_the_trials_native_line_discloses_writes_it_could_not_price():
+    """The trial is the stranger's first screen, and its NATIVE line is the
+    row attributed to Anthropic rather than claimed by this tool.
+
+    A transcript whose usage carries only the FLAT cache_creation counter and
+    no nested cache_creation object has an unknown TTL class, so those writes
+    cannot be priced (measure_tokens.split_writes puts them in write_unsplit
+    and refuses to normalize them). They used to be charged nothing at all,
+    which made this headline largest exactly where the evidence was weakest.
+    Now they are charged at the most expensive rate AND said out loud.
+
+    Calibrated by reinjection: removing ts.native_note(sv) from the NATIVE
+    line in trial.py leaves the number looking identical to a fully priced
+    one, and the "no TTL split" assertion fails.
+    """
+    def _flat(ts_str, inp=100, write=0, read=900, out=50):
+        """A record with the flat write counter and NO nested split, which is
+        the schema variant this defect lives in."""
+        return json.dumps({
+            "isSidechain": False,
+            "timestamp": ts_str,
+            "message": {"model": "claude-x", "usage": {
+                "input_tokens": inp,
+                "cache_creation_input_tokens": write,
+                "cache_read_input_tokens": read,
+                "output_tokens": out,
+            }},
+        })
+
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "flat.jsonl"), [
+            _flat(f"2026-08-12T10:0{i}:00Z", inp=90_000, write=2_000_000,
+                  read=9_000_000) for i in range(5)
+        ])
+        rc, text = _run(d)
+    assert rc == 0, rc
+    native = [ln for ln in text.splitlines() if ln.startswith("NATIVE")]
+    assert len(native) == 1, native
+    assert "no TTL split" in native[0], native[0]
+    assert "lower bound" in native[0], native[0]
+
+
+def test_the_trial_agrees_with_the_command_it_recommends_about_the_headline():
+    """The trial's last line sends a stranger straight to `cli.py summary`, so
+    the two screens they see inside one minute must name the same "how much you
+    could still cut" figure. Both build it from the same prescriptions over the
+    same data.
+
+    They diverged: trial.py took the largest lever while cli.py summed every
+    lever, so on real data here the trial said 218.3M and the very next command
+    said 230M, in the same words. Summing overlapping levers double counts the
+    same startup floor, so the largest lever is the honest reduction and both
+    sides take it.
+
+    The fixture deliberately produces MORE THAN ONE prescription, because with
+    a single lever max and sum are equal and the contract cannot fail. Its
+    token counts are large so that both surfaces land in millions: cli.py
+    rounds to whole millions, so a fixture whose levers are thousands apart
+    would round both sides to the same "0M" and pass while broken.
+
+    Tolerance is half a million token-units, which is cli.py's own rounding.
+    Any gap wider than the coarser format can explain is a real disagreement.
+    """
+    import cli
+
+    # The magnitude is large on purpose. cli.py rounds to whole millions, so
+    # the two levers have to differ by several million before the gap survives
+    # that rounding; a fixture whose levers differ by thousands passes while
+    # broken. Session count stays at five because the startup floor lever is
+    # triggered by the median SHARE, so adding sessions removes the second
+    # lever instead of enlarging it.
+    big = 30_000_000
+    with tempfile.TemporaryDirectory() as d:
+        # Session one switches model mid-session, which is its own lever.
+        _write(os.path.join(d, "switch.jsonl"), [
+            _rec("2026-08-12T10:00:00Z", model="claude-a", inp=big, read=200),
+            _rec("2026-08-12T10:05:00Z", model="claude-b", inp=400, read=big),
+            _rec("2026-08-12T10:09:00Z", model="claude-b", inp=400, read=big),
+        ])
+        # Four more single-model sessions, each paying a large startup floor,
+        # so a second lever is detected alongside the switch.
+        for i in range(4):
+            _write(os.path.join(d, f"s{i}.jsonl"), [
+                _rec(f"2026-08-12T1{i}:00:00Z", inp=big, read=200, out=3_000_000),
+                _rec(f"2026-08-12T1{i}:06:00Z", inp=400, read=big, out=3_000_000),
+            ])
+
+        sm = mt.summarize(mt.collect(d, 30))
+        rx = ts.prescriptions(sm, mt.collect(d, 30))
+        assert len(rx) > 1, (
+            "fixture produced only one lever, so this contract cannot fail and "
+            "the test would prove nothing")
+
+        _, trial_text = _run(d)
+
+        buf = io.StringIO()
+        real_root = cli.ROOT
+        cli.ROOT = d
+        try:
+            with contextlib.redirect_stdout(buf):
+                cli.summary(30)
+        finally:
+            cli.ROOT = real_root
+        cli_text = buf.getvalue()
+
+    scale = {"K": 1e3, "M": 1e6, "B": 1e9}
+
+    def _headline(text, marker):
+        """The number each surface prints, normalised out of its own unit
+        suffix so a K/M/B difference can never be read as agreement."""
+        line = [ln for ln in text.splitlines() if marker in ln]
+        assert len(line) == 1, (marker, line)
+        blob = line[0].split(marker, 1)[1].strip().split(" ", 1)[0]
+        assert blob[-1] in scale, (marker, blob)
+        return float(blob[:-1]) * scale[blob[-1]]
+
+    trial_v = _headline(trial_text, "ESTIMATED")
+    cli_v = _headline(cli_text, "OPPORTUNITY")
+    assert abs(trial_v - cli_v) <= 500_000, (
+        f"the trial says {trial_v:,.0f} and the command it recommends says "
+        f"{cli_v:,.0f} for the same data, in the same words")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

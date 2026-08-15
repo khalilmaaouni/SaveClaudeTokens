@@ -151,6 +151,16 @@ def main():
         today = time.strftime("%Y-%m-%d")
     pricing = load_pricing(a.pricing)
     res = price_saving(saving_by_model(a.root, a.days), pricing, today)
+    # Same order as cli.prices, and for the same reason: this module is the
+    # OTHER door onto the same figures, and it used to open with a heading
+    # and a six-figure "priced total" whose caveat sat five lines below it.
+    # A reader takes the number and leaves the caveat behind, so the caveat
+    # goes first and the summed headline goes away. The per-model rows stay:
+    # those are genuinely useful when choosing a model.
+    print("This is not money you saved.")
+    print("Claude Code's caching (Anthropic's own mechanism, not Token Shield) "
+          "kept these tokens off the wire for you. No bill went down: on a "
+          "subscription you pay the same either way.")
     print(f"=== USD-equivalent of the native caching saving, last {a.days:g} days ===")
     print(f"pricing snapshot   {res['snapshot']}")
     if res["status"] == "NO_PRICE_DATA":
@@ -160,13 +170,11 @@ def main():
     for r in res["rows"]:
         u = f"${r['usd']:,.2f}" if r["usd"] is not None else "UNPRICED"
         print(f"  {r['model']:<28} {r['units']/1e9:7.3f}B units   {u}")
-    print(f"priced total       ${res['usd']:,.2f} API-equivalent "
-          f"({res['priced_units']/1e9:.2f}B units priced)")
+    print(f"priced             {res['priced_units']/1e9:.2f}B units, API-equivalent, "
+          f"per model above")
     if res["unpriced_units"]:
         print(f"unpriced           {res['unpriced_units']/1e9:.3f}B units at models not in "
               f"the snapshot (saving measured, not priced)")
-    print("Note: API-equivalent value. On a subscription the bill did not drop by this; "
-          "it is what the same tokens would cost at API list prices.")
     return 0
 
 

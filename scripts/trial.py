@@ -84,10 +84,10 @@ def run(root, days, out=None):
     print(f"MEASURED  output tokens: {mt.fmt(sm['output_total'])} total, "
           f"{mt.fmt(sm['subagent_output_share'])} of it from subagents", file=out)
 
-    native = ts.savings_breakdown(sm)["saved"]
-    print(f"NATIVE    {ts.human(native)} base-input token-units saved by Claude "
+    sv = ts.savings_breakdown(sm)
+    print(f"NATIVE    {ts.human(sv['saved'])} base-input token-units saved by Claude "
           f"Code's own prompt caching (Anthropic's mechanism, not this tool; "
-          f"never shown in dollars)", file=out)
+          f"never shown in dollars){ts.native_note(sv)}", file=out)
 
     rx = ts.prescriptions(sm, sessions)
     if rx:

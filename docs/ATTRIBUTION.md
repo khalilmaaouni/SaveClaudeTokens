@@ -34,6 +34,52 @@ carry), and the VERIFIED before/after saving from an experiment you
 actually ran. Both are honest because both are smaller than the native
 number, and neither pretends to be it.
 
+## What Anthropic already ships, and why we point at it
+
+The same honesty that keeps NATIVE out of our column applies to
+tooling. Anthropic already ships org-wide reporting for Claude Code,
+and an organisation evaluating this tool deserves to be told that
+before they adopt it, not after. Where the two overlap, theirs is the
+source of truth for spend, and this tool is for finding and proving
+what to change.
+
+What is theirs, verified against their own documentation:
+
+- An organisation-wide analytics dashboard for Teams and Enterprise
+  plans, at `claude.ai/analytics/claude-code`, covering usage and
+  acceptance metrics. Documented at
+  https://code.claude.com/docs/en/analytics
+- Real-time OpenTelemetry export of token and cost data, enabled with
+  `CLAUDE_CODE_ENABLE_TELEMETRY=1`, publishing named metrics including
+  `claude_code.token.usage` and `claude_code.cost.usd`. Documented at
+  https://code.claude.com/docs/en/monitoring-usage
+- Enterprise policy through managed settings, which outrank user and
+  project settings, including allowlists governing which plugin
+  marketplaces may be used at all. Documented at
+  https://code.claude.com/docs/en/admin-setup
+
+If your only question is "what are we spending", use theirs: it is
+first party, it is real time, and it needs no plugin. Anthropic also
+states plainly that its own contribution metrics are deliberately
+conservative, which is the same posture this tool takes, and it is
+worth reading their note rather than ours on that point.
+
+What this tool adds on top, and would not exist otherwise:
+
+- It attributes waste to a CAUSE rather than a total: which of your
+  habits, files and installed plugins the tokens actually went to.
+- It proves a change worked, with a before and after cohort and a
+  verdict that can come back NOT_PROVEN. A spend chart can show you a
+  number moved; it cannot tell you your change is what moved it.
+- It runs with no account, no telemetry export and no network call in
+  its single machine core, which matters where the org has not enabled
+  telemetry, or cannot.
+
+Flip condition, recorded so this section is not left to rot: if
+Anthropic ships per-cause attribution or a before and after proof
+mechanism, the overlapping part of this tool stops being worth
+maintaining and this document says so at that point.
+
 ## How USD is priced
 
 - Pricing comes from a dated snapshot in `data/pricing.json`, per

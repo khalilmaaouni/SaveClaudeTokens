@@ -10,6 +10,7 @@ meter itself is covered by test_measure_tokens.py.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -247,6 +248,76 @@ def test_shield_saving_is_net_of_the_write_premium():
     assert sv["saved"] == 90.0 - 20.0               # 70.0 net, not 90 gross
 
 
+def test_native_charges_a_premium_for_writes_whose_ttl_is_unknown():
+    """A cache write with no TTL split cannot be priced: measure_tokens sets
+    normalized input to NO DATA for exactly that data, at measure_tokens.py
+    around the split_writes docstring. Charging it nothing made the NATIVE
+    headline LARGEST precisely where the evidence was WEAKEST.
+
+    NATIVE is the one row attributed to Anthropic rather than claimed by this
+    tool, so it has to be a lower bound. Unsplit writes are therefore charged
+    at the most expensive TTL (1.0x, the 1 hour rate), which understates the
+    saving rather than overstating it. Understating Anthropic's benefit is a
+    caveat; overstating it is the dishonesty the whole product exists against.
+
+    Calibrated by reinjection: dropping write_unsplit_total back out of the
+    premium makes the unsplit fixture report 90.0 saved against the split
+    fixture's 40.0, and the first assertion fails.
+    """
+    common = {"read_total": 100.0, "input_total": 5.0}
+    split = dict(common, write_5m_total=0.0, write_1h_total=50.0,
+                 write_unsplit_total=0.0)
+    unsplit = dict(common, write_5m_total=0.0, write_1h_total=0.0,
+                   write_unsplit_total=50.0)
+
+    sv_split = shield.savings_breakdown(split)
+    sv_unsplit = shield.savings_breakdown(unsplit)
+
+    assert sv_unsplit["saved"] <= sv_split["saved"], (
+        f"unknown-TTL writes reported a LARGER saving ({sv_unsplit['saved']}) "
+        f"than the same volume at the most expensive known TTL "
+        f"({sv_split['saved']})")
+    assert sv_unsplit["write_premium"] == 50.0
+    # The count travels with the number so a surface can disclose it rather
+    # than printing a quietly weaker figure that looks identical.
+    assert sv_unsplit["write_unsplit"] == 50.0
+    assert sv_split["write_unsplit"] == 0.0
+
+
+def test_native_discloses_unpriceable_writes_and_stays_silent_without_them():
+    """A NATIVE figure computed partly from writes that could not be priced
+    must SAY so on the same line as the number. Charging them conservatively
+    (the test above) stops the overstatement; without the disclosure the
+    weaker figure still prints identically to a fully priced one, and a reader
+    cannot tell which they are looking at.
+
+    The note names the volume, not a transcript count: the volume is what the
+    counters actually carry. NO DATA beats a guess, including a guessed count.
+    """
+    none_unsplit = shield.savings_breakdown(
+        {"read_total": 100.0, "write_5m_total": 40.0, "write_1h_total": 10.0,
+         "write_unsplit_total": 0.0, "input_total": 5.0})
+    some_unsplit = shield.savings_breakdown(
+        {"read_total": 1e9, "write_5m_total": 0.0, "write_1h_total": 0.0,
+         "write_unsplit_total": 1_200_000.0, "input_total": 5.0})
+
+    assert shield.native_note(none_unsplit) == "", (
+        "a fully priced figure must carry no caveat at all")
+    note = shield.native_note(some_unsplit)
+    assert "1.2M" in note, note
+    assert "TTL" in note, note
+
+
+def test_savings_breakdown_survives_a_summary_missing_the_unsplit_key():
+    # Callers pass partial summary dicts (the sibling premium test does), and
+    # a summary written by an older schema has no unsplit key at all. A missing
+    # key is zero, never a crash on a caller's first run.
+    sv = shield.savings_breakdown({"read_total": 100.0, "write_5m_total": 40.0,
+                                   "write_1h_total": 10.0, "input_total": 5.0})
+    assert sv["write_unsplit"] == 0
+    assert sv["saved"] == 70.0
+
+
 def test_dashboard_attributes_the_saving_to_native_caching():
     # The load-bearing honesty: the native caching saving is Claude Code's,
     # not this tool's doing. A future edit that quietly re-claims it as the
@@ -459,22 +530,31 @@ def test_alerts_band_fires_on_a_bad_profile_and_stays_quiet_on_a_healthy_one():
 
 def test_card_renders_its_numbered_how_steps_and_command():
     # Calibrated: removing the _render_how()/_render_chips() calls from
-    # render_recommendation_queue makes this go red (no "How, exactly" block,
-    # no command); restored, both render and the command is copy-pasteable.
+    # render_next_best_move makes this go red (no "How, exactly" block, no
+    # command); restored, both render and the command is copy-pasteable.
+    # The chips moved to the Next best move card ALONE: they used to repeat
+    # under every queued card, printing the same three commands three times.
     real = adv.load_strategies()
     profile = _nest_flat({"behavior.model_switch_session_share": _leaf(0.5)})
     result = adv.advise(profile, {}, real)
     assert result["best"] is not None
-    html = shield.render_recommendation_queue(result, 0)
-    assert "How, exactly" in html
-    assert "<code>python3 scripts/cli.py advise --decide" in html
-    assert "not-now" in html and "never" in html and " done</code>" in html
-    assert "Did it" in html and "Not now (90 days quiet)" in html and "Never recommend" in html
-    assert "/token-shield:advisor" in html
 
     best_html = shield.render_next_best_move(result)
     assert "How, exactly" in best_html
     assert "<code>python3 scripts/cli.py advise --decide" in best_html
+    assert "not-now" in best_html and "never" in best_html and " done</code>" in best_html
+    assert ("Did it" in best_html and "Not now (90 days quiet)" in best_html
+            and "Never recommend" in best_html)
+    assert "/token-shield:advisor" in best_html
+
+    # A queued card still shows its steps, and still names where to decide.
+    two = _nest_flat({"behavior.model_switch_session_share": _leaf(0.5),
+                      "instruction.startup_floor_share": _leaf(0.9)})
+    queued = adv.advise(two, {}, real)
+    assert len(queued["queue"]) >= 2, queued["queue"]
+    html = shield.render_recommendation_queue(queued, 0)
+    assert "How, exactly" in html
+    assert "/token-shield:advisor" in html
 
 
 def _nest_flat(flat):
@@ -519,10 +599,13 @@ def test_suppressed_treatment_reduces_the_rendered_queue():
     n = shield.suppressed_recommendation_count(adv, profile, treatments, strategies)
     assert n == 1
 
+    # One fewer card renders once suppression bites. The rendered counts are
+    # one below the queue lengths above because the best card is shown in its
+    # own section and is no longer repeated here.
     html_without = shield.render_recommendation_queue(without, 0)
     html_with = shield.render_recommendation_queue(with_t, n)
-    assert html_without.count('class="pain-item"') == 2
-    assert html_with.count('class="pain-item"') == 1
+    assert html_without.count('class="pain-item"') == 1
+    assert html_with.count('class="pain-item"') == 0
     assert "suppressed by your earlier choices" in html_with
 
 
@@ -975,6 +1058,159 @@ def test_verified_row_with_no_fingerprint_stays_verified_never_false_historical(
     # every existing caller in this file already uses.
     verified_no_mod = shield.verified_by_label(rows)
     assert verified_no_mod[0]["historical"] is False, verified_no_mod
+
+
+# --- dashboard legibility: colour, contrast, labels, repetition -------------
+# Every check below is about the page a non-technical reader actually sees.
+# The first two are accessibility conformance (WCAG 2.2 SC 1.4.1 Use of Color
+# and SC 1.4.3 Contrast Minimum), which is why they assert on the stylesheet
+# and not only on the markup.
+
+def _plain(html_fragment):
+    """Tag-stripped text, to prove a state is distinguishable by WORDS alone,
+    with every colour and class thrown away."""
+    return re.sub(r"<[^>]+>", "", html_fragment)
+
+
+def _contrast(hex_a, hex_b):
+    """WCAG 2.x relative-luminance contrast ratio between two #rrggbb colours."""
+    def lum(h):
+        h = h.lstrip("#")
+        out = []
+        for i in (0, 2, 4):
+            c = int(h[i:i + 2], 16) / 255
+            out.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+    la, lb = lum(hex_a), lum(hex_b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _full_page(verified=None, experiment_rows=None):
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    advise_result = adv.advise(profile, {}, adv.load_strategies())
+    sm, sessions = _sm_and_sessions()
+    return shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
+                         verified=verified, profile=profile,
+                         advise_result=advise_result,
+                         companions_data={"companions": [], "mentions": []},
+                         experiment_rows=experiment_rows or [])
+
+
+def test_hero_regression_never_renders_in_the_success_colour():
+    # WCAG 2.2 SC 1.4.1 (Use of Color, Level A). The renderer emitted "big g",
+    # "big w" and "big muted", but the only .big rule hardcoded
+    # color:var(--good), so a regression, a HISTORICAL caveat and NONE YET all
+    # printed in success green. Colour must separate the states, and because
+    # colour may not be the ONLY separator, the words must separate them too.
+    win_big, win_under = shield.render_verified_hero(
+        [{"label": "diet", "floor_reduction": 4200, "historical": False}])
+    loss_big, loss_under = shield.render_verified_hero(
+        [{"label": "diet", "floor_reduction": -4200, "historical": False}])
+
+    assert 'class="big g"' in win_big, win_big
+    assert 'class="big w"' in loss_big, loss_big
+
+    base = re.search(r"\.hero \.big\{([^}]*)\}", shield.CSS)
+    assert base and "--good" not in base.group(1), base and base.group(1)
+    for cls, token in (("g", "--good"), ("w", "--warn"), ("muted", "--muted")):
+        rule = re.search(r"\.hero \.big\.%s\{([^}]*)\}" % cls, shield.CSS)
+        assert rule is not None, cls
+        assert token in rule.group(1), (cls, rule.group(1))
+
+    # Text alone, no stylesheet at all, must still tell a loss from a win.
+    assert "REGRESSION" in _plain(loss_big), loss_big
+    assert "REGRESSION" not in _plain(win_big), win_big
+    assert "regression" in loss_under.lower(), loss_under
+    assert "4.2K" in _plain(loss_big), loss_big  # the figure is never clipped
+
+    # NO DATA is a word, never a number that reads like a saving.
+    empty_big, _ = shield.render_verified_hero([])
+    assert 'class="big muted"' in empty_big, empty_big
+    assert "NONE YET" in _plain(empty_big), empty_big
+
+
+def test_light_theme_confidence_colours_meet_wcag_aa_contrast():
+    # WCAG 2.2 SC 1.4.3 (Contrast Minimum, Level AA): 4.5:1 for normal text.
+    # The confidence pills are 9px, far under the 18pt large-text exception,
+    # so 4.5:1 is the threshold that applies. Dark mode already passed; both
+    # light blocks (the media query and the explicit toggle) are checked so
+    # they can never drift apart.
+    light = re.search(r':root\[data-theme="light"\]\{([^}]*)\}', shield.CSS)
+    media = re.search(r"@media \(prefers-color-scheme: light\)\{\s*:root\{([^}]*)\}",
+                      shield.CSS)
+    assert light and media
+    for block in (light.group(1), media.group(1)):
+        tok = dict(re.findall(r"--([a-z0-9]+):(#[0-9a-f]{6})", block))
+        for name in ("good", "warn"):
+            for bg in ("bg", "panel", "panel2"):
+                ratio = _contrast(tok[name], tok[bg])
+                assert ratio >= 4.5, (name, bg, tok[name], round(ratio, 2))
+
+
+def test_observed_pattern_numbers_carry_their_confidence_label():
+    # The page's stated invariant is that a number never travels without its
+    # label. These three headline figures printed bare.
+    html = shield.render_observed_pattern(_synthetic_profile())
+    assert html.count('class="cpill"') == 3, html
+    assert html.count("MEASURED") == 3, html
+
+    # An absent leaf says NO DATA, never MEASURED over a blank.
+    blank = shield.render_observed_pattern({"usage": {}, "behavior": {}})
+    assert "MEASURED" not in blank, blank
+    assert blank.count("NO DATA") >= 3, blank
+
+
+def test_label_key_precedes_the_first_pill_and_every_label_has_an_instance():
+    html = _full_page()
+    legend_at = html.index("What the labels mean")
+    first_pill_at = html.index('class="cpill')
+    assert legend_at < first_pill_at, (legend_at, first_pill_at)
+
+    # NATIVE was defined in the key and attached to no number on the page. A
+    # key entry with no instance teaches a category that does not exist.
+    usd = re.search(r'<p class="usdline">(.*?)</p>', html, re.S)
+    assert usd is not None
+    assert "NATIVE" in usd.group(1), usd.group(1)
+
+
+def test_each_recommendation_is_shown_once_not_three_times():
+    profile = _synthetic_profile(switch_share=0.5, floor_share=0.36)
+    result = adv.advise(profile, {}, adv.load_strategies())
+    assert result["best"] is not None
+    assert len(result["queue"]) >= 2, result["queue"]
+
+    queue_html = shield.render_recommendation_queue(result, 0)
+    assert result["best"]["title"] not in queue_html, queue_html
+    assert "--decide" not in queue_html, queue_html
+    assert result["queue"][1]["title"] in queue_html, queue_html
+
+    # The chips keep their one home, on the Next best move card.
+    assert "--decide" in shield.render_next_best_move(result)
+    assert _full_page().count("Did it") == 1
+
+
+def test_queue_emptied_by_the_hero_card_never_claims_a_healthy_profile():
+    # Filtering the best card out of the queue must not make a queue of one
+    # read as "healthy": that would be a degradation printed as good news.
+    strategies = [_mini_strategy("cache.a", "cache", "usage.m1", ">=", 1, "HIGH")]
+    result = adv.advise({"usage": {"m1": _leaf(5)}}, {}, strategies)
+    assert len(result["queue"]) == 1
+    html = shield.render_recommendation_queue(result, 0)
+    assert 'class="pain-item"' not in html, html
+    assert "healthy" not in html, html
+    assert "card above" in html, html
+
+    # A genuinely empty advisor queue still says healthy.
+    healthy = adv.advise({"usage": {"m1": _leaf(0)}}, {}, strategies)
+    assert healthy["do_nothing"] is True
+    assert "healthy" in shield.render_recommendation_queue(healthy, 0)
+
+
+def test_base_input_units_is_defined_before_it_is_first_used():
+    html = _full_page()
+    assert "One base-input unit is" in html, "no definition of the invented unit"
+    assert html.index("One base-input unit is") < html.index("base-input units"), html
 
 
 if __name__ == "__main__":
