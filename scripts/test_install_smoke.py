@@ -102,9 +102,20 @@ def test_first_screen_under_60_seconds():
         f"trial.py took {elapsed:.1f}s against a fresh fixture corpus, "
         f"over the {BUDGET_SECONDS} second install-smoke budget")
 
-    # trial.py line 12 promises it writes nothing anywhere. With HOME pointed
-    # at an empty directory, anything it drops in a dotfile, a cache, or a
-    # config lands here and nowhere else. Calibrated: adding a single
+    # trial.py line 12 promises it writes nothing anywhere. This checks the
+    # part of that promise a user would actually notice: with HOME pointed at
+    # an empty directory, any dotfile, cache or config trial.py drops under the
+    # home directory lands here where it can be seen.
+    #
+    # Scope, stated rather than implied, because the promise is broader than
+    # the check. This does NOT prove trial.py writes nothing anywhere. Two
+    # writes escape it by construction: the interpreter's own bytecode cache
+    # under scripts/__pycache__, which Python creates on import and trial.py
+    # does not control, and any write to an absolute path outside both HOME and
+    # the corpus. Closing those would need a filesystem sandbox, which is a
+    # larger tool than this budget guard deserves.
+    #
+    # Calibrated: adding a single
     # open(os.path.join(os.path.expanduser("~"), ".probe"), "w") to trial.py
     # makes this go red naming .probe, then reverted.
     assert wrote_into_home == [], (
