@@ -110,7 +110,7 @@ this file.
 #    A file over MAX_RECORD_BYTES is refused by name before it is ever read
 #    into memory. A bare NaN/Infinity JSON literal is accepted silently by
 #    json.load (Python's json module allows it as a non-standard extension)
-#    and used to pass every comparison until it hit int() in ts.human() and
+#    and used to pass every comparison until it hit int() in fmt.human() and
 #    raised ValueError deep in the formatter; _validate_record_shape now
 #    refuses it explicitly at validation time, the same place the existing
 #    negative-counter check already lived, rather than leaving it to blow up
@@ -125,7 +125,7 @@ this file.
 #    DATA row naming the reason.
 # 3. --org reached both a filesystem path (store_dir/fleet/<org>/) and the
 #    page <title> unvalidated: "../../elsewhere" escaped the org tree, and
-#    the title (unlike the body, which already escapes via ts.esc) was
+#    the title (unlike the body, which already escapes via fmt.esc) was
 #    interpolated raw, so an org name shaped like
 #    "acme</title><script>alert(1)</script>" put a live script tag in the
 #    page. main() now runs --org through fleet._validate_org before it
@@ -153,7 +153,7 @@ this file.
 #    org artifact. It now goes through fleet._display_path, the same helper
 #    fleet.py itself uses to keep an account name out of its own warnings.
 # 8. A timestamp cell used to truncate AFTER escaping
-#    (ts.esc(text)[:19]), which can cut an HTML entity like "&amp;" in half
+#    (fmt.esc(text)[:19]), which can cut an HTML entity like "&amp;" in half
 #    and leave a broken entity in the page. Truncation now happens on the
 #    raw string, before esc() ever sees it.
 #
@@ -177,6 +177,8 @@ import time
 import fleet as fl
 import token_shield as ts
 
+import metrics as met
+import formatting as fmt
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 REQUIRED_RECORD_FIELDS = ("schema", "date")
@@ -216,7 +218,7 @@ def _validate_record_shape(record):
     +/-Infinity: json.load accepts these silently as a non-standard
     extension, and they pass every "< 0" comparison here without tripping
     it, then explode with ValueError: cannot convert float NaN to integer
-    the moment ts.human() tries int() on one downstream -- caught here,
+    the moment fmt.human() tries int() on one downstream -- caught here,
     before that, is the only place that never lets it reach the formatter).
     Returns None when the shape is usable. Never raises; this is the
     hostile-content fence collect_org() puts around every file, checked
@@ -601,7 +603,7 @@ def latest_experiment_by_label(healthy_rows):
             items.append(entry)
 
     out = []
-    for label, winner in ts.latest_row_per_label(items).items():
+    for label, winner in met.latest_row_per_label(items).items():
         out.append({
             "label": label,
             "confidence": winner.get("confidence"),
@@ -666,15 +668,15 @@ def _machine_health(entry, last_seen, today):
     token count: see render_machines_table's own docstring for the rule."""
     detail = []
     if entry["records"]:
-        detail.append(f'team {ts.esc(entry["team"] or "(untagged)")}, '
-                      f'env {ts.esc(entry["env"] or "(untagged)")}')
+        detail.append(f'team {fmt.esc(entry["team"] or "(untagged)")}, '
+                      f'env {fmt.esc(entry["env"] or "(untagged)")}')
     elif last_seen is None:
         detail.append("no records found for this machine")
     else:
         detail.append("no records inside this window")
     if entry["errors"]:
         detail.append(f'{entry["errors"]} record(s) unreadable: '
-                      f'{ts.esc(_scrub_paths(entry["reason"]))}')
+                      f'{fmt.esc(_scrub_paths(entry["reason"]))}')
     detail = "; ".join(detail)
     if last_seen is None:
         return '<span class="nodata">NO DATA</span>', detail
@@ -713,7 +715,7 @@ def render_machines_table(rows, empty_machines, meta):
         rec = r["record"]
         team = rec.get("team")
         env = rec.get("environment")
-        # isinstance, not `or`: a dict in "team" reached ts.esc(), which
+        # isinstance, not `or`: a dict in "team" reached fmt.esc(), which
         # calls str(), and printed a Python repr into the org's page.
         if isinstance(team, str) and team:
             entry["team"] = team
@@ -736,7 +738,7 @@ def render_machines_table(rows, empty_machines, meta):
     for machine_id in shown:
         seen = last_seen.get(machine_id)
         status, detail = _machine_health(summaries[machine_id], seen, today)
-        rowlist.append(f'<tr><td>{ts.esc(machine_id)}</td><td>{ts.esc(seen or "n/a")}</td>'
+        rowlist.append(f'<tr><td>{fmt.esc(machine_id)}</td><td>{fmt.esc(seen or "n/a")}</td>'
                        f'<td>{status}</td><td>{detail}</td></tr>')
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Machine</th><th>Last report</th><th>Status</th><th>Detail</th>'
@@ -768,16 +770,16 @@ def render_counters_by_day(by_day, min_group):
         cell = by_day[date]
         if cell["machines"] < min_group:
             suppressed += 1
-            rowlist.append(f'<tr><td>{ts.esc(date)}</td>{_suppressed_cell(min_group, span=4)}'
+            rowlist.append(f'<tr><td>{fmt.esc(date)}</td>{_suppressed_cell(min_group, span=4)}'
                            '</tr>')
             continue
         f = cell["totals"]
         rowlist.append(
-            f'<tr><td>{ts.esc(date)}</td>'
-            f'<td>{ts.human(f.get("input_tokens"))}</td>'
-            f'<td>{ts.human(f.get("output_tokens"))}</td>'
-            f'<td>{ts.human(f.get("cache_read_input_tokens"))}</td>'
-            f'<td>{ts.human(f.get("cache_creation_input_tokens"))}</td></tr>')
+            f'<tr><td>{fmt.esc(date)}</td>'
+            f'<td>{fmt.human(f.get("input_tokens"))}</td>'
+            f'<td>{fmt.human(f.get("output_tokens"))}</td>'
+            f'<td>{fmt.human(f.get("cache_read_input_tokens"))}</td>'
+            f'<td>{fmt.human(f.get("cache_creation_input_tokens"))}</td></tr>')
     shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Date</th><th>Input</th><th>Output</th>'
@@ -808,7 +810,7 @@ def render_tag_totals(title, totals, min_group):
     the complement of the five is the one. A table where nothing was small
     is untouched: two teams of five each publish, since each is the other's
     complement and each stands on five machines."""
-    parts = [f'<h2>{ts.esc(title)}</h2>']
+    parts = [f'<h2>{fmt.esc(title)}</h2>']
     if not totals:
         parts.append('<p class="nodata">NO DATA: no healthy records carried this tag.</p>')
         return "".join(parts)
@@ -829,9 +831,9 @@ def render_tag_totals(title, totals, min_group):
             withheld.append((tag, b))
             residual |= b["machine_ids"]
         withheld.sort(key=lambda kv: kv[0])
-    rowlist = [f'<tr><td>{ts.esc(tag)}</td><td>{ts.human(b["total"])}</td></tr>'
+    rowlist = [f'<tr><td>{fmt.esc(tag)}</td><td>{fmt.human(b["total"])}</td></tr>'
                for tag, b in published]
-    rowlist += [f'<tr><td>{ts.esc(tag)}</td>{_suppressed_cell(min_group)}</tr>'
+    rowlist += [f'<tr><td>{fmt.esc(tag)}</td>{_suppressed_cell(min_group)}</tr>'
                 for tag, _b in withheld]
     shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
@@ -868,11 +870,11 @@ def render_experiments(items):
     for item in items:
         conf = item.get("confidence") if isinstance(item.get("confidence"), str) else "NO DATA"
         rowlist.append(
-            f'<tr><td>{ts.esc(item["label"])}</td><td>{ts._cpill(conf)}</td>'
-            f'<td>{ts.esc(item.get("target_metric") or "n/a")}</td>'
+            f'<tr><td>{fmt.esc(item["label"])}</td><td>{ts._cpill(conf)}</td>'
+            f'<td>{fmt.esc(item.get("target_metric") or "n/a")}</td>'
             f'<td>{_delta_text(item.get("metric_delta"))}</td>'
-            f'<td>{ts.esc(item.get("direction") or "n/a")}</td>'
-            f'<td>{ts.esc(str(item.get("timestamp") or "n/a")[:19])}</td></tr>')
+            f'<td>{fmt.esc(item.get("direction") or "n/a")}</td>'
+            f'<td>{fmt.esc(str(item.get("timestamp") or "n/a")[:19])}</td></tr>')
     shown, dropped = _cap(rowlist)
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Label</th><th>Confidence</th><th>Metric</th><th>Delta</th>'
@@ -911,11 +913,11 @@ def render(store_dir, org, stamp, days=DEFAULT_DAYS, min_group=MIN_GROUP_MACHINE
     parts = [f"<style>{ts.CSS}</style>", '<div class="wrap">']
     parts.append(f'<div class="top">{ts.SHIELD_SVG}<div>'
                  f'<p class="eyebrow">Token Shield Fleet</p>'
-                 f'<h1>{ts.esc(org)}: org-wide dashboard</h1></div></div>')
-    parts.append(f'<p class="stamp">Rendered {ts.esc(stamp)} from the fleet store at '
-                 f'{ts.esc(fl._display_path(store_dir))}. Read-only: this page never writes to '
+                 f'<h1>{fmt.esc(org)}: org-wide dashboard</h1></div></div>')
+    parts.append(f'<p class="stamp">Rendered {fmt.esc(stamp)} from the fleet store at '
+                 f'{fmt.esc(fl._display_path(store_dir))}. Read-only: this page never writes to '
                  f'the store, never runs git, never sends anything anywhere.</p>')
-    window = (f'the {meta["window_days"]} days ending {ts.esc(meta["today"])}'
+    window = (f'the {meta["window_days"]} days ending {fmt.esc(meta["today"])}'
               if meta["cutoff"] else "all history (--days 0)")
     parts.append(f'<p class="n">Window: {window}. {meta["outside_window"]} record file(s) '
                  f'dated outside it were skipped on their filename and never opened. Minimum '
@@ -925,7 +927,7 @@ def render(store_dir, org, stamp, days=DEFAULT_DAYS, min_group=MIN_GROUP_MACHINE
                  f'count.</p>')
     if not rows and not empty_machines and not meta["last_seen"]:
         parts.append(f'<p class="nodata">NO DATA: no machines found for org '
-                     f'&quot;{ts.esc(org)}&quot; in this store.</p>')
+                     f'&quot;{fmt.esc(org)}&quot; in this store.</p>')
     parts.append(render_machines_table(rows, empty_machines, meta))
     parts.append(render_counters_by_day(by_day, min_group))
     parts.append(render_tag_totals("Tokens by team", by_team, min_group))

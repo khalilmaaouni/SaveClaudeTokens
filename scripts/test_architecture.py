@@ -48,8 +48,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #   6  fleet: many machines, built on the single-machine layers below.
 #   7  surfaces: one entry point per thing a person or a script can run.
 LAYERS = {
-    0: {"config", "measure_tokens", "context_lint", "session_end_telemetry", "check_py311"},
-    1: {"pricing", "experiment", "profile", "signals"},
+    0: {"config", "formatting", "measure_tokens", "context_lint",
+        "session_end_telemetry", "check_py311"},
+    1: {"metrics", "pricing", "experiment", "profile", "signals"},
     2: {"guided_apply", "optimize", "discover_companions"},
     3: {"companions", "plugin_prune", "memory_trim", "doctor"},
     4: {"advisor", "deep_advisor"},
@@ -195,6 +196,63 @@ def test_the_import_cycles_are_the_ones_the_frozen_list_explains():
         assert any(a in ring and b in ring for a, b in KNOWN_UPWARD), (
             f"cycle {cycle} runs through no frozen upward edge, so it is a new "
             f"tangle rather than the known one")
+
+
+def test_the_computing_layers_do_not_render():
+    """The layer rule polices DIRECTION. It cannot see the other half of the
+    mistake that made `token_shield` a god module, which is a metric and its
+    rendering living at the same address: nine modules had to import the
+    renderer to reach a number, and the direction of every one of those
+    imports was perfectly legal.
+
+    So layers 0 and 1 are held to a second rule: they may not emit markup.
+    A function that computes a quantity and a function that decides how it
+    looks are different jobs, and once they share a file the pressure is
+    always to add "just one more" render helper beside the number it
+    describes, which is exactly how the last one grew to 1,572 lines.
+
+    Checked on string literals only, so a docstring may still discuss HTML
+    (metrics.py's own explanation of what it is not allowed to do would
+    otherwise trip this)."""
+    layer_of = _layer_of()
+    computing = sorted(n for n, layer in layer_of.items() if layer <= 1)
+    markup = ("<div", "<span", "<td", "<tr", "<table", "<p ", "<h1", "<h2",
+              "</div>", "</span>", "style=", "class=", "<!doctype", "<html")
+    bad = []
+    for name in computing:
+        for path in _modules().get(name, []):
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+
+            # Docstrings are Constant string nodes too, so collect their line
+            # numbers first and skip them during the scan. Collected up front
+            # rather than filtered afterwards: an earlier draft of this test
+            # rebuilt the location by splitting its own message on ":", which
+            # also split the message text and crashed, so the test went red
+            # for a reason that had nothing to do with rendering.
+            doc_lines = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.FunctionDef,
+                                     ast.AsyncFunctionDef, ast.ClassDef)):
+                    if ast.get_docstring(node, clean=False) is not None and node.body:
+                        doc_lines.add(node.body[0].lineno)
+
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)):
+                    continue
+                if node.lineno in doc_lines:
+                    continue
+                hits = [m for m in markup if m in node.value.lower()]
+                if hits:
+                    bad.append(
+                        f"{os.path.basename(path)} line {node.lineno} "
+                        f"emits {hits[0]!r}")
+
+    assert not bad, (
+        "a computing layer is rendering: " + "; ".join(bad) +
+        ". Markup belongs at layer 5. A metric and its presentation sharing a "
+        "file is how the renderer became a god module.")
 
 
 def test_every_silent_handler_states_why_it_is_silent():

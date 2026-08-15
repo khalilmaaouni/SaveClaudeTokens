@@ -62,6 +62,7 @@ import sys
 import measure_tokens as mt
 import config as cfg
 import token_shield as ts
+import metrics as met
 import pricing as pr
 import experiment as ex
 
@@ -99,7 +100,7 @@ def _verified_by_label():
     # VERIFIED one, so this kept reporting a proven saving for a claim the
     # newest run could not reproduce.
     out = []
-    for label, r in ts.latest_row_per_label(rows).items():
+    for label, r in met.latest_row_per_label(rows).items():
         if r.get("confidence") != "VERIFIED":
             continue
         fr = r.get("floor_reduction_tokens")
@@ -132,9 +133,9 @@ def summary(days=30):
     if not sm:
         print("NO DATA: no transcripts carried usage counters yet.")
         return 0
-    sv = ts.savings_breakdown(sm)
+    sv = met.savings_breakdown(sm)
     native = sv["saved"]
-    rx = ts.prescriptions(sm, sessions)
+    rx = met.prescriptions(sm, sessions)
     # The largest lever, never the sum. The levers overlap (they all cut the
     # same startup floor), so summing them double counts, and trial.py already
     # takes the max: a stranger who runs the trial and then this command has to

@@ -32,6 +32,8 @@ import sys
 import experiment as ex
 import token_shield as ts
 
+import metrics as met
+import formatting as fmt
 QUALIFYING_CONFIDENCE = {"VERIFIED", "MEASURED"}
 
 
@@ -72,7 +74,7 @@ def select_card_row(rows, label=None):
     # reproduce. This card is the artifact designed to leave the machine, so
     # that was the worst place in the codebase for this defect to live.
     latest = {}
-    for lbl, r in ts.latest_row_per_label(rows).items():
+    for lbl, r in met.latest_row_per_label(rows).items():
         if r.get("confidence") not in QUALIFYING_CONFIDENCE:
             continue
         fr = r.get("floor_reduction_tokens")
@@ -113,12 +115,12 @@ def render_text_card(row):
 
 
 def render_html_card(row):
-    lbl = ts.esc(row.get("label") or "(unlabeled)")
+    lbl = fmt.esc(row.get("label") or "(unlabeled)")
     conf = row["confidence"]
     fr = row["floor_reduction_tokens"]
     color = "var(--good)" if fr >= 0 else "var(--warn)"
     tail = "fewer" if fr >= 0 else "MORE (regression)"
-    date = ts.esc(str(row.get("timestamp") or "n/a")[:10])
+    date = fmt.esc(str(row.get("timestamp") or "n/a")[:10])
     return (
         f'<!doctype html><html><head><meta charset="utf-8">'
         f'<title>Token Shield share card</title><style>{ts.CSS}'

@@ -47,33 +47,43 @@ Lower number is lower in the stack. The authoritative copy is `LAYERS` in
 
 | L | Name | Modules | What belongs here |
 |---|---|---|---|
-| 0 | foundation | `config`, `measure_tokens`, `context_lint`, `session_end_telemetry`, `check_py311` | Reads raw counters, paths and files on disk. Imports nothing else in this repo, which is what makes it the floor. |
-| 1 | metrics | `pricing`, `experiment`, `profile`, `signals` | Turns counters into the quantities the product talks about. No rendering, no advice. |
+| 0 | foundation | `config`, `formatting`, `measure_tokens`, `context_lint`, `session_end_telemetry`, `check_py311` | Reads raw counters, paths and files on disk, and turns a value into characters. Imports nothing else in this repo, which is what makes it the floor. |
+| 1 | metrics | `metrics`, `pricing`, `experiment`, `profile`, `signals` | Turns counters into the quantities the product talks about. No rendering, no advice, and the no-rendering half is now enforced rather than asked for. |
 | 2 | proposal | `guided_apply`, `optimize`, `discover_companions` | Reads metrics and proposes a change. Never renders one. |
 | 3 | advice and ecosystem | `companions`, `plugin_prune`, `memory_trim`, `doctor` | Ranks proposals and inspects the installed world. |
 | 4 | advisors | `advisor`, `deep_advisor` | The ranked next-move surface renderers consume. |
-| 5 | presentation | `token_shield` | Labels, formatting, confidence pills, the CSS, the HTML. |
+| 5 | presentation | `token_shield` | Confidence pills, the CSS, the HTML. Formatting primitives moved down to layer 0; the quantities moved down to layer 1. |
 | 6 | fleet | `fleet` | Many machines, built on the single-machine layers below. |
 | 7 | surfaces | `cli`, `trial`, `report`, `detail_report`, `share_card`, `fleet_dashboard`, `reconcile`, `obsidian_export` | One entry point per thing a person or a script can run. |
 
 A module with no layer fails the check. That is deliberate: the cheapest
 moment to decide where something belongs is the moment it is created.
 
-### What layer 5 is still doing wrong
+### Layer 5 after the split
 
-`token_shield` was the presentation layer that also held `savings_breakdown`
-(a metric), `COMPANIONS_PATH` and `load_companions` (foundation-level file
-access), and the CSS. The file access has moved to `config`, which is what
-emptied the frozen list: four modules had been importing the renderer purely
-to read `data/companions.json`, and none of them imports it at all now.
+`token_shield` was 1,572 lines and was simultaneously the presentation layer,
+a metrics module and a file loader, which is why nine modules had to import
+the renderer to reach a number. It is now 941 lines and renders.
 
-What remains is the metric half. `savings_breakdown` and its neighbours
-compute quantities that belong at layer 1, and they sit in the module that
-renders them, which is why six surfaces still import the renderer to get at
-a number. That split is the next structural change, and unlike the
-extraction it has no mechanical done-check yet: nothing currently fails if a
-metric is added to the renderer, because the layer rule cares about
-direction and both halves live at the same address.
+Two modules came out of it:
+
+- **`formatting` (layer 0)**: `esc`, `human`, `pct`. These moved to the FLOOR
+  rather than staying in presentation because both halves needed them:
+  `prescriptions` builds the human-readable sentence naming its own saving,
+  so it called `human`. That single crossing was the one thing standing
+  between this codebase and a provable split.
+- **`metrics` (layer 1)**: 607 lines of what the project computes, with
+  nothing that renders.
+
+`report` and `detail_report` no longer import the renderer at all. They only
+ever wanted numbers.
+
+**The second rule this made enforceable.** The layer rule polices DIRECTION,
+and direction alone could never have caught the original problem: a metric and
+its rendering living at the same address is perfectly legal in a dependency
+graph. So layers 0 and 1 are now also held to "may not emit markup", checked
+on string literals with docstrings excluded, so `metrics.py` can explain in
+prose what it is not allowed to do.
 
 ## The frozen list is empty
 

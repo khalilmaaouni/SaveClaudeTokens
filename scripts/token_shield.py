@@ -37,157 +37,10 @@ import os
 import sys
 
 import config as cfg
-
-CACHE_READ = 0.1  # a cached token bills at 0.1x, so the saving is (1 - 0.1)
+import formatting as fmt
+import metrics as met
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-# Default experiment labels the marginal attribution waterfall chains: the
-# user runs `experiment start "core"` / `end "core"` around a Token Shield
-# native change, then the same around a companion plugin change labeled
-# "companion" (docs/ROADMAP.md: "baseline A, plus Core to B, plus companion
-# to C"). Overridable via --waterfall-core/--waterfall-companion for anyone
-# who picked their own label names.
-WATERFALL_CORE_LABEL = "core"
-WATERFALL_COMPANION_LABEL = "companion"
-
-
-def load_measure():
-    here = os.path.dirname(os.path.abspath(__file__))
-    spec = importlib.util.spec_from_file_location(
-        "measure_tokens", os.path.join(here, "measure_tokens.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def load_experiment():
-    """experiment.py, loaded by explicit path like load_measure() loads
-    measure_tokens.py, so it works regardless of the caller's cwd. Used only
-    for its compute_fingerprint()/EXP_SCHEMA, to check whether a VERIFIED
-    record's evidence still matches the environment right now (see
-    _historical_check). A load failure is the caller's to catch; this
-    function never swallows one, so it never hides a real bug behind a
-    silent NO DATA."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    spec = importlib.util.spec_from_file_location(
-        "experiment", os.path.join(here, "experiment.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def esc(s):
-    """HTML-escape anything that came from outside this file before it enters
-    the page. Experiment labels are typed by the user, profile bases carry
-    file paths, and the companion registry is an editable JSON file, so all
-    three are attacker-shaped text as far as the renderer is concerned. None
-    renders as an empty string rather than the word None."""
-    return html.escape("" if s is None else str(s))
-
-
-def human(n):
-    """Compact a token count: 1_532_000 -> 1.5M."""
-    if n is None:
-        return "NO DATA"
-    n = float(n)
-    for unit, div in (("B", 1e9), ("M", 1e6), ("K", 1e3)):
-        if abs(n) >= div:
-            return f"{n / div:.1f}{unit}"
-    return f"{int(n):,}"
-
-
-def pct(x):
-    return "NO DATA" if x is None else f"{x * 100:.0f}%"
-
-
-def lever(sm, mt):
-    """Map the shared classification key to shield-flavored wording."""
-    key = mt.dominant_lever(sm)
-    share = sm.get("first_request_share_median")
-    hit = sm.get("hit_ratio_median")
-    sub = sm.get("subagent_output_share")
-    if key == "nodata":
-        return ("Not enough measured sessions yet",
-                "Run a few more sessions, then re-render. The shield reports what it "
-                "can measure and nothing more.")
-    if key == "shrink":
-        return ("Shrink the always-loaded context",
-                f"The startup floor is {share * 100:.0f}% of everything a session reads, "
-                f"paid again on every call. Pruning what loads at session start beats "
-                f"every other lever.")
-    if key == "cache":
-        return ("Keep the cache hot",
-                f"A {hit:.2f} median hit ratio means the prefix is being rebuilt. Look "
-                f"for model or effort switches, a changed toolset, or idle gaps past the "
-                f"cache TTL.")
-    if key == "route":
-        return ("Route work deliberately",
-                f"Subagents produced {sub * 100:.0f}% of output. Worth it when they keep "
-                f"exploration out of the parent context, waste when a script would have "
-                f"done the job.")
-    return ("Healthy",
-            "Every measured signal is inside its healthy range. Spend effort on the work, "
-            "not the meter.")
-
-
-def pain_points(sessions):
-    """Measured waste patterns, worst first. Every count is from the transcripts.
-
-    Two confidence levels, kept distinct on purpose:
-    - PROVEN: a model switch mid-session rebuilds the cache from zero, because
-      each model has its own cache (documented). models > 1 is a fact.
-    - SIGNAL: a high rewrite ratio suggests the prefix kept rebuilding, but
-      ordinary growth writes cache too, so it points rather than proves.
-    """
-    parent = [s for s in sessions if s["first_request"] > 0]
-    n = len(parent) or 1
-    switched = [s for s in parent if s["models"] > 1]
-    rebuilt = [s for s in parent
-               if s["rewrite_ratio"] and s["rewrite_ratio"] > 0.15 and s["calls"] >= 10]
-    return {
-        "n": len(parent),
-        "switch_n": len(switched),
-        "switch_share": len(switched) / n,
-        "rebuild_n": len(rebuilt),
-        "rebuild_share": len(rebuilt) / n,
-    }
-
-
-def savings_breakdown(sm):
-    """Where the caching saving comes from, in base-input units.
-
-    Honest accounting: caching earns 0.9x on every read token, and pays a
-    premium on every write token (0.25x extra at the 5 minute TTL, 1.0x extra
-    at the 1 hour TTL). The NET saving subtracts that premium, so the headline
-    is not the gross read saving dressed up as the net benefit.
-
-    Writes whose TTL the transcript never split are charged at the MOST
-    expensive rate (1.0x), not skipped. Skipping them made this headline
-    largest exactly where the evidence was weakest. NATIVE is attributed to
-    Anthropic rather than claimed by this tool, so it has to be a lower bound:
-    understating their benefit is a caveat, overstating it is the dishonesty
-    this whole product exists against. The unsplit volume is returned beside
-    the number so a surface can disclose it instead of printing a quietly
-    weaker figure that looks identical to a fully priced one.
-    """
-    read = sm["read_total"] or 0
-    paid = CACHE_READ * read          # what reads actually cost, at 0.1x
-    unblocked = 1.0 * read            # what they would cost uncached
-    gross = unblocked - paid          # the 0.9x earned on reads
-    w5, w1 = sm["write_5m_total"] or 0, sm["write_1h_total"] or 0
-    # .get: an older schema's summary, and the partial dicts callers build,
-    # carry no unsplit key at all. A missing key is zero, never a crash.
-    wu = sm.get("write_unsplit_total") or 0
-    write_premium = 0.25 * w5 + 1.0 * w1 + 1.0 * wu   # extra over uncached
-    return {
-        "read": read, "paid": paid, "unblocked": unblocked,
-        "gross": gross, "write_premium": write_premium,
-        "saved": gross - write_premium,     # NET
-        "write_cost": 1.25 * w5 + 2.0 * w1 + 2.0 * wu,
-        "write_unsplit": wu,
-        "raw_input": sm["input_total"] or 0,
-    }
 
 
 def native_note(sv):
@@ -201,399 +54,26 @@ def native_note(sv):
     wu = sv.get("write_unsplit") or 0
     if not wu:
         return ""
-    return (f" (includes {human(wu)} of cache writes with no TTL split, "
+    return (f" (includes {fmt.human(wu)} of cache writes with no TTL split, "
             f"charged at the most expensive rate, so this is a lower bound)")
 
 
-def prescriptions(sm, sessions):
-    """One prescription per detected pain point, with the token-saving math
-    computed from THIS user's own sessions. Adaptive: a user whose data shows
-    no model switching gets no model-switch card. Every number is theirs.
-    """
-    parent = [s for s in sessions if s["first_request"] > 0]
-    n = len(parent) or 1
-    fr = sm["first_request_median"] or 0
-    share = sm["first_request_share_median"]
-    total_calls = sum(s["calls"] for s in parent)
-    out = []
-
-    switched = [s for s in parent if s["models"] > 1]
-    if switched:
-        saving = len(switched) * 0.9 * fr   # lower bound: floor re-read at full
-        out.append({
-            "tag": "PROVEN",
-            "title": "Switching model mid-session",
-            "longterm": "Make subagent routing the default: fix the parent model and "
-                        "effort at session start as policy, and send any cheaper sub-task "
-                        "to a subagent, so the main loop's cache is never rebuilt.",
-            "measure": f"{len(switched)} of {n} of your sessions "
-                       f"({len(switched) / n:.0%}) ran more than one model",
-            "painkiller": "Pick your model and effort once, at the top of a session, "
-                          "and leave them for the rest of it.",
-            "medicine": "When a sub-task wants a cheaper model, spawn a subagent on it "
-                        "instead of switching the main loop. Effort is in the cache key "
-                        "too, so /effort rebuilds the prefix exactly like /model.",
-            "math": f"Each switch re-reads the conversation at full 1x instead of cached "
-                    f"0.1x. Lower bound, counting only the startup floor: "
-                    f"{len(switched)} switches x 0.9 x {human(fr)} floor = "
-                    f"{human(saving)} base-input units saved this window. The real figure "
-                    f"is larger, because a switch re-reads the whole context at that "
-                    f"point, not just the floor.",
-            "saving": saving,
-        })
-
-    if share is not None and share >= 0.30:
-        cut = 0.20
-        # The floor is re-read at 0.1x on every call after the first. Cutting it
-        # by 20% saves, per session, 0.2 x floor x 0.1 x calls. Summed over the
-        # user's own sessions. The one-time write saving is minor, left out to
-        # keep the estimate conservative.
-        saving = fr * cut * CACHE_READ * total_calls
-        out.append({
-            "tag": "PROVEN",
-            "title": "The always-loaded startup floor",
-            "longterm": "Shrink the always-loaded core for good: keep CLAUDE.md to hard "
-                        "rules only, move rarely-relevant rules into path-scoped "
-                        ".claude/rules/ that load only when a matching file is read, and "
-                        "disable plugins and MCP servers you do not use. A small core is "
-                        "paid once; a bloated one is paid on every call forever.",
-            "measure": f"your median session pays {human(fr)} before any work, "
-                       f"{share:.0%} of everything it reads, on every one of "
-                       f"{total_calls:,} calls this window",
-            "painkiller": "Run context_lint.py to see exactly where the rent is, then "
-                          "diet CLAUDE.md under 200 lines.",
-            "medicine": "Prune plugins and MCP servers you do not use, quiet "
-                        "session-start hooks, and move rarely-relevant rules into "
-                        "path-scoped .claude/rules/ so they load only when they apply.",
-            "math": f"The floor is re-read at 0.1x on every call. Cutting it 20 percent "
-                    f"saves 0.2 x {human(fr)} x 0.1 across your {total_calls:,} calls = "
-                    f"{human(saving)} base-input units this window. Cut it in half and "
-                    f"the saving scales with it.",
-            "saving": saving,
-        })
-
-    rebuilt = [s for s in parent
-               if s["rewrite_ratio"] and s["rewrite_ratio"] > 0.15 and s["calls"] >= 10]
-    if rebuilt:
-        # Excess writes over a light-rewrite baseline of 0.05, at the write rate.
-        excess = sum(max(0.0, (s["rewrite_ratio"] - 0.05)) * s["read"] * 1.25
-                     for s in rebuilt)
-        out.append({
-            "tag": "SIGNAL",
-            "title": "Prefix rebuilt mid-session",
-            "longterm": "Adopt a fixed config window: do settings, hook and MCP edits "
-                        "between sessions, and background every long wait with a completion "
-                        "callback so a session never goes cold past the cache TTL.",
-            "measure": f"{len(rebuilt)} of {n} of your sessions "
-                       f"({len(rebuilt) / n:.0%}) wrote cache heavily relative to reads",
-            "painkiller": "Do config edits between sessions, not during one. Editing "
-                          "settings, hooks or MCP config mid-run changes the prefix.",
-            "medicine": "Avoid idle gaps past the cache TTL (5 minutes on an API key, "
-                        "1 hour on a subscription); background long waits so the session "
-                        "re-wakes rather than going cold.",
-            "math": f"A signal, not a proof: excess writes above a light-rewrite baseline "
-                    f"of 0.05, priced at the 1.25x write rate, come to about "
-                    f"{human(excess)} base-input units across these sessions. Treat it as "
-                    f"a place to look, since ordinary growth also writes cache.",
-            "saving": excess,
-        })
-    return out
-
-
-# --- v1.7 advisor surfaces --------------------------------------------------
-# Every function below degrades to a NO DATA render when its source (profile,
-# ledger, companions.json) is absent; none of them ever invent a number.
-
-def load_profile(path):
-    """profile.json, or None if missing/corrupt. Never raises."""
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None  # sbe: allow-silent an unreadable JSON source becomes NO DATA in the section that needed it; the rest of the dashboard still renders
-
-
-def load_experiment_rows(path):
-    """One row per experiment ledger record, tolerant of corrupt lines. Rows
-    are never aggregated here: a floor reduction measured for one experiment
-    is not the same quantity as one measured for another, so the renderer
-    keeps them per-label all the way down.
-    """
-    if not os.path.exists(path):
-        return []
-    rows = []
-    with open(path, errors="ignore") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue  # sbe: allow-silent a corrupt ledger line is skipped so one bad line cannot empty the dashboard's experiment table
-    return rows
-
-
-def _historical_check(record, exp_mod):
-    """(is_historical, reason) for one VERIFIED ledger record, checked
-    against the environment right now, not the ledger: the record itself is
-    never rewritten, this only decides how a render labels it.
-
-    Absence of evidence is not evidence of drift: a record with no
-    fingerprint_end (a hand-built fixture, or one predating the v2
-    fingerprint guard) always comes back (False, None), never a guessed
-    HISTORICAL. Same when exp_mod is None (experiment.py could not be
-    loaded): there is nothing to compare against, so the check is skipped
-    rather than assumed either way.
-
-    fingerprint_end is recomputed with the SAME --treats exclusion the
-    record itself used (record["treats"]), so the one file the experiment
-    edited stays excluded on both sides of the comparison, exactly as it was
-    when the record was verified. compute_fingerprint() is a sha256 over a
-    handful of local files plus a plugin-dir listing, no network, so this is
-    cheap to run on every render.
-
-    Also checked: the ledger schema the record was written under
-    (record["schema"]) against experiment.EXP_SCHEMA, the schema this
-    install writes today. That is the "token-shield version context" half
-    of drift; there is no separate Claude Code version field on a record to
-    check, so this is the only version-shaped signal grounded in real code.
-    """
-    fp_end = record.get("fingerprint_end")
-    if fp_end is None or exp_mod is None:
-        return False, None
-    try:
-        current_fp = exp_mod.compute_fingerprint(record.get("treats"))
-    except OSError:
-        return False, None
-    if current_fp != fp_end:
-        return True, ("the config fingerprint has moved since this record was "
-                      "verified (CLAUDE.md, settings.json, ~/.claude.json, a "
-                      "skill, or an installed plugin changed)")
-    schema = record.get("schema")
-    current_schema = getattr(exp_mod, "EXP_SCHEMA", None)
-    if schema is not None and current_schema is not None and schema != current_schema:
-        return True, (f"the token-shield ledger schema moved from {schema} to "
-                      f"{current_schema} since this record was verified")
-    return False, None
-
-
-def latest_row_per_label(rows):
-    """The newest ledger row per label, across EVERY confidence.
-
-    One function because this rule had three copies (here, share_card.py and
-    cli.py), and all three made the same mistake: they filtered to VERIFIED
-    BEFORE picking the latest row, so a re-run that FAILED to prove a claim
-    did not supersede the older VERIFIED one. The share card is the artifact
-    designed to leave this machine, so that published "proven" for a claim
-    the newest run could not reproduce, which inverts the one thing this
-    project sells. Filtering by confidence is the CALLER's job and happens
-    after this returns, never before.
-
-    Ties on timestamp keep the LAST row in file order, matching the
-    append-only ledger's own meaning of "latest".
-    """
-    newest = {}
-    for i, r in enumerate(rows or []):
-        if not isinstance(r, dict):
-            continue
-        label = r.get("label") or "(unlabeled)"
-        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
-        if label in newest and (ts, i) < newest[label][0]:
-            continue
-        newest[label] = ((ts, i), r)
-    return {label: r for label, (_key, r) in newest.items()}
-
-
-def verified_by_label(rows, exp_mod=None):
-    """One VERIFIED row per experiment label, newest record wins.
-
-    The contract, shared with the CLI summary and with
-    experiment.aggregate_by_label:
-      - never sum across labels. A floor reduction measured for one label is
-        a different quantity from one measured for another, so a total of the
-        two is a number about nothing;
-      - repeated runs of the SAME label do not add up either. The latest
-        record is the current state of that label, so it replaces the earlier
-        one instead of being counted twice;
-      - a regression stays negative. Clipping it to zero would let a change
-        that made the floor worse read as neutral.
-
-    Ledger order is the tiebreak (the file is append-only), and a parsable
-    timestamp beats file order when both records carry one.
-
-    Each row also carries "historical" and "historical_reason" (see
-    _historical_check): True plus a one-line reason when the record's own
-    config fingerprint or ledger schema no longer matches the environment
-    right now, so a render can say HISTORICAL instead of a bare VERIFIED.
-    exp_mod is the loaded experiment module (load_experiment()); pass None
-    to skip the check entirely, which callers do when they have no real
-    environment to check against (tests pass a fixture double instead, so
-    the check never depends on this machine's actual ~/.claude files).
-    """
-    by_label = {}
-    for label, r in latest_row_per_label(rows).items():
-        if r.get("confidence") != "VERIFIED":
-            continue
-        delta = r.get("floor_reduction_tokens")
-        if isinstance(delta, bool) or not isinstance(delta, (int, float)):
-            continue
-        historical, reason = _historical_check(r, exp_mod)
-        by_label[label] = {"label": label, "floor_reduction": delta,
-                           "timestamp": r.get("timestamp"),
-                           "direction": r.get("direction"),
-                           "historical": historical,
-                           "historical_reason": reason}
-    return [by_label[k] for k in sorted(by_label)]
-
-
-def _latest_record(rows, label):
-    """The newest ledger record for one label, any confidence (unlike
-    verified_by_label, which keeps VERIFIED rows only). The waterfall needs
-    to say WHY a step failed, not just that it did, so a NOT_PROVEN record
-    is kept here and its reasons are what gets rendered.
-
-    Tie-break mirrors verified_by_label: a parsable timestamp beats ledger
-    order, ledger order (append-only) is the fallback.
-    """
-    best, best_key = None, None
-    for i, r in enumerate(rows or []):
-        if (r.get("label") or "(unlabeled)") != label:
-            continue
-        ts = r.get("timestamp") if isinstance(r.get("timestamp"), str) else ""
-        key = (ts, i)
-        if best_key is None or key > best_key:
-            best, best_key = r, key
-    return best
-
-
-def build_waterfall(rows, core_label=WATERFALL_CORE_LABEL,
-                    companion_label=WATERFALL_COMPANION_LABEL):
-    """The marginal attribution waterfall from docs/ROADMAP.md: baseline A,
-    plus Core's own before/after experiment to B, plus the companion's own
-    before/after experiment to C.
-
-    Each experiment.py record is already ONE treatment's before/after (one
-    label, one fingerprint-pinned comparison; docs/superpowers/specs/
-    2026-08-13-solid-core-design.md: "single-treatment attribution is
-    core"). This function only COMPOSES the two existing records; it never
-    re-derives a confidence verdict and never computes a second fingerprint.
-    A companion version change already ends the experiment that spans it
-    inside experiment.build_record's own fingerprint_start/fingerprint_end
-    guard (that record downgrades to NOT_PROVEN there); this function reads
-    that verdict and the two fingerprint fields already written to the
-    record, and refuses to chain across a break rather than invent its own
-    version check.
-
-    HARD RULES this function exists to hold:
-      - core_delta_pct is a percentage of A, companion_delta_pct is a
-        percentage of B: different baselines, so they are NEVER added.
-        total_delta_pct is computed straight from (A - C) / A.
-      - total_delta is computed straight from A and C too, not from
-        core_delta + companion_delta: B is measured twice (once as core's
-        own after-cohort, once as companion's own before-cohort), and those
-        two measurements are not guaranteed to agree exactly even when the
-        chain is otherwise clean, so summing the marginal deltas would
-        silently paper over that gap.
-      - when the two experiments cannot be chained cleanly (a fingerprint
-        break between them, or overlapping cohort windows), separable is
-        False and no total is computed at all: the interaction is declared
-        NOT SEPARABLE rather than credited to one side by a guess.
-    """
-    core = _latest_record(rows, core_label)
-    companion = _latest_record(rows, companion_label)
-
-    def step(rec, label):
-        if rec is None:
-            return {"label": label, "status": "NO DATA",
-                    "note": f"no experiment record labeled \"{label}\" in the ledger"}
-        if rec.get("confidence") != "VERIFIED":
-            reasons = rec.get("reasons") or ["not verified"]
-            return {"label": label, "status": "NOT_PROVEN",
-                    "note": "; ".join(str(x) for x in reasons)}
-        return {"label": label, "status": "VERIFIED", "record": rec}
-
-    core_step, companion_step = step(core, core_label), step(companion, companion_label)
-    result = {"core": core_step, "companion": companion_step, "separable": False,
-             "interaction_note": None, "baseline_a": None, "point_b": None,
-             "point_c": None, "core_delta": None, "core_delta_pct": None,
-             "companion_delta": None, "companion_delta_pct": None,
-             "total_delta": None, "total_delta_pct": None}
-
-    if core_step["status"] != "VERIFIED" or companion_step["status"] != "VERIFIED":
-        missing = [s["label"] for s in (core_step, companion_step) if s["status"] != "VERIFIED"]
-        result["interaction_note"] = (
-            f"NOT SEPARABLE: {' and '.join(missing)} has no VERIFIED experiment to "
-            f"chain from")
-        return result
-
-    a, b, c = (core["first_request_before"], core["first_request_after"],
-              companion["first_request_after"])
-    result["baseline_a"], result["point_b"], result["point_c"] = a, b, c
-    result["core_delta"] = core["floor_reduction_tokens"]
-    result["companion_delta"] = companion["floor_reduction_tokens"]
-
-    # Separable only when nothing moved between the two experiments: the
-    # fingerprint core ended on must be the exact fingerprint companion
-    # started from (read, never re-derived), and companion's before-cohort
-    # window must not overlap core's after-cohort window in time, or the
-    # same session would be double-counted on both sides of the chain.
-    fp_end, fp_start = core.get("fingerprint_end"), companion.get("fingerprint_start")
-    fp_continuous = fp_end is not None and fp_end == fp_start
-    ca, cb = core.get("cohort_after") or {}, companion.get("cohort_before") or {}
-    windows_clean = (ca.get("end") is not None and cb.get("start") is not None
-                     and cb["start"] >= ca["end"])
-
-    if not (fp_continuous and windows_clean):
-        reasons = []
-        if not fp_continuous:
-            reasons.append(
-                "the config fingerprint moved between the core and companion "
-                "experiments (for example a companion version change), so B is not "
-                "the same state on both sides")
-        if not windows_clean:
-            reasons.append(
-                "the companion's before-cohort window overlaps the core's "
-                "after-cohort window in time")
-        result["interaction_note"] = "NOT SEPARABLE: " + "; ".join(reasons)
-        return result
-
-    result["separable"] = True
-    if a:
-        result["core_delta_pct"] = result["core_delta"] / a
-    # companion_delta_pct is a share of companion's OWN before-value (its own
-    # experiment record), not of core's after-value b: the two are separate
-    # measurements of nominally the same state B and are not guaranteed to
-    # agree, so mixing them here would make the percentage inconsistent with
-    # companion["floor_reduction_tokens"], the number the experiment ledger
-    # itself already reports for this label.
-    companion_before = companion["first_request_before"]
-    if companion_before:
-        result["companion_delta_pct"] = result["companion_delta"] / companion_before
-    result["total_delta"] = a - c
-    if a:
-        result["total_delta_pct"] = result["total_delta"] / a
-    return result
-
-
-def render_waterfall(wf, core_label=WATERFALL_CORE_LABEL,
-                     companion_label=WATERFALL_COMPANION_LABEL):
+def render_waterfall(wf, core_label=met.WATERFALL_CORE_LABEL,
+                     companion_label=met.WATERFALL_COMPANION_LABEL):
     parts = ['<h2>Marginal attribution waterfall</h2>']
     if wf is None:
-        wf = build_waterfall([], core_label, companion_label)
+        wf = met.build_waterfall([], core_label, companion_label)
     if wf["core"]["status"] == "NO DATA" and wf["companion"]["status"] == "NO DATA":
         parts.append(
-            f'<p class="nodata">NO DATA: no experiment named &quot;{esc(core_label)}&quot; or '
-            f'&quot;{esc(companion_label)}&quot; in the ledger yet. Run '
-            f'<code>experiment start "{esc(core_label)}"</code>, apply the core change, '
-            f'<code>experiment end "{esc(core_label)}"</code>, then the same around a '
-            f'companion change labeled "{esc(companion_label)}".</p>')
+            f'<p class="nodata">NO DATA: no experiment named &quot;{fmt.esc(core_label)}&quot; or '
+            f'&quot;{fmt.esc(companion_label)}&quot; in the ledger yet. Run '
+            f'<code>experiment start "{fmt.esc(core_label)}"</code>, apply the core change, '
+            f'<code>experiment end "{fmt.esc(core_label)}"</code>, then the same around a '
+            f'companion change labeled "{fmt.esc(companion_label)}".</p>')
         return "".join(parts)
 
     if not wf["separable"]:
-        parts.append(f'<p class="nodata">{esc(wf["interaction_note"])} No total is computed; '
+        parts.append(f'<p class="nodata">{fmt.esc(wf["interaction_note"])} No total is computed; '
                      f'the individual before/after figures below are shown as measured, never '
                      f'split by a guess.</p>')
         for step in (wf["core"], wf["companion"]):
@@ -601,147 +81,38 @@ def render_waterfall(wf, core_label=WATERFALL_CORE_LABEL,
                 rec = step["record"]
                 parts.append(
                     f'<p class="n"><span class="cpill ver">VERIFIED</span> '
-                    f'<b>{esc(step["label"])}</b>: {human(rec["first_request_before"])} to '
-                    f'{human(rec["first_request_after"])} ({rec["floor_reduction_tokens"]:+,}), '
+                    f'<b>{fmt.esc(step["label"])}</b>: {fmt.human(rec["first_request_before"])} to '
+                    f'{fmt.human(rec["first_request_after"])} ({rec["floor_reduction_tokens"]:+,}), '
                     f'source: experiment ledger.</p>')
             elif step["status"] == "NOT_PROVEN":
                 parts.append(
                     f'<p class="n"><span class="cpill est">NOT_PROVEN</span> '
-                    f'<b>{esc(step["label"])}</b>: {esc(step["note"])}</p>')
+                    f'<b>{fmt.esc(step["label"])}</b>: {fmt.esc(step["note"])}</p>')
             else:
                 parts.append(
-                    f'<p class="n"><b>{esc(step["label"])}</b>: {esc(step["note"])}</p>')
+                    f'<p class="n"><b>{fmt.esc(step["label"])}</b>: {fmt.esc(step["note"])}</p>')
         return "".join(parts)
 
     a, b, c = wf["baseline_a"], wf["point_b"], wf["point_c"]
     parts.append(
         '<div class="compare">'
-        f'<div class="col"><p class="lbl">Baseline A</p><div class="amt">{human(a)}</div></div>'
+        f'<div class="col"><p class="lbl">Baseline A</p><div class="amt">{fmt.human(a)}</div></div>'
         f'<div class="col"><p class="lbl">+ Core to B</p>'
-        f'<div class="amt">{human(b)}</div><p class="n">{wf["core_delta"]:+,} '
-        f'({pct(wf["core_delta_pct"])} of A)</p></div>'
+        f'<div class="amt">{fmt.human(b)}</div><p class="n">{wf["core_delta"]:+,} '
+        f'({fmt.pct(wf["core_delta_pct"])} of A)</p></div>'
         f'<div class="col"><p class="lbl">+ Companion to C</p>'
-        f'<div class="amt">{human(c)}</div><p class="n">{wf["companion_delta"]:+,} '
-        f'({pct(wf["companion_delta_pct"])} of B, not of A)</p></div>'
+        f'<div class="amt">{fmt.human(c)}</div><p class="n">{wf["companion_delta"]:+,} '
+        f'({fmt.pct(wf["companion_delta_pct"])} of B, not of A)</p></div>'
         '</div>')
     parts.append(
         f'<p class="n"><span class="cpill ver">VERIFIED</span> total A to C: '
-        f'{wf["total_delta"]:+,} ({pct(wf["total_delta_pct"])} of A), computed straight from '
+        f'{wf["total_delta"]:+,} ({fmt.pct(wf["total_delta_pct"])} of A), computed straight from '
         f'A and C, never from summing the two marginal deltas above. '
-        f'{pct(wf["core_delta_pct"])} is a share of A; {pct(wf["companion_delta_pct"])} is a '
+        f'{fmt.pct(wf["core_delta_pct"])} is a share of A; {fmt.pct(wf["companion_delta_pct"])} is a '
         f'share of B, a different baseline; the two percentages are never added together. '
-        f'Source: experiment ledger, labels "{esc(core_label)}" and '
-        f'"{esc(companion_label)}".</p>')
+        f'Source: experiment ledger, labels "{fmt.esc(core_label)}" and '
+        f'"{fmt.esc(companion_label)}".</p>')
     return "".join(parts)
-
-
-def _leaf(profile, section, key):
-    """Read profile[section][key]["value"], honoring the NO DATA label.
-    Returns None on any missing path or a NO DATA leaf, never raises."""
-    node = ((profile or {}).get(section) or {}).get(key) or {}
-    if not isinstance(node, dict) or node.get("label") == "NO DATA" or node.get("value") is None:
-        return None
-    return node["value"]
-
-
-def suppressed_recommendation_count(adv_mod, profile, treatments, strategies):
-    """advise() filters suppressed/rejected treatments before ranking and does
-    not expose what it filtered. Computed here by diffing the queue and
-    companion ids with treatments applied against the same call without them.
-    The queue caps at 3, so this can undercount when more than 3 cards would
-    otherwise fire, but it never invents a figure.
-    """
-    return sum(suppressed_recommendation_counts(adv_mod, profile, treatments, strategies))
-
-
-def suppressed_recommendation_counts(adv_mod, profile, treatments, strategies):
-    """Same diff as suppressed_recommendation_count, split into what the
-    user chose (a rejected/suppressed record with no "reason") and what
-    sync_companion_suppressions wrote (reason "companion"), so a machine
-    suppression is never rendered as "your earlier choices": that used to
-    happen after a companion-only sync, attributing a decision to the user
-    that the user never made.
-
-    Returns (user_n, companion_n).
-    """
-    if not treatments:
-        return 0, 0
-    with_t = adv_mod.advise(profile, treatments, strategies)
-    without_t = adv_mod.advise(profile, None, strategies)
-
-    def ids(res):
-        s = {c["id"] for c in res["queue"]}
-        if res["companion"]:
-            s.add(res["companion"]["id"])
-        return s
-
-    hidden = ids(without_t) - ids(with_t)
-    companion_n = sum(1 for sid in hidden if (treatments.get(sid) or {}).get("reason") == "companion")
-    return len(hidden) - companion_n, companion_n
-
-
-def _band_rank(value, low, med, high):
-    """0/1/2/3 band for a metric against three rising thresholds; -1 for an
-    unmeasured value, so it never wins a max() over a real 0."""
-    if value is None:
-        return -1
-    if value >= high:
-        return 3
-    if value >= med:
-        return 2
-    if value >= low:
-        return 1
-    return 0
-
-
-def dominant_pattern(profile):
-    """The single loudest signal in a profile: whichever of the startup floor
-    share, the model-switch share, or total output volume sits in the
-    highest band. Ties keep the fixed priority order below (floor first),
-    mirroring advisor.py's own cache > startup > output ranking. Returns
-    (label, metric_name), or (None, None) when nothing is measured or every
-    tracked band is at its lowest.
-    """
-    fv = _leaf(profile, "instruction", "startup_floor_share")
-    sv = _leaf(profile, "behavior", "model_switch_session_share")
-    ov = _leaf(profile, "usage", "output_tokens_total")
-    candidates = [
-        ("The always-loaded startup floor is heavy",
-         "instruction.startup_floor_share", _band_rank(fv, 0.10, 0.15, 0.30)),
-        ("Sessions keep switching model mid-session",
-         "behavior.model_switch_session_share", _band_rank(sv, 0.10, 0.20, 0.40)),
-        ("Output volume is high",
-         "usage.output_tokens_total", _band_rank(ov, 300_000, 1_000_000, 3_000_000)),
-    ]
-    candidates = [c for c in candidates if c[2] > 0]
-    if not candidates:
-        return None, None
-    best = max(candidates, key=lambda c: c[2])
-    return best[0], best[1]
-
-
-def _installed_companion(name, cache_root):
-    """True if <cache_root>/*/<name> is a directory, mirroring how profile.py
-    counts installed plugins two levels under the plugin cache root."""
-    try:
-        marketplaces = os.listdir(cache_root)
-    except OSError:
-        return False
-    return any(os.path.isdir(os.path.join(cache_root, m, name)) for m in marketplaces)
-
-
-def _companion_plausible(name, profile):
-    """Whether a non-installed companion's own "when" text maps onto a metric
-    profile.py actually measures. Only token-saver's when (a huge
-    shell-output profile) does; ponytail's (large diffs per accepted change)
-    and caveman's (corrective turns not rising) name signals profile.py does
-    not carry, so they are never claimed plausible here: they collapse
-    instead of turning into a guess.
-    """
-    if name != "token-saver":
-        return False
-    v = _leaf(profile, "usage", "output_tokens_total")
-    return v is not None and v >= 1_000_000
 
 
 def _render_how(how_steps):
@@ -755,9 +126,9 @@ def _render_how(how_steps):
         return ''
     items = []
     for step in how_steps:
-        text = esc(step.get("text", ""))
+        text = fmt.esc(step.get("text", ""))
         command = step.get("command")
-        cmd_html = f'<br><code>{esc(command)}</code>' if command else ''
+        cmd_html = f'<br><code>{fmt.esc(command)}</code>' if command else ''
         items.append(f'<li>{text}{cmd_html}</li>')
     return f'<div class="how"><b>How, exactly.</b><ol>{"".join(items)}</ol></div>'
 
@@ -768,7 +139,7 @@ def _render_chips(card_id):
     action. Choices mirror advisor.DECIDE_CHOICES exactly (done/not-now/
     never), never a vocabulary the treatment memory would not recognize.
     """
-    cid = esc(card_id)
+    cid = fmt.esc(card_id)
     return (
         '<div class="chips">'
         f'<div class="chip"><b>Did it</b>'
@@ -796,18 +167,18 @@ def render_next_best_move(advise_result):
     else:
         best = advise_result["best"]
         parts.append(
-            f'<div class="rec"><p class="k">{esc(best["evidence"])} recommendation</p>'
-            f'<h3>{esc(best["title"])}</h3>'
-            f'<p><b>Why:</b> {esc(best["why_selected"])}</p>'
-            f'<p><b>Expected benefit:</b> {esc(best["expected_benefit"])}</p>'
-            f'<p><b>Drawback:</b> {esc(best["drawback"])}</p>'
-            f'<p><b>Quality risk:</b> {esc(best["quality_risk"])}</p>'
-            f'<p><b>Reversibility:</b> {esc(best["reversibility"])}</p>'
-            f'<p><b>If you say no:</b> {esc(best["if_you_say_no"])}</p>'
+            f'<div class="rec"><p class="k">{fmt.esc(best["evidence"])} recommendation</p>'
+            f'<h3>{fmt.esc(best["title"])}</h3>'
+            f'<p><b>Why:</b> {fmt.esc(best["why_selected"])}</p>'
+            f'<p><b>Expected benefit:</b> {fmt.esc(best["expected_benefit"])}</p>'
+            f'<p><b>Drawback:</b> {fmt.esc(best["drawback"])}</p>'
+            f'<p><b>Quality risk:</b> {fmt.esc(best["quality_risk"])}</p>'
+            f'<p><b>Reversibility:</b> {fmt.esc(best["reversibility"])}</p>'
+            f'<p><b>If you say no:</b> {fmt.esc(best["if_you_say_no"])}</p>'
             # advisor._card already renders `source` as a citable pointer (a
             # docs/CLAIMS.md row, or a URL), so the page never shows a bare
             # internal code a reader cannot look up.
-            + (f'<p><b>Source:</b> {esc(best["source"])}</p>' if best.get("source") else '')
+            + (f'<p><b>Source:</b> {fmt.esc(best["source"])}</p>' if best.get("source") else '')
             + _render_how(best.get("how"))
             + '</div>')
         parts.append(_render_chips(best["id"]))
@@ -822,24 +193,24 @@ def render_observed_pattern(profile):
         parts.append('<p class="nodata">NO DATA: no profile.json found. Run '
                      '<code>python3 profile.py</code> first.</p>')
         return "".join(parts)
-    label, metric_name = dominant_pattern(profile)
+    label, metric_name = met.dominant_pattern(profile)
     if label is None:
         parts.append('<p class="n">No dominant pattern measured; every tracked band is low.</p>')
     else:
-        parts.append(f'<p class="n">{esc(label)} (from <code>{esc(metric_name)}</code>).</p>')
-    fr = _leaf(profile, "usage", "first_request_median_tokens")
-    hit = _leaf(profile, "usage", "cache_hit_ratio_median")
-    sw = _leaf(profile, "behavior", "model_switch_session_share")
+        parts.append(f'<p class="n">{fmt.esc(label)} (from <code>{fmt.esc(metric_name)}</code>).</p>')
+    fr = met._leaf(profile, "usage", "first_request_median_tokens")
+    hit = met._leaf(profile, "usage", "cache_hit_ratio_median")
+    sw = met._leaf(profile, "behavior", "model_switch_session_share")
     # Same pill helper, same shape as the top strip: a number never travels
     # without its label, and an absent leaf says NO DATA rather than wearing
     # MEASURED over a blank.
     parts.append('<div class="grid">'
                  + stat(f'First-request median {_cpill("MEASURED" if fr is not None else "NO DATA")}',
-                        human(fr), "tokens paid before any work", fr is None)
+                        fmt.human(fr), "tokens paid before any work", fr is None)
                  + stat(f'Cache hit ratio median {_cpill("MEASURED" if hit is not None else "NO DATA")}',
-                        pct(hit), "share of reads served from cache", hit is None)
+                        fmt.pct(hit), "share of reads served from cache", hit is None)
                  + stat(f'Model-switch share {_cpill("MEASURED" if sw is not None else "NO DATA")}',
-                        pct(sw), "sessions that ran more than one model", sw is None)
+                        fmt.pct(sw), "sessions that ran more than one model", sw is None)
                  + '</div>')
     return "".join(parts)
 
@@ -869,9 +240,9 @@ def render_recommendation_queue(advise_result, suppressed_n, companion_suppresse
         for i, c in enumerate(queue, 1):
             rows.append(
                 f'<div class="pain-item"><div class="rank">{i}</div>'
-                f'<div class="t">{esc(c["title"])}'
-                f'<span class="cpill est" style="margin:0 0 0 8px">{esc(c["evidence"])}</span></div>'
-                f'<div class="fix">{esc(c["drawback"])}</div>'
+                f'<div class="t">{fmt.esc(c["title"])}'
+                f'<span class="cpill est" style="margin:0 0 0 8px">{fmt.esc(c["evidence"])}</span></div>'
+                f'<div class="fix">{fmt.esc(c["drawback"])}</div>'
                 f'{_render_how(c.get("how"))}</div>')
         parts.append('<div class="pain">' + "".join(rows) + '</div>')
         # The copy-paste chips live on the Next best move card only, so this
@@ -902,29 +273,29 @@ def render_companions(companions_data, profile, cache_root):
     collapsed = []
     for c in companions_data.get("companions", []):
         name = c["name"]
-        if _installed_companion(name, cache_root):
+        if met._installed_companion(name, cache_root):
             rows.append(
                 f'<div class="pain-item"><div class="rank">&#10003;</div>'
-                f'<div class="t">{esc(name)}<span class="tag">installed</span></div>'
-                f'<div class="fix">Installed, measure it. {esc(c["benefit"])}</div></div>')
-        elif _companion_plausible(name, profile):
+                f'<div class="t">{fmt.esc(name)}<span class="tag">installed</span></div>'
+                f'<div class="fix">Installed, measure it. {fmt.esc(c["benefit"])}</div></div>')
+        elif met._companion_plausible(name, profile):
             rows.append(
                 f'<div class="pain-item"><div class="rank">?</div>'
-                f'<div class="t">{esc(name)}<span class="tag">consider</span></div>'
-                f'<div class="fix">When: {esc(c["when"])}<br>'
-                f'Drawback: {esc(c["drawback"])}</div></div>')
+                f'<div class="t">{fmt.esc(name)}<span class="tag">consider</span></div>'
+                f'<div class="fix">When: {fmt.esc(c["when"])}<br>'
+                f'Drawback: {fmt.esc(c["drawback"])}</div></div>')
         else:
             collapsed.append(name)
     parts.append('<div class="pain">' + "".join(rows) + '</div>' if rows
                  else '<p class="n">No companion is indicated by your profile right now.</p>')
     if collapsed:
         parts.append('<p class="n">Not indicated by your profile: '
-                     + ", ".join(esc(n) for n in collapsed) + '.</p>')
+                     + ", ".join(fmt.esc(n) for n in collapsed) + '.</p>')
     mentions = companions_data.get("mentions") or []
     if mentions:
         parts.append('<div class="legend">'
-                     + "".join(f'<span>{esc(m["name"])} ({esc(m["repo"])}), '
-                               f'{esc(m["status"])}</span>'
+                     + "".join(f'<span>{fmt.esc(m["name"])} ({fmt.esc(m["repo"])}), '
+                               f'{fmt.esc(m["status"])}</span>'
                               for m in mentions)
                      + '</div>')
     return "".join(parts)
@@ -950,27 +321,27 @@ def render_verified_hero(verified_rows):
                 'No verified saving yet. Apply one recommendation, then run an experiment '
                 'to measure the before and after.')
     items = "; ".join(
-        f'{esc(r["label"])} {r["floor_reduction"]:+,}' + (' [HISTORICAL]' if r.get("historical") else '')
+        f'{fmt.esc(r["label"])} {r["floor_reduction"]:+,}' + (' [HISTORICAL]' if r.get("historical") else '')
         for r in verified_rows)
     if len(verified_rows) == 1:
         r = verified_rows[0]
         if r.get("historical"):
             big = f'<span class="big muted">HISTORICAL</span>'
-            under = (f'{human(r["floor_reduction"])} fewer startup tokens per call was '
-                     f'verified on <b>{esc(r["label"])}</b>, but {esc(r["historical_reason"])}. '
+            under = (f'{fmt.human(r["floor_reduction"])} fewer startup tokens per call was '
+                     f'verified on <b>{fmt.esc(r["label"])}</b>, but {fmt.esc(r["historical_reason"])}. '
                      f'Re-run the experiment to confirm it still holds.')
             return big, under
         # A regression carries its own colour AND its own word. Colour alone
         # would leave a colour-blind reader unable to tell it from a saving
         # (WCAG 2.2 SC 1.4.1), and the figure is never clipped either way.
         if r["floor_reduction"] < 0:
-            big = f'<span class="big w">{human(r["floor_reduction"])} REGRESSION</span>'
-            under = (f'the startup floor GREW by {human(abs(r["floor_reduction"]))} tokens per '
-                     f'call on <b>{esc(r["label"])}</b>: this experiment measured a regression, '
+            big = f'<span class="big w">{fmt.human(r["floor_reduction"])} REGRESSION</span>'
+            under = (f'the startup floor GREW by {fmt.human(abs(r["floor_reduction"]))} tokens per '
+                     f'call on <b>{fmt.esc(r["label"])}</b>: this experiment measured a regression, '
                      f'not a saving. Shown as it measured, never clipped.')
             return big, under
-        big = f'<span class="big g">{human(r["floor_reduction"])}</span>'
-        under = (f'fewer startup tokens per call on <b>{esc(r["label"])}</b>, proven by a '
+        big = f'<span class="big g">{fmt.human(r["floor_reduction"])}</span>'
+        under = (f'fewer startup tokens per call on <b>{fmt.esc(r["label"])}</b>, proven by a '
                  f'before/after experiment. Regressions are shown as they measured, '
                  f'never clipped.')
         return big, under
@@ -997,8 +368,8 @@ def render_experiment_history(rows):
         delta = r.get("floor_reduction_tokens")
         delta_txt = f'{delta:+,}' if isinstance(delta, (int, float)) else "n/a"
         date = str(r.get("timestamp") or "n/a")[:10]
-        rowlist.append(f'<tr><td>{esc(label)}</td><td>{esc(conf)}</td>'
-                       f'<td>{delta_txt}</td><td>{esc(date)}</td></tr>')
+        rowlist.append(f'<tr><td>{fmt.esc(label)}</td><td>{fmt.esc(conf)}</td>'
+                       f'<td>{delta_txt}</td><td>{fmt.esc(date)}</td></tr>')
     parts.append('<div class="scroll"><table class="se"><thead><tr>'
                  '<th>Label</th><th>Verdict</th><th>Floor delta</th><th>Date</th>'
                  '</tr></thead><tbody>' + "".join(rowlist) + '</tbody></table></div>')
@@ -1016,7 +387,7 @@ def _cpill(label):
     else (MEASURED, NO DATA)."""
     cls = {"VERIFIED": "cpill ver", "ESTIMATED": "cpill est",
           "HISTORICAL": "cpill est", "NATIVE": "cpill nat"}.get(label, "cpill")
-    return f'<span class="{cls}">{esc(label)}</span>'
+    return f'<span class="{cls}">{fmt.esc(label)}</span>'
 
 
 def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_result):
@@ -1041,11 +412,11 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
         if r.get("historical"):
             v_label = "HISTORICAL"
             v_val = f'{r["floor_reduction"]:+,}'
-            v_note = f'on {esc(r["label"])}: {esc(r["historical_reason"])}'
+            v_note = f'on {fmt.esc(r["label"])}: {fmt.esc(r["historical_reason"])}'
         else:
             v_label = "VERIFIED"
             v_val = f'{r["floor_reduction"]:+,}'
-            v_note = f'startup-floor tokens on {esc(r["label"])}'
+            v_note = f'startup-floor tokens on {fmt.esc(r["label"])}'
     else:
         hist_n = sum(1 for r in verified if r.get("historical"))
         v_label = "HISTORICAL" if hist_n == len(verified) else "VERIFIED"
@@ -1053,7 +424,7 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
         v_note = "each label's own figure, never summed"
         if hist_n:
             v_note += f'; {hist_n} of {len(verified)} historical'
-    parts.append(stat(f'Verified improvement {_cpill(v_label)}', esc(v_val), esc(v_note),
+    parts.append(stat(f'Verified improvement {_cpill(v_label)}', fmt.esc(v_val), fmt.esc(v_note),
                       v_label == "NO DATA"))
 
     # 2. Current stack: installed companion plugins, the same cheap directory
@@ -1062,11 +433,11 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
     if not names:
         s_label, s_val, s_note = "NO DATA", "NO DATA", "data/companions.json not found or empty"
     else:
-        installed = sum(1 for c in names if _installed_companion(c["name"], cache_root))
+        installed = sum(1 for c in names if met._installed_companion(c["name"], cache_root))
         s_label = "MEASURED"
         s_val = f'{installed}/{len(names)}'
         s_note = "companion plugins installed on this machine"
-    parts.append(stat(f'Current stack {_cpill(s_label)}', esc(s_val), esc(s_note),
+    parts.append(stat(f'Current stack {_cpill(s_label)}', fmt.esc(s_val), fmt.esc(s_note),
                       s_label == "NO DATA"))
 
     # 3. Largest remaining problem: the dashboard's own top-ranked issue card.
@@ -1076,7 +447,7 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
     else:
         top = ranked_rx[0]
         p_label, p_val, p_note = "ESTIMATED", top["title"], top["measure"]
-    parts.append(stat(f'Largest remaining problem {_cpill(p_label)}', esc(p_val), esc(p_note),
+    parts.append(stat(f'Largest remaining problem {_cpill(p_label)}', fmt.esc(p_val), fmt.esc(p_note),
                       False))
 
     # 4. Next best move: the advisor's own top pick when one fired, else the
@@ -1090,7 +461,7 @@ def render_top_strip(verified, companions_data, cache_root, ranked_rx, advise_re
         m_val, m_note = ranked_rx[0]["painkiller"], f'from "{ranked_rx[0]["title"]}"'
     else:
         m_label, m_val, m_note = "NO DATA", "NO DATA", "no profile and no ranked issue to advise on"
-    parts.append(stat(f'Next best move {_cpill(m_label)}', esc(m_val), esc(m_note),
+    parts.append(stat(f'Next best move {_cpill(m_label)}', fmt.esc(m_val), fmt.esc(m_note),
                       m_label == "NO DATA"))
 
     parts.append('</div>')
@@ -1148,22 +519,22 @@ def render_alerts(profile):
 
     fired = []
     for key, rule in ALERT_THRESHOLDS.items():
-        v = _leaf(profile, rule["section"], key)
+        v = met._leaf(profile, rule["section"], key)
         if v is None:
             continue
         hit = v < rule["value"] if rule["op"] == "below" else v > rule["value"]
         if hit:
-            fired.append((rule["what"].format(v=pct(v)), rule["why"], rule["action"], rule["when"]))
+            fired.append((rule["what"].format(v=fmt.pct(v)), rule["why"], rule["action"], rule["when"]))
 
     if not fired:
         parts.append('<div class="wins"><span class="win ok">&#10003; no active alerts</span></div>')
     else:
         for what, why, action, when in fired:
             parts.append(
-                f'<div class="alert"><p class="a-what">! {esc(what)}</p>'
-                f'<p class="a-why"><b>Why it matters.</b> {esc(why)}</p>'
-                f'<p class="a-action"><b>Action.</b> {esc(action)}</p>'
-                f'<p class="a-when"><b>When.</b> {esc(when)}</p></div>')
+                f'<div class="alert"><p class="a-what">! {fmt.esc(what)}</p>'
+                f'<p class="a-why"><b>Why it matters.</b> {fmt.esc(why)}</p>'
+                f'<p class="a-action"><b>Action.</b> {fmt.esc(action)}</p>'
+                f'<p class="a-when"><b>When.</b> {fmt.esc(when)}</p></div>')
     return "".join(parts)
 
 
@@ -1295,14 +666,14 @@ def stat(k, v, note, is_nodata=False):
 def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
            experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0,
-           waterfall_core_label=WATERFALL_CORE_LABEL,
-           waterfall_companion_label=WATERFALL_COMPANION_LABEL):
+           waterfall_core_label=met.WATERFALL_CORE_LABEL,
+           waterfall_companion_label=met.WATERFALL_COMPANION_LABEL):
     # usd_res is accepted for signature compatibility with callers (main()
     # still measures it for the separate `prices` command's use elsewhere)
     # but is never rendered here: the dashboard shows only figures the user
     # can act on, not a dollar estimate of Anthropic's own caching.
-    pp = pain_points(sessions)
-    rx = prescriptions(sm, sessions)
+    pp = met.pain_points(sessions)
+    rx = met.prescriptions(sm, sessions)
     ranked_rx = sorted(rx, key=lambda x: -x["saving"])
     total_rx = sum(r["saving"] for r in rx)
     share = sm["first_request_share_median"]
@@ -1357,7 +728,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     parts.append(render_recommendation_queue(advise_result, suppressed_n, companion_suppressed_n))
     parts.append(render_companions(companions_data, profile, cache_root))
     parts.append(render_experiment_history(experiment_rows or []))
-    wf = build_waterfall(experiment_rows or [], waterfall_core_label, waterfall_companion_label)
+    wf = met.build_waterfall(experiment_rows or [], waterfall_core_label, waterfall_companion_label)
     parts.append(render_waterfall(wf, waterfall_core_label, waterfall_companion_label))
 
     # WINS AND ISSUES at a glance, Brave-style reassurance.
@@ -1368,9 +739,9 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     wins.append(('ok', '&#10003; No model switching') if not pp['switch_n']
                 else ('bad', f'! Model switching {pp["switch_share"]:.0%}'))
     wins.append(('ok', '&#10003; Output routing ok') if (sub is not None and sub < 0.40)
-                else ('bad', f'! Subagent output {pct(sub)}') if sub is not None
+                else ('bad', f'! Subagent output {fmt.pct(sub)}') if sub is not None
                 else ('ok', 'routing: NO DATA'))
-    wins.append(('bad', f'! Startup context {pct(share)}') if (share is not None and share >= 0.30)
+    wins.append(('bad', f'! Startup context {fmt.pct(share)}') if (share is not None and share >= 0.30)
                 else ('ok', '&#10003; Startup context lean') if share is not None
                 else ('ok', 'startup: NO DATA'))
     parts.append('<h2>Wins and issues</h2>')
@@ -1410,7 +781,7 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
         pain.append('</div>')
         parts.append("".join(pain))
         parts.append(f'<p class="n" style="margin-top:8px">Treating all of these is worth on '
-                     f'the order of {human(total_rx)} base-input units this window on your data, '
+                     f'the order of {fmt.human(total_rx)} base-input units this window on your data, '
                      f'estimated, and it is the tool\'s own contribution, separate from the '
                      f'native caching. To turn an estimate into a VERIFIED number, run '
                      f'<code>experiment start</code>, apply one fix, then '
@@ -1474,7 +845,7 @@ def render_standalone(body, title="Token Shield"):
     # handing it to this function.
     return (f'<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-            f'<title>{esc(title)}</title>\n</head>\n<body>\n{body}</body>\n</html>\n')
+            f'<title>{fmt.esc(title)}</title>\n</head>\n<body>\n{body}</body>\n</html>\n')
 
 
 def main():
@@ -1488,9 +859,9 @@ def main():
                     help="add a per-session table (transcript rows carry no names)")
     ap.add_argument("--body-only", action="store_true",
                     help="emit body content without the html wrapper (for artifact publish)")
-    ap.add_argument("--waterfall-core", default=WATERFALL_CORE_LABEL,
+    ap.add_argument("--waterfall-core", default=met.WATERFALL_CORE_LABEL,
                     help="experiment label for the waterfall's Core step (default: core)")
-    ap.add_argument("--waterfall-companion", default=WATERFALL_COMPANION_LABEL,
+    ap.add_argument("--waterfall-companion", default=met.WATERFALL_COMPANION_LABEL,
                     help="experiment label for the waterfall's companion step "
                          "(default: companion)")
     a = ap.parse_args()
@@ -1499,7 +870,7 @@ def main():
         print(f"NO DATA: {a.root} does not exist.", file=sys.stderr)
         return 2
 
-    mt = load_measure()
+    mt = met.load_measure()
     sessions = mt.collect(a.root, a.days)
     sm = mt.summarize(sessions)
     if not sm:
@@ -1526,13 +897,13 @@ def main():
         print(f"note: USD skipped ({e})", file=sys.stderr)
 
     ledger = os.path.expanduser("~/.claude/token-shield/savings.jsonl")
-    experiment_rows = load_experiment_rows(ledger)
+    experiment_rows = met.load_experiment_rows(ledger)
     try:
-        exp_mod = load_experiment()
+        exp_mod = met.load_experiment()
     except (OSError, ValueError, ImportError) as e:
         exp_mod = None
         print(f"note: historical-drift check skipped ({e})", file=sys.stderr)
-    verified = verified_by_label(experiment_rows, exp_mod)
+    verified = met.verified_by_label(experiment_rows, exp_mod)
 
     # v1.7 advisor surfaces: profile, advice, and the companion registry. Each
     # degrades to None on any failure, rather than take the whole render down.
@@ -1542,12 +913,12 @@ def main():
     companion_suppressed_n = 0
     try:
         import advisor as adv
-        profile = load_profile(adv.PROFILE_PATH)
+        profile = met.load_profile(adv.PROFILE_PATH)
         if profile is not None:
             strategies = adv.load_strategies()
             treatments = adv.load_treatments()
             advise_result = adv.advise(profile, treatments, strategies)
-            suppressed_n, companion_suppressed_n = suppressed_recommendation_counts(
+            suppressed_n, companion_suppressed_n = met.suppressed_recommendation_counts(
                 adv, profile, treatments, strategies)
     except (OSError, ValueError, ImportError) as e:
         print(f"note: advisor skipped ({e})", file=sys.stderr)

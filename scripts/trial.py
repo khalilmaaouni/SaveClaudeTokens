@@ -40,6 +40,8 @@ import sys
 import measure_tokens as mt
 import token_shield as ts
 
+import metrics as met
+import formatting as fmt
 DEFAULT_ROOT = os.path.expanduser("~/.claude/projects")
 DEFAULT_DAYS = 30
 
@@ -108,18 +110,18 @@ def run(root, days, out=None):
     print(f"MEASURED  output tokens: {mt.fmt(sm['output_total'])} total, "
           f"{mt.fmt(sm['subagent_output_share'])} of it from subagents", file=out)
 
-    sv = ts.savings_breakdown(sm)
-    print(f"NATIVE    {ts.human(sv['saved'])} base-input token-units saved by Claude "
+    sv = met.savings_breakdown(sm)
+    print(f"NATIVE    {fmt.human(sv['saved'])} base-input token-units saved by Claude "
           f"Code's own prompt caching (Anthropic's mechanism, not this tool; "
           f"never shown in dollars){ts.native_note(sv)}", file=out)
 
-    rx = ts.prescriptions(sm, sessions)
+    rx = met.prescriptions(sm, sessions)
     if rx:
         top = max(rx, key=lambda r: r["saving"])
-        print(f"ESTIMATED {ts.human(top['saving'])} base-input token-units you could "
+        print(f"ESTIMATED {fmt.human(top['saving'])} base-input token-units you could "
               f"still cut, projected from your own sessions", file=out)
 
-    title, detail = ts.lever(sm, mt)
+    title, detail = met.lever(sm, mt)
     print(f"\nBiggest lever: {title}", file=out)
     print(f"  {detail}", file=out)
 

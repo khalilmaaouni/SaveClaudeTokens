@@ -325,12 +325,17 @@ def test_empty_store_renders_no_data_everywhere_no_crash():
 # matters here.
 
 def test_label_helpers_are_imported_from_token_shield_not_reimplemented():
+    # After the split these live in three different modules, and the point of
+    # the test is unchanged: the dashboard REUSES them rather than carrying
+    # its own copy of a label, a number format or a tiebreak.
+    import formatting as fmt
+    import metrics as met
     import token_shield as ts
-    assert fd.ts.esc is ts.esc
-    assert fd.ts.human is ts.human
-    assert fd.ts.pct is ts.pct
+    assert fd.fmt.esc is fmt.esc
+    assert fd.fmt.human is fmt.human
+    assert fd.fmt.pct is fmt.pct
     assert fd.ts._cpill is ts._cpill
-    assert fd.ts.latest_row_per_label is ts.latest_row_per_label
+    assert fd.met.latest_row_per_label is met.latest_row_per_label
 
 
 # --- (l) finding 5: the tiebreak must match token_shield.verified_by_label's

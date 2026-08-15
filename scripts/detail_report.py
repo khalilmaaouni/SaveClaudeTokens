@@ -46,6 +46,7 @@ import measure_tokens as mt
 import profile as pf
 import token_shield as ts
 
+import metrics as met
 SCHEMA = 1
 SOURCE_LABEL = "claude-code-transcripts"
 
@@ -191,7 +192,7 @@ def _cache(sm, sessions, window_days):
             trend = sm2 - fm
 
     parent = [s for s in sessions if s["first_request"] > 0]
-    pp = ts.pain_points(sessions) if parent else None
+    pp = met.pain_points(sessions) if parent else None
     rebuilt = [s for s in parent
                if s["rewrite_ratio"] and s["rewrite_ratio"] > REBUILD_REWRITE_RATIO
                and s["calls"] >= REBUILD_MIN_CALLS]
@@ -325,7 +326,7 @@ def _habits(sm, sessions, prof):
         })
 
     parent = [s for s in sessions if s["first_request"] > 0]
-    pp = ts.pain_points(sessions) if parent else None
+    pp = met.pain_points(sessions) if parent else None
     if pp and pp["rebuild_n"] > 0:
         out.append({
             "what": f"{pp['rebuild_n']} of your sessions show a cache rebuild signal "
