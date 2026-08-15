@@ -1216,6 +1216,101 @@ def test_base_input_units_is_defined_before_it_is_first_used():
     assert html.index("One base-input unit is") < html.index("base-input units"), html
 
 
+# command_center_state(): the four-state model, docs/plan/2026-08-15-STATE-MODEL.md.
+# Every fixture below hands the function the shape its three primitives
+# (list_open_experiments, advise, verified_by_label) actually return, never
+# the real machine's files, per the memo's "existing primitives only" rule.
+
+def test_state_proving_beats_opportunity():
+    open_experiments = [{"label": "diet-claude-md", "started": "2026-08-01T10:00:00",
+                          "window_days": 7}]
+    advise_result = {"do_nothing": False,
+                     "best": {"id": "cache.a", "title": "t", "why_selected": "cache hit is low"},
+                     "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "diet-claude-md" in reason, reason
+
+
+def test_state_healthy_when_do_nothing():
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now."}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "HEALTHY", (state, reason)
+    assert "healthy" in reason.lower(), reason
+
+
+def test_state_unreadable_baseline_still_proving():
+    open_experiments = [{"_unreadable": "/some/path.json"}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 3)
+    assert state == "PROVING", (state, reason)
+    assert "/some/path.json" in reason, reason
+
+
+def test_state_all_triggers_insufficient_is_no_data():
+    advise_result = {"do_nothing": True, "insufficient": ["cache.a", "startup.b", "context.c"]}
+    state, reason = met.command_center_state([], advise_result, [], 3)
+    assert state == "NO DATA", (state, reason)
+    assert state != "HEALTHY"
+
+
+def test_state_historical_verified_does_not_beat_healthy():
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000,
+                "historical": True, "historical_reason": "config fingerprint moved"}]
+    advise_result = {"do_nothing": True, "insufficient": [],
+                     "message": "Nothing crossed a trigger threshold, so this profile "
+                                "looks healthy right now."}
+    state, reason = met.command_center_state([], advise_result, verified, 3)
+    assert state == "HEALTHY", (state, reason)
+
+
+def _opportunity_beats_verified_fixture():
+    advise_result = {"do_nothing": False,
+                     "best": {"id": "cache.a", "title": "t", "why_selected": "cache hit is low"},
+                     "insufficient": []}
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000, "historical": False}]
+    return advise_result, verified
+
+
+def test_state_opportunity_beats_verified():
+    advise_result, verified = _opportunity_beats_verified_fixture()
+    state, reason = met.command_center_state([], advise_result, verified, 3)
+    assert state == "OPPORTUNITY", (state, reason)
+
+
+def _unrecognised_format_fixture():
+    open_experiments = [{"label": "diet-claude-md", "started": "2026-08-01T10:00:00",
+                          "window_days": 7}]
+    advise_result = {"do_nothing": True, "insufficient": []}
+    verified = [{"label": "diet-claude-md", "floor_reduction": 5000, "historical": False}]
+    return open_experiments, advise_result, verified
+
+
+def test_state_unrecognised_format_beats_proving():
+    open_experiments, advise_result, verified = _unrecognised_format_fixture()
+    state, reason = met.command_center_state(open_experiments, advise_result, verified, 3,
+                                              parse_health="UNRECOGNISED")
+    assert state == "NO DATA", (state, reason)
+
+
+def test_state_parse_health_none_is_unchanged():
+    # Same fixture as test_state_opportunity_beats_verified: None must render
+    # OPPORTUNITY exactly as omitting the argument does.
+    advise_result, verified = _opportunity_beats_verified_fixture()
+    state, reason = met.command_center_state([], advise_result, verified, 3, parse_health=None)
+    assert state == "OPPORTUNITY", (state, reason)
+
+    # Same fixture as test_state_unrecognised_format_beats_proving, minus the
+    # UNRECOGNISED string: None must render PROVING, today's behaviour,
+    # unchanged by the new argument's mere presence.
+    open_experiments, advise_result2, verified2 = _unrecognised_format_fixture()
+    state2, reason2 = met.command_center_state(open_experiments, advise_result2, verified2, 3,
+                                                parse_health=None)
+    assert state2 == "PROVING", (state2, reason2)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
