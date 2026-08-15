@@ -76,6 +76,7 @@ USAGE
 """
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -306,12 +307,17 @@ def collect(root, days):
 # Keys this codebase's parsers actually branch on. pricing.py:90 reads
 # cache_read_input_tokens and split_writes(); experiment.py:340-342 reads
 # input_tokens, cache_read_input_tokens, output_tokens and split_writes();
-# profile.py:332 reads output_tokens; read_session() above reads all four
-# flat keys and split_writes(). A renamed field survives json.loads and
-# str() fine, it just is not one of these, which is the whole failure this
-# canary exists to catch. Grep "usage.get" and "split_writes(usage)" across
-# scripts/pricing.py, scripts/experiment.py, scripts/profile.py before
+# profile.py:332 reads output_tokens; reconcile.py's parse_session reads
+# input_tokens, cache_read_input_tokens and its own _split_writes(); and
+# read_session() above reads all four flat keys and split_writes(). A
+# renamed field survives json.loads and str() fine, it just is not one of
+# these, which is the whole failure this canary exists to catch. Grep
+# "usage.get" and "split_writes(usage)" across scripts/pricing.py,
+# scripts/experiment.py, scripts/profile.py and scripts/reconcile.py before
 # adding or removing a key here: this set is that grep, kept in one place.
+# test_recognised_usage_keys_match_what_the_five_parsers_actually_read in
+# test_measure_tokens.py runs that same grep by machine so the two sets
+# cannot silently drift apart.
 RECOGNISED_USAGE_KEYS = frozenset({
     "input_tokens", "output_tokens", "cache_read_input_tokens",
     "cache_creation_input_tokens",
@@ -336,14 +342,151 @@ def _usage_recognised(usage):
     return isinstance(cc, dict) and any(k in cc for k in RECOGNISED_CACHE_CREATION_KEYS)
 
 
+# How deep _find_usage_container will follow nested dicts looking for a
+# usage-shaped container. rec -> message -> usage is depth 2; this leaves
+# headroom for one more wrapper layer this project has not seen yet without
+# letting a pathological record turn the walk into a real cost.
+_USAGE_SEARCH_DEPTH = 4
+
+
+def _find_usage_container(obj, depth=0):
+    """The structural probe the format canary's denominator is built on
+    (docs/plan/2026-08-15-STATE-MODEL.md section 2a): the first dict value
+    found under `obj`, at or below it, that sits under a key whose name
+    contains "usage" (case insensitive) -- found WITHOUT assuming the
+    record's own `type` field or the exact nesting path, which is the whole
+    point: a `type` rename (assistant -> assistant_message) and a wrapper
+    rename around the usage block both survive this, because neither is
+    consulted.
+
+    Only descends into dict values, never into lists: every usage block this
+    format has ever written is a property of a JSON object, never an
+    element of an array, and a message's `content` array (arbitrarily long,
+    holding tool results and pasted text) is exactly the large structure a
+    list-recursing walk would waste time combing for nothing. Bounded by
+    _USAGE_SEARCH_DEPTH so a record is never worth more than a few dict
+    lookups regardless of its shape.
+
+    Returns None, never raises, when `obj` is not a dict or nothing
+    qualifies within the depth budget."""
+    if depth > _USAGE_SEARCH_DEPTH or not isinstance(obj, dict):
+        return None
+    for k, v in obj.items():
+        if isinstance(v, dict) and "usage" in k.lower():
+            return v
+    for v in obj.values():
+        if isinstance(v, dict):
+            found = _find_usage_container(v, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+# A session writes tens to a few hundred assistant turns; 200 comfortably
+# covers "today's session" as the recency window in _newest_slice_health
+# below, without re-reading a meaningful fraction of a long CANARY_DAYS
+# history on every walk.
+NEWEST_SLICE_MESSAGES = 200
+
+
+def _usage_line_records(fp):
+    """Yield (rec, usage_container) for every line in fp that structurally
+    carries a usage-shaped container, skipping unopenable files, lines that
+    fail to decode, and lines with no such container -- all silently, since
+    none of those is evidence the format changed, only that this one line or
+    file could not be read. Shared by format_canary's whole-corpus walk and
+    _newest_slice_health's per-file tail so the "what counts as a message"
+    rule is defined in exactly one place."""
+    try:
+        f = open(fp, "r", errors="ignore")
+    except OSError:
+        return  # sbe: allow-silent an unopenable transcript is absence of evidence, not a format break, so it yields no messages and never fires the alarm
+    with f:
+        for line in f:
+            # Cheap prefilter: a genuine usage-shaped record always contains
+            # the literal key text somewhere on the line, case insensitive
+            # (RECOGNISED keys and the container key itself are both
+            # lowercase in every format this project has seen, but the probe
+            # below is case insensitive, so the prefilter matches it). This
+            # never produces a false negative, only an occasional wasted
+            # parse of a line that turns out not to match.
+            if "usage" not in line.lower():
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, RecursionError, ValueError):
+                continue  # sbe: allow-silent a line that will not parse as JSON is a truncated write, not evidence the usage format changed, so it is skipped rather than counted either way
+            usage = _find_usage_container(rec)
+            if usage is None:
+                continue
+            yield rec, usage
+
+
+def _newest_slice_health(root, days, limit=NEWEST_SLICE_MESSAGES):
+    """(slice_messages, slice_recognised) over the newest `limit`
+    usage-shaped messages in the corpus: the recency dimension of section
+    2a's case B, a rename that only affects records from today forward and
+    would otherwise hide behind up to CANARY_DAYS of unaffected history
+    keeping the whole-corpus `recognised` count above zero.
+
+    "Newest" is decided with the one time source this file already has:
+    os.path.getmtime, the same call iter_session_files uses for its cutoff.
+    Files are visited newest-mtime first. A .jsonl transcript is
+    append-only, so within one file the LAST lines written are also its most
+    recently appended messages; a deque(maxlen=remaining) streamed forward
+    through the file keeps exactly that tail without loading the file into
+    memory and without reading a timestamp field out of any record (which
+    would be a second time source, not a reuse of this one).
+
+    Stops as soon as `limit` messages have been collected, so a corpus with
+    many old files pays only for the newest slice, not a second full walk."""
+    cutoff = time.time() - days * 86400
+    dated = []
+    for fp in iter_session_files(root, cutoff):
+        try:
+            dated.append((os.path.getmtime(fp), fp))
+        except OSError:
+            continue  # sbe: allow-silent a file whose mtime vanished between the two walks is dropped from the recency slice, same posture iter_session_files already takes on this error
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+
+    remaining = limit
+    slice_messages = 0
+    slice_recognised = 0
+    for _mtime, fp in dated:
+        if remaining <= 0:
+            break
+        tail = collections.deque(maxlen=remaining)
+        for _rec, usage in _usage_line_records(fp):
+            tail.append(_usage_recognised(usage))
+        for was_recognised in tail:
+            slice_messages += 1
+            if was_recognised:
+                slice_recognised += 1
+        remaining -= len(tail)
+    return slice_messages, slice_recognised
+
+
 def format_canary(root, days=90):
     """Format canary, layer 0, docs/plan/2026-08-15-STATE-MODEL.md section 2a.
 
     Walks the same transcripts read_session() reads (iter_session_files, so
-    there is exactly one transcript walk defined in this file, not two) and
-    counts, per assistant record that carries a `message` object: how many
-    there are, and how many of their usage blocks yield at least one
+    there is exactly one transcript-file walk defined in this file, not two)
+    and counts, per record that structurally carries a usage-shaped
+    container: how many there are, and how many yield at least one
     recognised usage key (RECOGNISED_USAGE_KEYS above).
+
+    THE DENOMINATOR IS STRUCTURAL, NOT TYPE-BASED. Earlier this counted
+    records whose `type` field equaled the literal "assistant" -- but `type`
+    is part of the format this canary exists to watch, so a rename of that
+    one field (assistant -> assistant_message) drove the denominator itself
+    to zero, and zero messages reported NO DATA on a corpus full of dead
+    records. Instead, _find_usage_container searches each record for any
+    dict value sitting under a key whose name contains "usage" (case
+    insensitive), at any nesting depth, never assuming the record's type or
+    the exact path to the usage block. That survives a `type` rename and a
+    rename of the wrapper around the usage block; only a rename of the
+    fields *inside* the usage block can still zero out `recognised`, and
+    that is exactly the alarm this function exists to raise.
 
     Its ground truth is a file this project does not write, which is why it
     can see a renamed field neither reconcile.py nor the bench fixtures can:
@@ -354,7 +497,7 @@ def format_canary(root, days=90):
 
     Returns a dict:
       transcripts   candidate .jsonl files found under root in the window
-      messages      assistant records carrying a `message` object
+      messages      records carrying a usage-shaped container (whole corpus)
       recognised    of those, how many yielded >= 1 recognised usage key
       parse_health  None, or the string "UNRECOGNISED": feed this straight
                     into metrics.command_center_state(..., parse_health=...)
@@ -362,22 +505,30 @@ def format_canary(root, days=90):
       reason        one line, plain text, no markup (layer 0 may not render)
       exit_code     0 for NO DATA and OK, 1 for FORMAT UNRECOGNISED
 
-    Two cases this function refuses to merge, per the memo:
-      messages == 0: nothing WAS READ (no transcript files at all, or the
-        ones found could not be opened or parsed). NO DATA, exit 0: a new
-        user with no history yet, or a stray permission error, is not
-        evidence the format broke, it is an absence of evidence.
-      messages > 0 and recognised == 0: real assistant messages were read,
-        but not one usage block matched a key this codebase's parsers
-        know. FORMAT UNRECOGNISED, exit 1: the alarm, and the only case
-        that fires it.
+    Three cases this function refuses to merge, per the memo:
+      messages == 0: nothing WAS READ (no transcript files at all, no
+        usage-shaped container anywhere in what was found, or the files
+        found could not be opened or parsed). NO DATA, exit 0: a new user
+        with no history, a corpus of assistant records that legitimately
+        carry no usage block at all (profile.py:332 already expects that
+        shape), and a stray permission error are all an absence of
+        evidence, not evidence the format broke.
+      messages > 0 and recognised == 0, over the WHOLE window: real
+        usage-shaped records were read, but not one yielded a key this
+        codebase's parsers know. FORMAT UNRECOGNISED, exit 1.
+      messages > 0 and recognised > 0 over the whole window, BUT the newest
+        NEWEST_SLICE_MESSAGES messages carry usage-shaped containers and
+        recognise none of them while older messages did: a live rename that
+        the 90 day window would otherwise absorb silently until enough
+        history ages out from under it. FORMAT UNRECOGNISED, exit 1, same
+        as the whole-corpus case, with a reason line that names the slice.
 
     A file this cannot open, a line that will not parse as JSON, a line
-    that parses but is not a JSON object, and a `message` key holding
-    something other than an object are all treated as "no message here"
-    rather than raising, and never counted toward `recognised`: an
-    unreadable file or a single bad line is evidence of a truncated write,
-    not evidence the format changed.
+    that parses but is not a JSON object, and a record with no usage-shaped
+    container anywhere are all treated as "no message here" rather than
+    raising, and never counted toward `recognised`: an unreadable file or a
+    single bad line is evidence of a truncated write, not evidence the
+    format changed.
     """
     transcripts = 0
     messages = 0
@@ -385,32 +536,10 @@ def format_canary(root, days=90):
     cutoff = time.time() - days * 86400
     for fp in iter_session_files(root, cutoff):
         transcripts += 1
-        try:
-            f = open(fp, "r", errors="ignore")
-        except OSError:
-            continue  # sbe: allow-silent an unopenable transcript is absence of evidence, not a format break, so it contributes zero messages and never fires the alarm
-        with f:
-            for line in f:
-                # Cheap prefilter, same shape as read_session's `"usage"`
-                # check: a genuine assistant record always contains the
-                # literal substring, so this never produces a false
-                # negative, only an occasional wasted parse of a line that
-                # turns out not to match.
-                if '"assistant"' not in line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except (json.JSONDecodeError, RecursionError, ValueError):
-                    continue  # sbe: allow-silent a line that will not parse as JSON is a truncated write, not evidence the usage format changed, so it is skipped rather than counted either way
-                if not isinstance(rec, dict) or rec.get("type") != "assistant":
-                    continue
-                msg = rec.get("message")
-                if not isinstance(msg, dict):
-                    continue
-                messages += 1
-                usage = msg.get("usage") or rec.get("usage")
-                if _usage_recognised(usage):
-                    recognised += 1
+        for _rec, usage in _usage_line_records(fp):
+            messages += 1
+            if _usage_recognised(usage):
+                recognised += 1
 
     if messages == 0:
         if transcripts == 0:
@@ -418,7 +547,7 @@ def format_canary(root, days=90):
                       f"last {days:g} days; nothing to check yet.")
         else:
             reason = (f"NO DATA: {transcripts} transcript(s) found under {root} "
-                      f"but none yielded a readable assistant message; "
+                      f"but none yielded a usage-shaped record; "
                       f"nothing to check yet.")
         return {
             "transcripts": transcripts, "messages": 0, "recognised": 0,
@@ -433,9 +562,25 @@ def format_canary(root, days=90):
             "reason": (f"FORMAT UNRECOGNISED: {messages} assistant message(s) "
                        f"across {transcripts} transcript(s), 0 recognised a "
                        f"usage key any parser in this codebase reads. Every "
-                       f"counter measure_tokens.py, pricing.py, experiment.py "
-                       f"and profile.py feed from usage may now silently read "
-                       f"as zero rather than absent."),
+                       f"counter measure_tokens.py, pricing.py, experiment.py, "
+                       f"reconcile.py and profile.py feed from usage may now "
+                       f"silently read as zero rather than absent."),
+            "exit_code": 1,
+        }
+
+    slice_messages, slice_recognised = _newest_slice_health(root, days)
+    if slice_messages > 0 and slice_recognised == 0:
+        return {
+            "transcripts": transcripts, "messages": messages, "recognised": recognised,
+            "parse_health": "UNRECOGNISED", "state": "FORMAT UNRECOGNISED",
+            "reason": (f"FORMAT UNRECOGNISED: the newest {slice_messages} usage-shaped "
+                       f"message(s) recognised 0 usage keys, even though "
+                       f"{recognised}/{messages} did across the full {days:g} day "
+                       f"window. This looks like a live format rename: recent "
+                       f"transcripts have stopped matching what measure_tokens.py, "
+                       f"pricing.py, experiment.py, reconcile.py and profile.py read, "
+                       f"and older history in the window is masking it from the "
+                       f"whole-window count."),
             "exit_code": 1,
         }
     return {

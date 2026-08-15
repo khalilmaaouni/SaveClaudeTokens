@@ -11,7 +11,9 @@ supposed to prevent.
 import importlib.util
 import json
 import os
+import re
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("mt", os.path.join(HERE, "measure_tokens.py"))
@@ -358,6 +360,195 @@ def test_an_unreadable_directory_is_counted_rather_than_silently_dropped():
                 "an unreadable directory was dropped without being counted")
         finally:
             os.chmod(locked, 0o755)
+
+
+def test_total_type_rename_is_format_unrecognised_not_no_data():
+    """Section 2a case A, the fatal one: renaming the outer `type` field
+    (assistant -> assistant_message) alongside the usage field names must
+    not drive the denominator to zero. Before the structural-probe fix this
+    reported NO DATA, the worst outcome a detector can produce: nothing to
+    see, precisely when the parser is most thoroughly dead."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [json.dumps({"type": "assistant_message",
+                                 "message": {"usage": {"prompt_tokens": 10,
+                                                        "completion_tokens": 5}}})] * 50)
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 1, result
+    assert result["messages"] == 50, result
+    assert result["recognised"] == 0, result
+    assert result["state"] == "FORMAT UNRECOGNISED", result
+    assert result["parse_health"] == "UNRECOGNISED", result
+    assert result["exit_code"] != 0, result
+
+
+def test_mid_history_rename_is_caught_by_newest_slice():
+    """Section 2a case B, the most likely real shape: a rename lands today
+    and would otherwise hide behind up to CANARY_DAYS of unaffected history,
+    because the whole-corpus recognised count stays above zero. All 510
+    records live in one file, oldest first (append order is chronological
+    order in this format): 10 healthy calls, then 500 renamed ones. The
+    newest NEWEST_SLICE_MESSAGES are entirely renamed, so the recency check
+    must fire even though the whole window's recognised count is 10, not 0."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        records = ([_assistant_rec({"input_tokens": 10, "output_tokens": 5})] * 10 +
+                   [_assistant_rec({"prompt_tokens": 1})] * 500)
+        _write(fp, records)
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 510, result
+    assert result["recognised"] == 10, result
+    assert result["state"] == "FORMAT UNRECOGNISED", result
+    assert result["parse_health"] == "UNRECOGNISED", result
+    assert result["exit_code"] != 0, result
+    assert "newest" in result["reason"].lower(), result
+
+
+def test_newest_slice_recognised_does_not_alarm_even_with_older_unrecognised_records():
+    """The mirror of the mid-history rename: OLD records (first in the file)
+    are unrecognised, the NEWEST ones (last in the file) are fine. This must
+    read as OK, not fire the recency alarm: the format is healthy right now,
+    and old noise or a since-fixed rename is not today's problem."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        records = ([_assistant_rec({"prompt_tokens": 1})] * 300 +
+                   [_assistant_rec({"input_tokens": 10, "output_tokens": 5})] * 250)
+        _write(fp, records)
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 550, result
+    assert result["recognised"] == 250, result
+    assert result["state"] == "OK", result
+    assert result["parse_health"] is None, result
+
+
+def test_assistant_records_with_no_usage_block_do_not_alarm():
+    """Section 2a case C: profile.py:332 already expects assistant records
+    that legitimately carry no usage block at all, and cries wolf is not
+    the alarm this canary exists to raise. No usage-shaped container exists
+    anywhere in these records, so there is nothing to judge the parsers'
+    recognition against: NO DATA (an absence of evidence to check), never
+    the alarm, and never a guessed OK either."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [json.dumps({"type": "assistant",
+                                 "message": {"content": "hello, no usage block here"}})] * 20)
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 1, result
+    assert result["messages"] == 0, result
+    assert result["state"] == "NO DATA", result
+    assert result["parse_health"] is None, result
+    assert result["exit_code"] == 0, result
+
+
+def test_type_field_is_not_required_for_message_counting():
+    """Locks the removal of the old `rec.get("type") != "assistant"` gate: a
+    record whose type is not the literal "assistant" at all must still be
+    counted and judged on its usage container alone. Reintroducing a type
+    check here would silently zero out `messages` again for any transcript
+    format that renames or omits `type`, which is exactly the section 2a
+    failure this whole task exists to close."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [json.dumps({"type": "something_else",
+                                 "message": {"usage": {"input_tokens": 5,
+                                                        "output_tokens": 2}}})])
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 1, result
+    assert result["recognised"] == 1, result
+    assert result["state"] == "OK", result
+
+
+def test_top_level_usage_without_message_wrapper_is_found():
+    """Locks the structural-probe equivalent of the `rec.get("usage")`
+    fallback the other parsers use: a usage block living directly on the
+    record, with no `message` object at all, must still be found."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [json.dumps({"type": "assistant",
+                                 "usage": {"input_tokens": 5, "output_tokens": 2}})])
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 1, result
+    assert result["recognised"] == 1, result
+    assert result["state"] == "OK", result
+
+
+def test_recognised_via_nested_cache_creation_only():
+    """Locks the nested cache_creation check inside _usage_recognised: a
+    usage block with none of the four flat keys, only a recognised nested
+    ephemeral_*_input_tokens field, must still count as recognised."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [_assistant_rec({"cache_creation": {"ephemeral_5m_input_tokens": 50}})])
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 1, result
+    assert result["recognised"] == 1, result
+    assert result["state"] == "OK", result
+
+
+def test_format_canary_respects_the_days_window():
+    """Locks the `days` argument actually being used as the cutoff rather
+    than ignored in favor of the default: a transcript modified before the
+    requested window must not be counted at all."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [_assistant_rec({"input_tokens": 5, "output_tokens": 2})])
+        old = time.time() - 5 * 86400
+        os.utime(fp, (old, old))
+        result = mt.format_canary(d, days=1)
+    assert result["transcripts"] == 0, result
+    assert result["state"] == "NO DATA", result
+
+
+def test_no_data_reason_wording_distinguishes_zero_transcripts_from_zero_messages():
+    """Locks the two NO DATA reason strings against being swapped: the
+    zero-transcripts case (a new user) must say so, and the
+    transcripts-found-but-no-usage-shaped-record case must say so too, in
+    distinct wording, so the two absences of evidence are never confused."""
+    with tempfile.TemporaryDirectory() as d:
+        empty_result = mt.format_canary(d, days=9999)
+    assert "no transcripts found" in empty_result["reason"].lower(), empty_result
+
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [json.dumps({"type": "assistant", "message": {"content": "hi"}})])
+        found_result = mt.format_canary(d, days=9999)
+    assert "no transcripts found" not in found_result["reason"].lower(), found_result
+    assert "transcript(s) found" in found_result["reason"], found_result
+
+
+def test_recognised_usage_keys_pinned_exactly():
+    """Ten mutations from the review stayed green with zero coverage on this
+    set. Deleting any one of the four recognised usage keys, or either of
+    the two nested cache_creation keys, must go red here."""
+    assert mt.RECOGNISED_USAGE_KEYS == frozenset({
+        "input_tokens", "output_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens"}), mt.RECOGNISED_USAGE_KEYS
+    assert mt.RECOGNISED_CACHE_CREATION_KEYS == frozenset({
+        "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"}), \
+        mt.RECOGNISED_CACHE_CREATION_KEYS
+
+
+def test_recognised_usage_keys_match_what_the_five_parsers_actually_read():
+    """Greps pricing.py, experiment.py, profile.py, reconcile.py and this
+    file's own read_session for every literal usage.get("KEY") and
+    cc.get("KEY") they branch on, and asserts the pinned sets above are
+    exactly that union: neither a stale key nobody reads nor a live key the
+    canary does not know about can drift apart from the real parsers again."""
+    key_re = re.compile(r'usage\.get\("([a-zA-Z0-9_]+)"\)')
+    cc_re = re.compile(r'cc\.get\("([a-zA-Z0-9_]+)"\)')
+    found_usage_keys = set()
+    found_cc_keys = set()
+    for name in ("pricing.py", "experiment.py", "profile.py", "reconcile.py",
+                 "measure_tokens.py"):
+        with open(os.path.join(HERE, name)) as f:
+            text = f.read()
+        found_usage_keys |= set(key_re.findall(text))
+        found_cc_keys |= set(cc_re.findall(text))
+    # "cache_creation" is the nested-object key itself, read via usage.get,
+    # not a leaf counter; it is deliberately excluded from the pinned set.
+    found_usage_keys.discard("cache_creation")
+    assert found_usage_keys == set(mt.RECOGNISED_USAGE_KEYS), found_usage_keys
+    assert found_cc_keys == set(mt.RECOGNISED_CACHE_CREATION_KEYS), found_cc_keys
 
 
 if __name__ == "__main__":

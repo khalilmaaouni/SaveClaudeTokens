@@ -659,6 +659,64 @@ def test_report_surfaces_format_unrecognised_and_returns_nonzero():
     assert "Transcript format canary" in out, out
 
 
+def test_missing_companions_json_still_runs_and_honours_the_canary():
+    """Defect D from the review: report() returned rc 0 before the canary
+    ever ran when data/companions.json was missing or unreadable, an
+    unrelated file silently disabling the layer 0 parser-health alarm. The
+    canary must run and its exit code must be honoured regardless of any
+    earlier optional section failing."""
+    orig_load = dr.cfg.load_companions
+    orig_canary = dr._canary_result
+    called = {"n": 0}
+    unrecognised_canary = {
+        "transcripts": 1, "messages": 3, "recognised": 0,
+        "parse_health": "UNRECOGNISED", "state": "FORMAT UNRECOGNISED",
+        "reason": "FORMAT UNRECOGNISED: 3 assistant message(s) across 1 "
+                  "transcript(s), 0 recognised a usage key.",
+        "exit_code": 1,
+    }
+
+    def spy(root=None):
+        called["n"] += 1
+        return unrecognised_canary
+
+    dr.cfg.load_companions = lambda path: None
+    dr._canary_result = spy
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.cfg.load_companions = orig_load
+        dr._canary_result = orig_canary
+
+    assert called["n"] > 0, "the canary was never called when companions.json was missing"
+    assert rc == 1, rc
+    assert "NO DATA: data/companions.json not found or unreadable." in out, out
+    assert "Transcript format canary" in out, out
+    assert "FORMAT UNRECOGNISED" in out, out
+
+
+def test_missing_companions_json_with_healthy_canary_still_returns_zero():
+    """The mirror case: the canary's own exit code is what must be honoured,
+    not a hardcoded value. Missing companions.json plus a healthy canary
+    must still return 0, so this fix does not turn every missing-registry
+    run into a false alarm."""
+    orig_load = dr.cfg.load_companions
+    orig_canary = dr._canary_result
+    dr.cfg.load_companions = lambda path: None
+    dr._canary_result = _no_data_canary
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+    finally:
+        dr.cfg.load_companions = orig_load
+        dr._canary_result = orig_canary
+    assert rc == 0, rc
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

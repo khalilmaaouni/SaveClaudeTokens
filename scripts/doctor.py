@@ -403,7 +403,17 @@ def report():
     companions_data = cfg.load_companions(cfg.COMPANIONS_PATH)
     if not companions_data:
         print("NO DATA: data/companions.json not found or unreadable.")
-        return 0
+        print()
+        # The canary is unrelated to the companion registry and must run and
+        # be honoured regardless: an optional section failing earlier must
+        # never silently disable the layer 0 parser-health alarm (found in
+        # review: a missing companions.json returned 0 before the canary
+        # ever ran).
+        print("Transcript format canary (layer 0 parser health, STATE-MODEL section 2a)")
+        canary = _canary_result()
+        for line in _canary_lines(canary):
+            print(line)
+        return canary.get("exit_code", 0)
     companions = companions_data.get("companions", [])
 
     # Loaded before _ensure_fresh_state() below, which may overwrite the
