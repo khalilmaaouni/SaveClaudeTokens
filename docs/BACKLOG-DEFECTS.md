@@ -25,6 +25,10 @@ Status is one of OPEN, IN PROGRESS, FIXED (with the pull request that did it), o
 | D24 | Critical | An experiment whose `label` or `confidence` was not a string raised `unhashable type` or a str/int comparison, because both are used as a dict key, a set member and a sort key. One record killed the page. | [PR 69](https://github.com/khalilmaaouni/token-shield/pull/69) |
 | D25 | Critical | A symlink AT the org directory escaped the store entirely and rendered an arbitrary outside directory with no refusal, because the symlink guard walks components strictly BELOW its root. | [PR 69](https://github.com/khalilmaaouni/token-shield/pull/69) |
 | D26 | Critical | The page declared utf-8 but was written with the locale's codec, so under `LC_ALL=C` one non-ASCII byte anywhere in the store left a zero byte file. | [PR 69](https://github.com/khalilmaaouni/token-shield/pull/69) |
+| D12 | Critical | A later NOT_PROVEN did not supersede an earlier VERIFIED, because all three latest-wins readers filtered by confidence BEFORE picking the latest row. The share card published a proven claim a re-run could not reproduce. | [PR 71](https://github.com/khalilmaaouni/token-shield/pull/71) |
+| D13 | Critical | A VERIFIED verdict could be manufactured entirely by parse failures: the cohort reader dropped unreadable files and undecodable lines without counting them, and a dropped first line promoted a cheap turn to "first request". | [PR 73](https://github.com/khalilmaaouni/token-shield/pull/73) |
+| D14 | Critical | `os.walk` without `onerror` swallowed a `PermissionError` on a project directory, so 30 percent of the data could vanish and the NATIVE headline drop 10.8M in silence. | [PR 72](https://github.com/khalilmaaouni/token-shield/pull/72) |
+| D15 | Critical | A string, list, NaN or deeply nested value in a usage counter crashed a stranger's first run, and `Infinity` did not crash at all: it printed 0.000 share and 0.000 hit ratio as MEASURED facts. | [PR 72](https://github.com/khalilmaaouni/token-shield/pull/72) |
 
 ---
 
@@ -36,8 +40,8 @@ Every finding here carries the reviewer's own reproduction output. None was acce
 
 ---
 
-### D12. A later NOT_PROVEN does not supersede an earlier VERIFIED
-**Severity: Critical. Status: OPEN. This is the most damaging defect currently known.**
+### D12. [FIXED in PR 71] A later NOT_PROVEN does not supersede an earlier VERIFIED
+**Severity: Critical. Status: FIXED, [PR 71](https://github.com/khalilmaaouni/token-shield/pull/71).** It was the most damaging defect found this round: the share card is the artifact designed to leave the machine.
 
 Every "latest record per label wins" reader filters to VERIFIED **before** picking the latest, so re-running a label and failing to prove it leaves the old VERIFIED claim standing. Sites: `scripts/token_shield.py:394`, `scripts/cli.py:73`, `scripts/share_card.py:70`.
 
@@ -57,8 +61,8 @@ exit=0
 
 ---
 
-### D13. A VERIFIED verdict can be manufactured entirely by parse failures
-**Severity: Critical. Status: OPEN.**
+### D13. [FIXED in PR 73] A VERIFIED verdict can be manufactured entirely by parse failures
+**Severity: Critical. Status: FIXED, [PR 73](https://github.com/khalilmaaouni/token-shield/pull/73).**
 
 The cohort reader silently discards unreadable transcripts and corrupt JSONL lines without incrementing any counter (`scripts/experiment.py:316` and `:323`). Both handlers are mirrored from `measure_tokens.read_session`, which DOES increment `SKIP_COUNTS`; the mirror dropped that half. A dropped first line also promotes a cheap mid-conversation turn to "first request".
 
@@ -78,8 +82,8 @@ Nothing changed, and the ledger says 39,750 tokens per call proven.
 
 ---
 
-### D14. A partly unreadable transcript tree silently under-counts, and says nothing
-**Severity: Critical. Status: OPEN.**
+### D14. [FIXED in PR 72] A partly unreadable transcript tree silently under-counts, and says nothing
+**Severity: Critical. Status: FIXED, [PR 72](https://github.com/khalilmaaouni/token-shield/pull/72).**
 
 `os.walk(root)` at `scripts/measure_tokens.py:118` is called with no `onerror`, so a `PermissionError` on a project subdirectory is swallowed before the file iterator ever sees it. `SKIP_COUNTS` stays zero, so the trial prints no skip warning. The honesty mechanism is blind to the most common real failure.
 
@@ -96,8 +100,8 @@ Thirty percent of the data vanished and the headline fell by 10.8M with nothing 
 
 ---
 
-### D15. Any non-integer usage value ends a stranger's first run in a traceback
-**Severity: Critical. Status: OPEN.**
+### D15. [FIXED in PR 72] Any non-integer usage value ends a stranger's first run in a traceback
+**Severity: Critical. Status: FIXED, [PR 72](https://github.com/khalilmaaouni/token-shield/pull/72).**
 
 `scripts/measure_tokens.py:176` catches only `json.JSONDecodeError`, then adds whatever the record held. Reproduced with raw-byte fixtures appended after three valid records:
 
@@ -271,11 +275,17 @@ A review that reports only findings says nothing about the rest. These were atta
 - **`reconcile.py` fails closed**, printing NOT RECONCILED rather than silently agreeing.
 - **On the fleet dashboard**, the previously fixed defects all held under fresh attack: invalid UTF-8 content, bare NaN and Infinity, 400,000-deep arrays, the size cap, date disagreement, a machine replaced by a file, symlinked record files and machine directories, a JSON scalar instead of an object, 50,000 keys in one bucket, and truncation before escaping.
 
+## Status as of 2026-08-15 evening
+
+**All eight Criticals found in this round are closed.** D12, D13, D14 and D15 were fixed the same day they were found, in PRs 71, 72 and 73; the four dashboard Criticals went in PR 69. Together with the fingerprint fix in PR 65, a VERIFIED verdict is now both reachable and honest, where that morning it was neither.
+
+What remains open is D16 through D22 (three Majors, one Minor group, and the weak-test group), plus D8 through D11 from earlier.
+
 ## How this list is meant to be used
 
-Take D12 first. It is the only defect here that puts a false claim in front of people outside this machine, and it is a small change: pick the newest record per label first, then check its confidence, rather than the other way round.
+Take D22 first now, ahead of the remaining Majors. Those weak tests are what let the Criticals through, and every Critical fixed above was found by a reviewer rather than by the suite. Fixing a defect without fixing the test that missed it just resets the trap.
 
-Then D13, D14 and D15, which share a shape worth fixing together: each turns a failure into a confident number instead of NO DATA. D14 and D15 are one guard each in `measure_tokens.py`, shared by every caller.
+Then D16 (NATIVE overstated when cache writes carry no TTL split), because it is the row the market position rests on, then D17 (the trial and the command it recommends disagree about the same headline), which a stranger sees within one minute of each other.
 
 D22 is listed last but should be read first by whoever picks this up, because those weak tests are what let the Criticals through, and fixing a defect without fixing the test that missed it just resets the trap.
 
