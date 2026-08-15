@@ -10,6 +10,7 @@ F2 (init, join, leave, the registration record) is covered from the section
 marked "F2:" onward, below the F1 tests it was appended to.
 """
 
+import contextlib
 import hashlib
 import io
 import json
@@ -1712,6 +1713,60 @@ def test_push_commits_as_the_machine_identifier_not_one_shared_identity():
         author = proc.stdout.strip()
     assert machine_id in author
     assert "token-shield-fleet" not in author
+
+
+def test_a_permission_that_did_not_take_is_reported_not_swallowed():
+    """The local config holds the org's store URL and its salt, and its own
+    docstring promises the file is 0600 and its directory 0700. The chmod
+    calls that deliver that promise were wrapped in `except OSError: pass`,
+    so on any filesystem where chmod does not take (a network mount, a synced
+    folder, some container overlays) the file kept the umask default, the
+    docstring's promise was false, and nobody was told.
+
+    Swallowing an error about SOMEBODY ELSE'S bad data is this codebase's
+    documented design: a corrupt record becomes its own NO DATA row rather
+    than killing the run. Swallowing an error about OUR OWN promise not being
+    kept is a different thing, and it is the one that ends with an org's salt
+    world-readable while the code says otherwise.
+
+    The write still succeeds: refusing to save a config because a permission
+    could not be tightened would lose the user's work over a warning. It just
+    stops being silent."""
+    import io
+    real_chmod = os.chmod
+    seen = []
+
+    def _refusing_chmod(path, mode, *a, **k):
+        # Only refuse the hardening calls, so makedirs and the write itself
+        # behave normally and the test measures one thing.
+        if mode in (0o600, 0o700):
+            seen.append((path, mode))
+            raise OSError(1, "Operation not permitted")
+        return real_chmod(path, mode, *a, **k)
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = os.path.join(d, "nested", "fleet.json")
+        err = io.StringIO()
+        os.chmod = _refusing_chmod
+        try:
+            with contextlib.redirect_stderr(err):
+                fl._write_local_config(cfg, {"org": "acme", "store": "git@x:y.git"})
+        finally:
+            os.chmod = real_chmod
+        warned = err.getvalue()
+
+        assert seen, "the fixture never intercepted a hardening chmod"
+        # The write is not lost over a permission warning.
+        assert os.path.isfile(cfg), "the config was not written at all"
+        with open(cfg) as f:
+            assert json.load(f)["org"] == "acme"
+
+    assert warned.strip(), (
+        "chmod failed and nothing was said, so the docstring's 0600 promise is "
+        "silently false")
+    assert "fleet.json" in warned, "the warning does not name the file it is about"
+    assert "600" in warned or "0o600" in warned, (
+        "the warning does not name the permission that was not applied")
 
 
 if __name__ == "__main__":

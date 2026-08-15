@@ -237,6 +237,36 @@ def _platform_name():
     return _PLATFORM_NAMES.get(platform.system(), "unknown")
 
 
+def _harden(path, mode):
+    """chmod `path` to `mode`, and SAY SO when it does not take.
+
+    The outbox holds this machine's own usage rollups, which is why the
+    docstrings below promise 0700 on the directory and 0600 on each report.
+    Those two calls disagreed with each other about failure: the directory's
+    was wrapped in `except OSError: pass`, so a filesystem that would not
+    take the permission left the directory at the umask default in silence,
+    and the file's was unwrapped, so the same filesystem raised straight out
+    of queue_report AFTER the report had already been written.
+
+    Both now go through here: best effort, never raising (a permission that
+    could not be tightened must not lose a report that is already on disk),
+    and never silent, because the docstring's promise is otherwise false with
+    nobody told. stderr, so a caller piping this command stays unaffected.
+
+    fleet.py carries the same helper for the same reason. Deliberately
+    duplicated rather than shared: signals sits BELOW fleet in the layer map
+    (docs/ARCHITECTURE.md), so importing fleet's copy would be an upward
+    import, and scripts/test_architecture.py would refuse it. The extraction
+    of a foundation module is where these two collapse into one."""
+    try:
+        os.chmod(path, mode)
+    except OSError as e:
+        print(f"warning: could not set permissions {oct(mode)} on "
+              f"{_display_path(path)} ({e}). It keeps whatever mode it was "
+              f"created with, which may be readable by other accounts on this "
+              f"machine.", file=sys.stderr)
+
+
 def _display_path(path):
     """`path` with the user's home directory prefix shortened to "~", so a
     printed message never carries the account name."""
@@ -414,10 +444,7 @@ def queue_report(report, outbox_dir=None):
     a future send phase to read it. Returns the path written."""
     outbox_dir = os.path.expanduser(outbox_dir or OUTBOX_DIR)
     os.makedirs(outbox_dir, exist_ok=True)
-    try:
-        os.chmod(outbox_dir, 0o700)
-    except OSError:
-        pass
+    _harden(outbox_dir, 0o700)
     day = report.get("report_date", "unknown")
     existing = _outbox_files(outbox_dir)
     for stale_same_day in [p for p in existing if _day_of(p) == day]:
@@ -432,7 +459,7 @@ def queue_report(report, outbox_dir=None):
     path = os.path.join(outbox_dir, fname)
     with open(path, "wb") as f:
         f.write(serialize(report))
-    os.chmod(path, 0o600)
+    _harden(path, 0o600)
     return path
 
 
