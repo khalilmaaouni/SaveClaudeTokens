@@ -79,6 +79,55 @@ def run(root, days, out=None):
                   f"and {skip['lines']} unreadable line(s))", file=out)
         return 0
 
+    # The exact command the hero action below recommends, resolved from
+    # where this file actually sits (same computation the follow-on line
+    # further down needs, done once and reused so the two can never name a
+    # different path for the same file).
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+    try:
+        rel = os.path.relpath(cli)
+        if len(rel) < len(cli):
+            cli = rel
+    except ValueError:
+        pass  # sbe: allow-silent relpath raises when no relative path exists (a different drive on Windows); the absolute path already printed is correct, just longer
+
+    # THE FIRST THREE LINES, before anything else a stranger sees: one hero
+    # number about their own usage, what it means in plain words, and the
+    # exact command that acts on it. Everything below this block is the
+    # detail that used to lead: a banner, then a legend explaining a label
+    # vocabulary nobody has a reason to trust yet. That detail still runs,
+    # unchanged, just lower down, where a reader who wants it can find it.
+    key = mt.dominant_lever(sm)
+    share = sm.get("first_request_share_median")
+    hit = sm.get("hit_ratio_median")
+    sub = sm.get("subagent_output_share")
+    if key == "shrink":
+        hero = (f"MEASURED  {share * 100:.0f}% of everything read on every call "
+                 f"is the same fixed block, paid for again and again")
+        meaning = "You are re-reading that block on every single message, whether it changed or not."
+        action = f"Run python3 {cli} advise to see exactly what is safe to trim."
+    elif key == "cache":
+        hero = f"MEASURED  only {hit * 100:.0f}% of what gets read comes back from cache"
+        meaning = "Most of your context is being rebuilt from scratch instead of reused."
+        action = f"Run python3 {cli} advise to see what keeps breaking the cache."
+    elif key == "route":
+        hero = (f"MEASURED  {sub * 100:.0f}% of your output came from subagents, "
+                 f"not the main conversation")
+        meaning = "That can be a smart trade or a wasted one, depending on what those subagents were doing."
+        action = f"Run python3 {cli} advise to see whether that split is paying off."
+    elif key == "healthy":
+        hero = "MEASURED  every signal this tool tracks is inside its healthy range"
+        meaning = "Nothing here is quietly wasting tokens right now."
+        action = f"Run python3 {cli} dashboard for the full picture anyway."
+    else:  # "nodata": too little of this specific signal yet to name a number
+        hero = "MEASURED  not enough usage yet to put one number on it"
+        meaning = "A few more Claude Code sessions will give this tool something real to measure."
+        action = "Use Claude Code for a session or two, then run this again."
+    print(hero, file=out)
+    print(meaning, file=out)
+    print(action, file=out)
+    print(file=out)
+
     print("Token Shield trial run: zero install, reads only, nothing sent anywhere", file=out)
     # The labels carry the whole honesty claim of this product, and they used
     # to appear with no legend anywhere on screen. The module docstring
@@ -126,16 +175,10 @@ def run(root, days, out=None):
     print(f"  {detail}", file=out)
 
     # The follow-on command is built from where this file actually sits, not
-    # from a hardcoded "scripts/cli.py". A stranger who ran the README's clone
-    # command is standing one directory above the checkout, so a bare relative
-    # path would print a command that fails from the only place they could be.
-    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
-    try:
-        rel = os.path.relpath(cli)
-        if len(rel) < len(cli):
-            cli = rel
-    except ValueError:
-        pass  # sbe: allow-silent relpath raises when no relative path exists (a different drive on Windows); the absolute path already printed is correct, just longer
+    # from a hardcoded "scripts/cli.py" (`cli`, computed once near the top of
+    # this function). A stranger who ran the README's clone command is
+    # standing one directory above the checkout, so a bare relative path
+    # would print a command that fails from the only place they could be.
     print(f"\nFull plugin, more views, and a way to prove a fix worked: "
           f"python3 {cli} summary "
           f"(github.com/khalilmaaouni/token-shield)", file=out)
