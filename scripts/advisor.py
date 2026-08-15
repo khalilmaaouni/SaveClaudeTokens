@@ -1003,10 +1003,37 @@ def cmd_recipe(name):
     in the curated registry, or a registry entry missing a required
     evidence field, is refused with the exact reason printed. No command
     is ever built or guessed here, only read.
+
+    Fix round (coordinator item 1): a name matching a MENTION used to be
+    refused with the same "has no entry" text as a name matching nothing
+    at all, which is false, since a mention is a real, deliberate entry
+    (a tool we know about and have chosen not to prescribe, with a
+    reason and, often, a flip condition). That case now refuses by
+    naming it as a known mention and printing its "reason" and
+    "flip_condition" fields verbatim, never composed here. A name
+    matching neither a companion nor a mention lists the curated names
+    that can be asked for (item 2: this alone covers a project's own,
+    longer repo-name spelling, such as token-optimizer-mcp for the
+    curated name token-optimizer, without inventing an alias field).
     """
     data = ts.load_companions(ts.COMPANIONS_PATH)
     result = describe(data, load_state(), name)
     if result["refused"]:
+        companions_list = (data or {}).get("companions", [])
+        mentions_list = (data or {}).get("mentions", [])
+        curated_names = {c.get("name") for c in companions_list if c.get("name")}
+        mention = next((m for m in mentions_list if m.get("name") == name), None)
+        if mention is not None:
+            print(f"REFUSED: '{name}' is a known mention, never a prescribed "
+                  f"treatment. {mention.get('reason', 'NO DATA: no reason recorded')}")
+            flip = mention.get("flip_condition")
+            if flip:
+                print(f"  flip condition: {flip}")
+            return 2
+        if name not in curated_names:
+            names_txt = ", ".join(sorted(curated_names)) if curated_names else "none"
+            print(f"REFUSED: {result['reason']}. Known curated companions: {names_txt}")
+            return 2
         print(f"REFUSED: {result['reason']}")
         return 2
     print(f"Recipe for {name} (verbatim from data/companions.json):")

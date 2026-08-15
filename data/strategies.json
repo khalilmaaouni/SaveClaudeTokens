@@ -372,29 +372,33 @@
       "id": "companion.token-saver",
       "category": "companion",
       "problem_class": "tool_output",
-      "title": "Companion: token-saver (detect and measure only)",
+      "title": "Companion: token-saver (CLI/shell output compressor)",
       "trigger": {
         "metric": "usage.output_tokens_total",
         "op": ">=",
         "value": 200000,
         "band": "LOW"
       },
-      "what_it_changes": "Detect-and-measure only: token-saver is already enforced by its own hook when installed, so this card surfaces that its compression is active, it never turns anything on and is never offered as a recommended fix.",
-      "expected_benefit": "Visibility into how much shell and tool output volume the plugin is already compressing.",
+      "what_it_changes": "36 content aware processors compress verbose CLI output (git, docker, npm, terraform, kubectl, pytest and others) with local regex and string parsing only, no external calls, while preserving errors, diffs and stack traces. A PreToolUse hook rewrites the command to the compressing wrapper.",
+      "expected_benefit": "ppgranger's own README claims 60 to 99 percent compression across 16 before/after scenarios (76 percent on a git diff to 99.9 percent on an npm install), locked to a CI ratchet test, its own figure, never a Token Shield measurement.",
       "evidence": "ESTIMATED",
-      "drawback": "This card never recommends installing or enabling token-saver as a fix; its file_content and env processors carry a real redaction risk when enabled and stay out of scope for a detect-only card.",
+      "drawback": "Compressed output must never stand as evidence where exact text matters; it is lossy by design for whatever it judges to be noise; small per-call overhead. Its file_content and env processors carry a real redaction risk when enabled and should stay disabled (a machine-local override, not a vendor default).",
       "quality_risk": "LOW",
-      "reversibility": "Not applicable, detection only, nothing is changed.",
-      "how_measured": "usage.output_tokens_total from the profile, a proxy for how much command output volume exists to compress.",
-      "if_you_say_no": "No effect either way; this card only reports, it never changes anything.",
-      "alternatives": [],
+      "reversibility": "Fully reversible with its own documented rollback: python3 install.py --uninstall.",
+      "how_measured": "usage.output_tokens_total from the profile; more tool-output volume is where a CLI-output compressor has more to work with, a loose proxy rather than a direct measurement of token-saver's own effect.",
+      "if_you_say_no": "CLI and shell output volume keeps landing in context uncompressed; nothing changes.",
+      "alternatives": [
+        "companion.rtk",
+        "companion.token-optimizer"
+      ],
       "companion": null,
       "requires_confirmation": false,
-      "source": "docs/research/2026-08-13-companion-first-party.md",
+      "source": "docs/research/2026-08-15-companion-fabric-facts.md",
       "how": [
         {"text": "Check whether token-saver is already installed.", "command": "claude plugin list"},
-        {"text": "This card is detect-only: it never turns anything on, so there is nothing further to apply."},
-        {"text": "If not installed and you want it, install it yourself; this card does not recommend that step."}
+        {"text": "Get the exact verified install and rollback commands before running anything.", "command": "python3 scripts/cli.py advise --recipe token-saver"},
+        {"text": "Install only if you accept that compressed output must never stand as evidence where exact text matters."},
+        {"text": "Watch your output token volume over the next few sessions.", "command": "python3 scripts/cli.py profile"}
       ]
     },
     {

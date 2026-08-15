@@ -1190,6 +1190,110 @@ def test_curated_registry_install_and_rollback_strings_are_non_empty():
     assert caught, "reinjection (blanked uninstall) did not reproduce the defect"
 
 
+def test_mention_recipe_names_the_reason_verbatim_never_the_generic_no_entry_text():
+    # Fix round item 1: a recipe request for a known MENTION (context-mode)
+    # must never be told "has no entry", which is false, since a mention
+    # is a real, deliberate entry, not an unknown name. It must name it as
+    # a mention and print its own "reason" and "flip_condition" verbatim.
+    # An exit-code-only test already passed once for entirely the wrong
+    # reason (this repo's own test_recipe_refuses_for_a_mention_like_
+    # context_mode only asserted rc==2 and the bare name), so this asserts
+    # on the reason text itself reaching the printed output.
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        data = json.load(f)
+    context_mode = next(m for m in data["mentions"] if m["name"] == "context-mode")
+
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("context-mode")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "is a known mention" in out, out
+    assert context_mode["reason"] in out, out
+    assert context_mode["flip_condition"] in out, out
+    assert "has no entry" not in out, out  # the false claim this fix removes
+    assert "  install:" not in out, out    # never an invented command
+    assert "  rollback:" not in out, out
+
+    # Calibrated: reinject the exact defect (cmd_recipe answering a mention
+    # with the plain "no entry" message, no reason, no flip condition) on
+    # the real, production advisor.py, confirm RED, restore, confirm GREEN.
+    path = os.path.join(HERE, "advisor.py")
+    with open(path) as f:
+        src = f.read()
+    marker = "    data = ts.load_companions(ts.COMPANIONS_PATH)\n    result = describe(data, load_state(), name)\n    if result[\"refused\"]:\n"
+    assert marker in src, "cmd_recipe's shape changed; update this reinjection"
+    broken = src.replace(
+        marker,
+        "    data = ts.load_companions(ts.COMPANIONS_PATH)\n"
+        "    result = describe(data, load_state(), name)\n"
+        "    if result[\"refused\"]:\n"
+        "        print(f\"REFUSED: {result['reason']}\")\n"
+        "        return 2\n"
+        "    if False:\n",
+    )
+    assert broken != src, "reinjection replacement did not match"
+    with open(path, "w") as f:
+        f.write(broken)
+    try:
+        adv2 = _load("advisor")
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            adv2.cmd_recipe("context-mode")
+        out2 = buf2.getvalue()
+        went_red = context_mode["reason"] not in out2
+        assert went_red, ("reinjection did not reproduce the defect", out2)
+    finally:
+        with open(path, "w") as f:
+            f.write(src)
+
+
+def test_unknown_recipe_lists_the_curated_names():
+    # Fix round items 1/2: a name matching nothing (neither a companion
+    # nor a mention) keeps an honest not-found message but now also lists
+    # the curated names, so a user who typed a project's own longer repo
+    # name (token-optimizer-mcp for the curated token-optimizer) can see
+    # the right one to ask for, with no new alias field invented.
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("token-optimizer-mcp")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "Known curated companions:" in out, out
+    assert "token-optimizer" in out, out
+
+
+def test_token_saver_strategy_card_matches_its_promoted_tier():
+    # Fix round item 3: the coordinator's decision, now built. The registry
+    # calls token-saver a prescribable treatment (data/companions.json);
+    # its own tournament card must agree, never still speak as detect and
+    # measure only, and its evidence must never be MEASURED or VERIFIED
+    # (nothing about it was measured on this machine).
+    real = adv.load_strategies(STRATEGIES_PATH)
+    card = next(s for s in real if s["id"] == "companion.token-saver")
+    assert card["category"] == "companion", card  # the winner-exclusion rule still applies
+    assert card["problem_class"] == "tool_output", card
+    assert card["evidence"] not in ("MEASURED", "VERIFIED"), card
+    assert "detect" not in card["title"].lower(), card
+    assert "detect-and-measure only" not in card["what_it_changes"].lower(), card
+    assert "not applicable" not in card["reversibility"].lower(), card
+
+    # Calibrated: reinject the old detect-only card text on a temp copy of
+    # the real strategies.json, confirm the check above would have caught
+    # it (RED), then confirm the real, already-fixed file passes (GREEN).
+    with open(STRATEGIES_PATH) as f:
+        real_data = json.load(f)
+    broken = json.loads(json.dumps(real_data))
+    broken_card = next(s for s in broken["strategies"] if s["id"] == "companion.token-saver")
+    broken_card["title"] = "Companion: token-saver (detect and measure only)"
+    broken_card["what_it_changes"] = "Detect-and-measure only: ..."
+    went_red = ("detect" in broken_card["title"].lower()
+               or "detect-and-measure only" in broken_card["what_it_changes"].lower())
+    assert went_red, "reinjection (old detect-only text) did not reproduce the defect"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
