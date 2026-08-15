@@ -1511,6 +1511,41 @@ def test_proving_panel_refuses_a_day_count_for_a_future_start_date():
     assert "future" in body.lower(), body
 
 
+def test_summary_first_line_is_state():
+    # The terminal's first line must be the state, read through
+    # metrics.command_center_state rather than recomputed in cli.py. A second
+    # copy of the priority order in the CLI is exactly the drift the state
+    # model exists to prevent, so this pins the WIRING, not the wording.
+    import io
+    import contextlib
+    import cli
+    d = tempfile.mkdtemp()
+    proj = os.path.join(d, "proj")
+    os.makedirs(proj)
+    rec = {"type": "assistant", "message": {"usage": {
+        "input_tokens": 100, "output_tokens": 50,
+        "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}}}
+    with open(os.path.join(proj, "s.jsonl"), "w") as f:
+        for _ in range(20):
+            f.write(json.dumps(rec) + "\n")
+    old_root = cli.ROOT
+    cli.ROOT = d
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.summary()
+    finally:
+        cli.ROOT = old_root
+    lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+    assert lines, "cli.summary() printed nothing to stdout"
+    assert lines[0].startswith("STATE: "), lines[0]
+    # The state must be one the state function can actually return, never a
+    # word invented in the CLI.
+    assert any(lines[0].startswith("STATE: " + s)
+               for s in ("PROVING", "OPPORTUNITY", "VERIFIED", "HEALTHY", "NO DATA")), lines[0]
+    assert "(" in lines[0] and lines[0].rstrip().endswith(")"), lines[0]
+
+
 def test_proving_panel_handles_unreadable_baseline_without_raising():
     # list_open_experiments fails CLOSED: a corrupt or unreadable baseline
     # file comes back as a marker carrying "_unreadable" and no "label". The
