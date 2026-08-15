@@ -97,6 +97,41 @@ def describe(companions_data, state, name):
     }
 
 
+def load_registry(path=None):
+    """data/companions.json, with every CURATED entry's install and
+    uninstall commands validated eagerly, the moment the whole file loads,
+    the same way advisor.load_strategies() refuses a strategy naming an
+    unknown problem_class before ranking ever runs (unit CF1). Raises
+    ValueError naming the exact companion and the missing field.
+
+    Standing policy: we never prescribe a companion we cannot tell a user
+    how to undo. Before this function existed that policy lived only in a
+    document (docs/research/2026-08-15-companion-fabric-facts.md), which
+    means the next person to add a curated entry could quietly break it
+    with nobody noticing until a user asked for the wrong recipe. This is
+    the mechanical version of that same rule.
+
+    Mentions are never checked here: NO DATA on rollback is their whole
+    point, not a defect.
+
+    Returns the raw doc (dict), or None if the file is missing or not
+    valid JSON, the same tolerance token_shield.load_companions already
+    has. Pure read: never writes, mirrors load_state below.
+    """
+    data = ts.load_companions(path or ts.COMPANIONS_PATH)
+    if data is None:
+        return None
+    for entry in data.get("companions", []):
+        name = entry.get("name", "<unnamed>")
+        for field in ("install", "uninstall"):
+            if not entry.get(field):
+                raise ValueError(
+                    f"companion {name!r}: refused at load, missing required "
+                    f"field {field!r} (a companion without a documented "
+                    f"{field} command is never prescribed)")
+    return data
+
+
 def load_state(path=None):
     """The on-disk discovery state (dc.STATE_PATH by default), or None if
     missing or corrupt. Read only; mirrors doctor.py's own _load_state.

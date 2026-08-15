@@ -124,7 +124,7 @@ def test_why_selected_contains_the_profiles_own_number():
 
 def test_strategies_json_loads_validates_and_carries_no_dashes():
     strategies = adv.load_strategies(STRATEGIES_PATH)
-    assert 10 <= len(strategies) <= 14, len(strategies)
+    assert 10 <= len(strategies) <= 17, len(strategies)
     for s in strategies:
         assert s["source"], s["id"]
     # The dash needles are written as escapes so this source file itself
@@ -1040,6 +1040,154 @@ def test_main_mode_narrows_tournament_field_and_notes_it():
     m = len(real)
     assert n < m, (n, m)  # conservative must actually narrow this fixture, or the test proves nothing
     assert f"field narrowed by mode conservative: {n} of {m} candidates" in out, out
+
+
+def test_load_registry_refuses_a_curated_entry_missing_rollback():
+    # Unit CF1's load time refusal: a curated companion entry with its
+    # rollback command removed must be refused the moment the whole
+    # registry loads, by name, with the reason, the same way
+    # load_strategies() refuses a strategy naming an unknown problem_class.
+    # Calibrated: this reinjects the exact defect the rule exists to catch
+    # (a curated entry shipped without an uninstall command) against a
+    # temp copy of the real registry with only "widget" appended, so the
+    # other, already-valid curated entries prove the refusal is scoped to
+    # the one broken entry, not a blanket failure.
+    import tempfile
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    broken = json.loads(json.dumps(real_data))
+    broken["companions"].append({"name": "widget", "install": "do it",
+                                 "tested_version_range": {"min": "1.0.0", "max": "1.0.0",
+                                                          "tested_on": "2026-08-15"}})
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump(broken, f)
+        try:
+            adv.load_registry(path)
+            assert False, "expected a ValueError for a companion missing uninstall"
+        except ValueError as e:
+            assert "widget" in str(e), str(e)
+            assert "uninstall" in str(e), str(e)
+    # Restored: the real, unbroken registry loads clean.
+    assert adv.load_registry() is not None
+
+
+def test_new_companion_strategies_still_cannot_win_a_tournament():
+    # Requirement (b): a companion strategy can never be a tournament
+    # winner, rtk and token-optimizer included now that they are curated,
+    # prescribable treatments. Calibrated by reinjecting the exact defect
+    # the guard exists to catch (see below), the test goes RED, then the
+    # original is restored and the test goes GREEN again.
+    real = adv.load_strategies(STRATEGIES_PATH)
+    profile = nest({"usage.output_tokens_total": leaf(450_000)})  # fires
+    # rtk (>=350000), token-optimizer (>=400000) and token-saver (>=200000)
+    # all at once, all category "companion": none may ever win. (Below their
+    # own thresholds, redundancy.bounded-reads and output.isolate-huge-logs
+    # do not fire, so this tournament renders only if the guard is broken;
+    # a winner dict only ever carries id/title/fit, never category, so the
+    # companion_ids id check below is the only sound way to test this.)
+    companion_ids = {"companion.rtk", "companion.token-optimizer", "companion.token-saver"}
+    result = adv.advise(profile, {}, real)
+    for t in result["tournaments"]:
+        assert t["winner"]["id"] not in companion_ids, t["winner"]
+
+    # Reinject: build_tournaments()'s own guard is the "is_companion" flag
+    # _tournament_candidate() stamps onto every candidate (never the
+    # winner pool unless forced to match advise()'s own best card, which
+    # itself can never be a companion). Blind that one flag to False for
+    # every candidate, exactly the defect class finding C2/M2 already
+    # calibrated against for token-saver alone, and confirm it now also
+    # lets the newer rtk and token-optimizer siblings win, then restore.
+    real_tournament_candidate = adv._tournament_candidate
+
+    def _blind_tournament_candidate(strategy, profile):
+        c = real_tournament_candidate(strategy, profile)
+        c["is_companion"] = False
+        return c
+
+    adv._tournament_candidate = _blind_tournament_candidate
+    try:
+        result_broken = adv.advise(profile, {}, real)
+        winners = [t["winner"]["id"] for t in result_broken["tournaments"]]
+        went_red = any(w in companion_ids for w in winners)
+        assert went_red, ("reinjection did not reproduce the defect", winners)
+    finally:
+        adv._tournament_candidate = real_tournament_candidate
+
+    # Confirmed green again with the real _sort_key restored.
+    result_fixed = adv.advise(profile, {}, real)
+    for t in result_fixed["tournaments"]:
+        assert t["winner"]["id"] not in companion_ids, t["winner"]
+
+
+def test_recipe_refuses_for_a_mention_like_context_mode():
+    # Requirement (c): asking for a recipe for a MENTION (never curated,
+    # by design: NO DATA on rollback is the reason it is a mention at all)
+    # must refuse with the reason, never invent a command. context-mode is
+    # confirmed first-party but has no documented Claude Code uninstall,
+    # which is exactly why it lives in "mentions" and not "companions".
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        rc = adv.cmd_recipe("context-mode")
+    out = buf.getvalue()
+    assert rc == 2, out
+    assert "REFUSED" in out, out
+    assert "context-mode" in out, out
+
+    # Calibrated: if context-mode were ever accidentally promoted into the
+    # curated "companions" list (the exact mistake the mentions/companions
+    # split exists to prevent), the recipe would stop refusing. Prove that
+    # by promoting it on a throwaway copy of the real registry and watching
+    # the refusal disappear, then confirm the real, unbroken registry still
+    # refuses.
+    import tempfile
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    promoted = json.loads(json.dumps(real_data))
+    context_mode_mention = next(m for m in promoted["mentions"] if m["name"] == "context-mode")
+    promoted["companions"].append({
+        "name": "context-mode", "install": "invented install",
+        "uninstall": "invented uninstall",
+        "tested_version_range": {"min": "1.0.169", "max": "1.0.169", "tested_on": "2026-08-15"},
+    })
+    del context_mode_mention
+    real_path = adv.ts.COMPANIONS_PATH
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "companions.json")
+        with open(path, "w") as f:
+            json.dump(promoted, f)
+        adv.ts.COMPANIONS_PATH = path
+        try:
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                rc2 = adv.cmd_recipe("context-mode")
+            went_red = rc2 == 0
+            assert went_red, "reinjection (accidental promotion) did not reproduce the defect"
+        finally:
+            adv.ts.COMPANIONS_PATH = real_path
+
+    buf3 = io.StringIO()
+    with contextlib.redirect_stdout(buf3):
+        rc3 = adv.cmd_recipe("context-mode")
+    assert rc3 == 2, buf3.getvalue()
+
+
+def test_curated_registry_install_and_rollback_strings_are_non_empty():
+    # Requirement (d). Calibrated: blank one curated entry's uninstall on a
+    # temp copy of the real registry, confirm the check catches it (RED),
+    # then confirm the real, unbroken registry passes (GREEN).
+    with open(os.path.join(HERE, "..", "data", "companions.json")) as f:
+        real_data = json.load(f)
+    for c in real_data["companions"]:
+        assert c.get("install"), c["name"]
+        assert c.get("uninstall"), c["name"]
+
+    broken = json.loads(json.dumps(real_data))
+    broken["companions"][0]["uninstall"] = ""
+    caught = not all(c.get("uninstall") for c in broken["companions"])
+    assert caught, "reinjection (blanked uninstall) did not reproduce the defect"
 
 
 if __name__ == "__main__":

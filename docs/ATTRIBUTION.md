@@ -46,3 +46,41 @@ number, and neither pretends to be it.
   equivalent value, what the same usage would cost on the API. It is
   never phrased as "you saved $X", because a subscription does not
   bill per token the way the API does.
+
+## Companion Fabric credits (unit CF1)
+
+The following projects were reviewed against their own first-party
+sources (repository, manifest, README, or release notes) on
+2026-08-15, per `docs/research/2026-08-15-companion-fabric-facts.md`.
+Every one is someone else's project; this section credits each by
+name, owner and license. A published percentage attributed to a
+project below is that project's own claim, in its own words, never a
+Token Shield measurement.
+
+Curated (prescribable treatments):
+
+- **token-saver**, ppgranger (github.com/ppgranger/token-saver),
+  Apache 2.0. Promoted from detect-and-measure only to a prescribable
+  treatment this review, its identity having already been settled
+  first party.
+- **rtk**, rtk-ai (github.com/rtk-ai/rtk), Apache 2.0.
+- **token-optimizer** (Token Optimizer MCP), ooples
+  (github.com/ooples/token-optimizer-mcp), MIT.
+
+Mentions (named honestly, never prescribed, with the reason on file in
+`data/companions.json`):
+
+- **context-mode**, Mert Koseoglu (github.com/mksglu/context-mode),
+  Elastic License 2.0. Confirmed first-party; not prescribable because
+  no uninstall command is documented for the Claude Code path.
+- **ccusage**, ryoppippi (github.com/ryoppippi/ccusage), MIT. A meter,
+  never a treatment.
+- **claude-code-token-saver**, ww-w-ai
+  (github.com/ww-w-ai/claude-code-token-saver), Apache 2.0. A
+  different project from the token-saver companion above; named here
+  to prevent that exact confusion.
+- **codeburn**, getagentseal (github.com/getagentseal/codeburn), MIT.
+  A meter primarily. Name caveat: no first-party source for a project
+  literally spelled "CodeBurn" was found; getagentseal/codeburn,
+  lowercase, is the closest match and is credited as such, not as a
+  confirmed identity.

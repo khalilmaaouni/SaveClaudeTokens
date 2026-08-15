@@ -68,6 +68,18 @@ is not in the curated registry, or a registry entry missing a required
 field, is refused with the exact reason printed: no recipe is ever
 invented. See cmd_recipe() below.
 
+LOAD TIME REFUSAL (unit CF1)
+companions.load_registry(), used wherever this file needs the curated
+registry's own names (_curated_companion_names(), which feeds aggressive
+mode), validates every curated entry's install and uninstall commands the
+moment data/companions.json loads, raising ValueError naming the exact
+companion and field, the same way load_strategies() above refuses a
+strategy naming an unknown problem_class. We never prescribe a companion
+we cannot tell a user how to undo; this is that policy made mechanical
+instead of only documented. cmd_recipe() keeps its own separate, graceful,
+per-name refusal through describe() unchanged, since a bad --recipe lookup
+should print a clean reason and exit 2, never crash the whole command.
+
 TREATMENT TOURNAMENT
 Each strategy names one "problem_class", one of the PROBLEM_CLASSES enum
 (cache health, startup rent, overbuild, tool output, verbosity,
@@ -109,7 +121,7 @@ import sys
 import time
 
 import token_shield as ts
-from companions import describe, load_state
+from companions import describe, load_registry, load_state
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STRATEGIES = os.path.join(HERE, "..", "data", "strategies.json")
@@ -260,10 +272,12 @@ def load_strategies(path=DEFAULT_STRATEGIES):
 def _curated_companion_names(companions_path=None):
     """Names in data/companions.json's own "companions" list (the CURATED
     registry), never "mentions" (data/companions.json's own "NO DATA: not
-    yet verified first-party" entries). Reuses token_shield.load_companions
-    rather than a second reader; a missing or corrupt file is an empty set,
-    never a guess."""
-    data = ts.load_companions(companions_path or ts.COMPANIONS_PATH)
+    yet verified first-party" entries). Reuses companions.load_registry
+    rather than a second reader, so a curated entry missing its rollback
+    command is refused right here, loudly, rather than silently offered in
+    aggressive mode. A missing or corrupt file is an empty set, never a
+    guess."""
+    data = load_registry(companions_path)
     return {c.get("name") for c in (data or {}).get("companions", [])}
 
 
