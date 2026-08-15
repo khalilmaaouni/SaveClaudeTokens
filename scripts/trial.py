@@ -56,6 +56,14 @@ def run(root, days, out=None):
         print("Use Claude Code for a session or two, then run this again.", file=out)
         return 0
 
+    # Measured at 21 seconds of total silence on a real machine, reported at
+    # 36 on a longer history. This is the FIRST thing a stranger runs, before
+    # they have any reason to trust the project, and a blank terminal reads as
+    # a hang. cli.py summary already prints a line like this before its own
+    # scan; the trial needed it more and did not have it. stderr, not stdout,
+    # so anything piping the reading stays clean.
+    print(f"Reading your Claude Code transcripts under {root} (last {days:g} "
+          f"days). On a long history this takes up to a minute.", file=sys.stderr)
     sessions = mt.collect(root, days)
     sm = mt.summarize(sessions)
     skip = mt.skip_counts()
@@ -70,16 +78,32 @@ def run(root, days, out=None):
         return 0
 
     print("Token Shield trial run: zero install, reads only, nothing sent anywhere", file=out)
-    print(f"MEASURED  {mt.fmt(sm['sessions'])} transcripts "
-          f"({mt.fmt(sm['parent_sessions'])} sessions), "
+    # The labels carry the whole honesty claim of this product, and they used
+    # to appear with no legend anywhere on screen. The module docstring
+    # defines them, which nobody reading a terminal has open.
+    print("MEASURED = counted from your own machine. NATIVE = Anthropic's own "
+          "caching, not this tool. ESTIMATED = a projection.", file=out)
+    # Sessions first: a person has sessions, and transcripts are only the
+    # files those sessions happen to be stored in. This led with transcripts,
+    # which is the number that means least to the reader.
+    print(f"MEASURED  {mt.fmt(sm['parent_sessions'])} sessions "
+          f"({mt.fmt(sm['sessions'])} transcript files), "
           f"{mt.fmt(sm['total_calls'])} calls, last {days:g} days", file=out)
     if skip["files"] or skip["lines"]:
         print(f"          skipped {skip['files']} unreadable file(s) and "
               f"{skip['lines']} unreadable line(s); the rest still measured", file=out)
 
+    # One quantity, one format. This printed "0.365 share of everything read"
+    # here and "36% of everything a session reads" seven lines below, and a
+    # reader has no way to tell those are the same fact. The percentage is the
+    # readable one, so both places use it.
+    share = sm.get("first_request_share_median")
+    share_txt = (f"{share * 100:.0f}% of everything read"
+                 if isinstance(share, (int, float)) and not isinstance(share, bool)
+                 else "NO DATA on its share of everything read")
     print(f"MEASURED  startup floor, paid again on every call: "
           f"{mt.fmt(sm['first_request_median'])} tokens median, "
-          f"{mt.fmt(sm['first_request_share_median'])} share of everything read", file=out)
+          f"{share_txt}", file=out)
     print(f"MEASURED  cache hit ratio median: {mt.fmt(sm['hit_ratio_median'])}", file=out)
     print(f"MEASURED  output tokens: {mt.fmt(sm['output_total'])} total, "
           f"{mt.fmt(sm['subagent_output_share'])} of it from subagents", file=out)

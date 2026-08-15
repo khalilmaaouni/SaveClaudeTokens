@@ -85,11 +85,37 @@ def test_no_data_when_root_empty():
 
 
 def test_no_data_when_transcripts_carry_no_usage():
+    """The fixture must REACH the parser, or this tests nothing.
+
+    It used to be `["{}", '{"no": "usage here"}']`, and neither line ever got
+    parsed: trial.py skips any line not containing the exact substring
+    `"usage"` (with the closing quote), and `{"no": "usage here"}` has
+    `"usage here"`, so the quote falls in the wrong place and the gate drops
+    it. Both lines were discarded before any usage handling ran, which made
+    this an exact duplicate of test_no_data_when_root_empty above it while
+    reading like coverage of a different path.
+
+    The gate is asserted here rather than assumed, so a future change to that
+    substring cannot quietly hollow this test out again."""
+    parsed_but_empty = '{"message": {"usage": {}}, "timestamp": "2026-08-12T10:00:00Z"}'
+    assert '"usage"' in parsed_but_empty, (
+        "the fixture must pass trial.py's own line gate, or it is never parsed")
+
     with tempfile.TemporaryDirectory() as d:
-        _write(os.path.join(d, "s.jsonl"), ["{}", '{"no": "usage here"}'])
+        _write(os.path.join(d, "s.jsonl"), [parsed_but_empty])
         rc, text = _run(d)
     assert rc == 0, rc
     assert "NO DATA" in text
+
+    # Control, so the NO DATA above is known to come from an empty usage
+    # object and not from the file being ignored for some other reason: the
+    # same shape carrying real counters does NOT say NO DATA.
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"), [_rec(f"2026-08-12T10:0{i}:00Z") for i in range(5)])
+        rc2, text2 = _run(d)
+    assert rc2 == 0, rc2
+    assert "Biggest lever" in text2, (
+        "the control fixture produced no reading, so the NO DATA above proves nothing")
 
 
 # --- malformed transcript: named skip, never a crash ------------------------
@@ -132,12 +158,164 @@ def test_malformed_file_does_not_crash_other_sessions():
 def test_source_has_no_write_or_delete_calls():
     # Calibrated: adding `open(os.path.join(root, "x"), "w")` to trial.py's
     # run() makes this go red immediately, without needing to execute it.
+    # WHAT THIS MISSED, and why the runtime guard below it exists. The list
+    # was ('"w")', "'w')", '"w+"', os.makedirs, os.remove, os.unlink,
+    # shutil., os.mkdir), which reads as thorough and is not: append mode
+    # writes, Path.write_text and write_bytes, os.rename and os.replace, and
+    # a plain binary "wb" all write to disk and none of them appear in it. A
+    # source scan can only ever catch the spellings someone thought of, which
+    # is why it is the cheap first line here and not the proof.
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "trial.py")).read()
-    forbidden = ('"w")', "'w')", '"w+"', "os.makedirs", "os.remove",
-                 "os.unlink", "shutil.", "os.mkdir")
+    forbidden = ('"w")', "'w')", '"w+"', '"wb"', "'wb'", '"a")', "'a')",
+                 '"ab"', '"x")', "write_text", "write_bytes",
+                 "os.makedirs", "os.remove", "os.unlink", "os.rename",
+                 "os.replace", "os.rmdir", "os.removedirs", "shutil.",
+                 "os.mkdir")
     hits = [f for f in forbidden if f in src]
     assert not hits, f"trial.py source contains write/delete calls: {hits}"
+
+
+def test_the_first_screen_is_readable_by_someone_who_has_never_seen_it():
+    """The trial is the FIRST thing a stranger runs, before they have any
+    reason to trust this project. Measured on real data before this landed:
+    21 seconds of complete silence, then a screen that printed the same
+    quantity two ways and led every line with the word that means least.
+
+    Four things, each of which was observed rather than imagined:
+
+    1. `0.365 share of everything read` on line three, and `36% of everything
+       a session reads` seven lines later. One number, two formats, and only
+       the second is readable. A reader cannot tell they are the same fact.
+    2. `3,704 transcripts (265 sessions)` leads with transcripts. A person
+       has sessions; transcripts are the files those sessions happen to be
+       stored in.
+    3. The labels MEASURED, NATIVE and ESTIMATED carry the whole honesty
+       claim of this product and appeared with no legend anywhere on screen.
+       The module docstring defines them, which nobody reading a terminal
+       has open.
+    4. Silence. `cli.py summary` already prints a progress line to stderr
+       before its scan; the trial, which is the screen that most needs one,
+       printed nothing at all. Covered by its own test below.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"),
+               [_rec(f"2026-08-12T10:0{i}:00Z") for i in range(5)])
+        _rc, text = _run(d)
+
+    lines = text.splitlines()
+    counts = [ln for ln in lines if "sessions" in ln and "MEASURED" in ln]
+    assert counts, "no counts line found"
+    counts = counts[0]
+    assert counts.index("session") < counts.index("transcript"), (
+        f"the counts line still leads with transcripts: {counts!r}")
+
+    # One quantity, one format. A bare 0.xxx share must not appear beside a
+    # percentage of the same thing.
+    assert "share of everything read" not in text, (
+        "the startup floor share is still printed as a bare decimal share")
+    floor_line = [ln for ln in lines if "startup floor" in ln][0]
+    assert "%" in floor_line, f"the floor share is not a percentage: {floor_line!r}"
+
+    # The labels that carry the honesty claim explain themselves on screen.
+    assert "MEASURED" in text and "NATIVE" in text and "ESTIMATED" in text
+    legend = [ln for ln in lines if "MEASURED" in ln and "ESTIMATED" in ln
+              and "NATIVE" in ln]
+    assert legend, "the three confidence labels appear with no legend on screen"
+
+
+def test_the_trial_says_it_is_working_before_it_goes_quiet():
+    """Measured at 21 seconds of silence on a real machine, and reported at 36
+    on a larger history. A first-time reader with no reason to trust this yet
+    watches a blank terminal and concludes it hung.
+
+    The line goes to stderr, not stdout, so anything piping the trial's
+    reading stays clean. That is the same choice cli.py summary already made,
+    and this is that fix applied to the screen that needed it more."""
+    import contextlib as _ctx
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"),
+               [_rec(f"2026-08-12T10:0{i}:00Z") for i in range(5)])
+        errbuf = io.StringIO()
+        outbuf = io.StringIO()
+        with _ctx.redirect_stderr(errbuf):
+            rc = tr.run(d, 30, out=outbuf)
+
+    assert rc == 0, rc
+    progress = errbuf.getvalue()
+    assert progress.strip(), "the trial still starts with no sign of life at all"
+    assert "read" in progress.lower(), (
+        f"the progress line does not say what it is doing: {progress!r}")
+    assert "$" not in progress and "MEASURED" not in progress, (
+        "the progress line must not carry findings; stdout is where the reading goes")
+    assert "MEASURED" in outbuf.getvalue(), "the reading itself must still reach stdout"
+
+
+def test_no_write_anywhere_on_the_filesystem_not_just_under_its_own_root():
+    """The proof the two tests above only gesture at.
+
+    The source scan catches spellings someone listed. The before/after
+    snapshot catches writes UNDER THE SANDBOX ROOT only, so a write to
+    ~/.token-shield, to a temp directory, or to the repository itself was
+    invisible to both, and that is exactly where a real accidental write
+    would go: trial.py's whole promise is that a stranger can run it before
+    trusting this project with anything.
+
+    So the write primitives themselves are taken away for the duration of
+    the run. Reading is untouched, and anything that mutates raises with the
+    call named."""
+    import builtins
+    import shutil as _shutil
+
+    real_open = builtins.open
+    attempts = []
+
+    def _read_only_open(file, mode="r", *a, **k):
+        if any(ch in mode for ch in "wax+"):
+            attempts.append(f"open({file!r}, {mode!r})")
+            raise AssertionError(f"trial.py opened {file!r} for writing (mode {mode!r})")
+        return real_open(file, mode, *a, **k)
+
+    def _blocked(name):
+        def _refuse(*a, **k):
+            attempts.append(f"{name}{a[:2]}")
+            raise AssertionError(f"trial.py called {name}, which mutates the filesystem")
+        return _refuse
+
+    patched = {
+        (os, "rename"): _blocked("os.rename"),
+        (os, "replace"): _blocked("os.replace"),
+        (os, "remove"): _blocked("os.remove"),
+        (os, "unlink"): _blocked("os.unlink"),
+        (os, "mkdir"): _blocked("os.mkdir"),
+        (os, "makedirs"): _blocked("os.makedirs"),
+        (os, "rmdir"): _blocked("os.rmdir"),
+        (_shutil, "rmtree"): _blocked("shutil.rmtree"),
+        (_shutil, "copy"): _blocked("shutil.copy"),
+        (_shutil, "move"): _blocked("shutil.move"),
+    }
+    saved = {(obj, name): getattr(obj, name) for obj, name in patched}
+
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "s.jsonl"),
+               [_rec(f"2026-08-12T10:0{i}:00Z") for i in range(5)])
+        # The fixture is written BEFORE the primitives are taken away, so the
+        # only writer under test is trial.py itself.
+        builtins.open = _read_only_open
+        for (obj, name), fn in patched.items():
+            setattr(obj, name, fn)
+        try:
+            buf = io.StringIO()
+            rc = tr.run(d, 30, out=buf)
+        finally:
+            builtins.open = real_open
+            for (obj, name), fn in saved.items():
+                setattr(obj, name, fn)
+
+    assert not attempts, f"trial.py tried to write: {attempts}"
+    assert rc == 0, rc
+    assert "Biggest lever" in buf.getvalue(), (
+        "the run produced no reading, so proving it wrote nothing proves nothing")
 
 
 def test_never_writes_to_disk():
@@ -194,7 +372,17 @@ def test_labels_stay_separate_and_no_dollars_shown():
         native = ts.savings_breakdown(sm)["saved"]
     assert rc == 0, rc
     assert "$" not in text, "trial.py must never print a dollar figure"
-    assert text.count("NATIVE") == 1
+    # SHARPENED, not loosened. This was `text.count("NATIVE") == 1`, which
+    # broke when the screen gained a legend defining the three labels for a
+    # first-time reader. What the assertion is actually for is that NATIVE
+    # labels exactly ONE figure and is never merged with a MEASURED total, so
+    # it now counts label positions rather than occurrences of the word: the
+    # legend is prose about the labels, not a labelled number.
+    labelled = [ln for ln in text.splitlines() if ln.startswith("NATIVE")]
+    assert len(labelled) == 1, f"NATIVE labels {len(labelled)} figures, expected 1"
+    legend = [ln for ln in text.splitlines()
+              if "MEASURED" in ln and "NATIVE" in ln and "ESTIMATED" in ln]
+    assert len(legend) == 1, "the legend defining the labels should appear exactly once"
     assert text.count("MEASURED") >= 1
     assert ts.human(native) in text
 
@@ -339,7 +527,15 @@ def test_the_trial_agrees_with_the_command_it_recommends_about_the_headline():
     def _headline(text, marker):
         """The number each surface prints, normalised out of its own unit
         suffix so a K/M/B difference can never be read as agreement."""
-        line = [ln for ln in text.splitlines() if marker in ln]
+        # startswith, not `in`: a headline is a line the label OPENS. Matching
+        # anywhere also caught the legend that defines the three labels for a
+        # first-time reader, which mentions every marker and carries no figure.
+        # startswith after strip, not `in`: a headline is a line the label
+        # OPENS (cli indents its own by two spaces, the trial does not).
+        # Matching anywhere also caught the legend that defines the three
+        # labels for a first-time reader, which mentions every marker and
+        # carries no figure of its own.
+        line = [ln for ln in text.splitlines() if ln.strip().startswith(marker)]
         assert len(line) == 1, (marker, line)
         blob = line[0].split(marker, 1)[1].strip().split(" ", 1)[0]
         assert blob[-1] in scale, (marker, blob)
