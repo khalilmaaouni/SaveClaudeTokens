@@ -29,6 +29,8 @@ lint = _load("context_lint")
 telem = _load("session_end_telemetry")
 export = _load("obsidian_export")
 shield = _load("token_shield")
+met = _load("metrics")
+fmt = _load("formatting")
 cfg = _load("config")
 mt = _load("measure_tokens")
 adv = _load("advisor")
@@ -206,12 +208,12 @@ def test_lever_naming_follows_the_measurement():
     shrink = {"first_request_share_median": 0.36, "hit_ratio_median": 0.95,
               "subagent_output_share": 0.1}
     assert export.lever(shrink, mt)[0] == "Shrink the always-loaded context"
-    assert shield.lever(shrink, mt)[0] == "Shrink the always-loaded context"
+    assert met.lever(shrink, mt)[0] == "Shrink the always-loaded context"
 
     cache = {"first_request_share_median": 0.05, "hit_ratio_median": 0.4,
              "subagent_output_share": 0.1}
     assert export.lever(cache, mt)[0] == "Keep the cache hot"
-    assert shield.lever(cache, mt)[0] == "Keep the cache hot"
+    assert met.lever(cache, mt)[0] == "Keep the cache hot"
 
     routing = {"first_request_share_median": 0.05, "hit_ratio_median": 0.95,
                "subagent_output_share": 0.5}
@@ -225,16 +227,16 @@ def test_lever_naming_follows_the_measurement():
     nodata = {"first_request_share_median": None, "hit_ratio_median": None,
               "subagent_output_share": None}
     assert export.lever(nodata, mt)[0] == "NO DATA"
-    assert shield.lever(nodata, mt)[0].startswith("Not enough")
+    assert met.lever(nodata, mt)[0].startswith("Not enough")
 
 
 def test_shield_saving_is_ninety_percent_of_cache_reads():
     # The hero number is the honest one: a cached token bills at 0.1x, so the
     # saving against the uncached price is 0.9x per read token.
-    assert shield.CACHE_READ == 0.1
-    assert shield.human(1_500_000) == "1.5M"
-    assert shield.human(76_300_000_000) == "76.3B"
-    assert shield.human(None) == "NO DATA"
+    assert met.CACHE_READ == 0.1
+    assert fmt.human(1_500_000) == "1.5M"
+    assert fmt.human(76_300_000_000) == "76.3B"
+    assert fmt.human(None) == "NO DATA"
 
 
 def test_shield_saving_is_net_of_the_write_premium():
@@ -243,7 +245,7 @@ def test_shield_saving_is_net_of_the_write_premium():
     # the net was the exact overstatement an audit flagged.
     sm = {"read_total": 100.0, "write_5m_total": 40.0, "write_1h_total": 10.0,
           "input_total": 5.0}
-    sv = shield.savings_breakdown(sm)
+    sv = met.savings_breakdown(sm)
     assert sv["gross"] == 90.0                      # 0.9 * 100
     assert sv["write_premium"] == 0.25 * 40 + 1.0 * 10   # 20.0
     assert sv["saved"] == 90.0 - 20.0               # 70.0 net, not 90 gross
@@ -271,8 +273,8 @@ def test_native_charges_a_premium_for_writes_whose_ttl_is_unknown():
     unsplit = dict(common, write_5m_total=0.0, write_1h_total=0.0,
                    write_unsplit_total=50.0)
 
-    sv_split = shield.savings_breakdown(split)
-    sv_unsplit = shield.savings_breakdown(unsplit)
+    sv_split = met.savings_breakdown(split)
+    sv_unsplit = met.savings_breakdown(unsplit)
 
     assert sv_unsplit["saved"] <= sv_split["saved"], (
         f"unknown-TTL writes reported a LARGER saving ({sv_unsplit['saved']}) "
@@ -295,10 +297,10 @@ def test_native_discloses_unpriceable_writes_and_stays_silent_without_them():
     The note names the volume, not a transcript count: the volume is what the
     counters actually carry. NO DATA beats a guess, including a guessed count.
     """
-    none_unsplit = shield.savings_breakdown(
+    none_unsplit = met.savings_breakdown(
         {"read_total": 100.0, "write_5m_total": 40.0, "write_1h_total": 10.0,
          "write_unsplit_total": 0.0, "input_total": 5.0})
-    some_unsplit = shield.savings_breakdown(
+    some_unsplit = met.savings_breakdown(
         {"read_total": 1e9, "write_5m_total": 0.0, "write_1h_total": 0.0,
          "write_unsplit_total": 1_200_000.0, "input_total": 5.0})
 
@@ -313,7 +315,7 @@ def test_savings_breakdown_survives_a_summary_missing_the_unsplit_key():
     # Callers pass partial summary dicts (the sibling premium test does), and
     # a summary written by an older schema has no unsplit key at all. A missing
     # key is zero, never a crash on a caller's first run.
-    sv = shield.savings_breakdown({"read_total": 100.0, "write_5m_total": 40.0,
+    sv = met.savings_breakdown({"read_total": 100.0, "write_5m_total": 40.0,
                                    "write_1h_total": 10.0, "input_total": 5.0})
     assert sv["write_unsplit"] == 0
     assert sv["saved"] == 70.0
@@ -375,7 +377,7 @@ def test_prescriptions_are_adaptive_and_carry_the_math():
                 + [sess(90000, 300, models=1) for _ in range(4)])
     sm = {"first_request_median": 90000, "first_request_share_median": 0.36,
           "read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0}
-    rx = shield.prescriptions(sm, sessions)
+    rx = met.prescriptions(sm, sessions)
     titles = [r["title"] for r in rx]
     assert "Switching model mid-session" in titles
     assert "The always-loaded startup floor" in titles
@@ -389,7 +391,7 @@ def test_prescriptions_are_adaptive_and_carry_the_math():
     clean = [sess(9000, 50, models=1) for _ in range(5)]
     sm_clean = {"first_request_median": 9000, "first_request_share_median": 0.10,
                 "read_total": 0, "write_5m_total": 0, "write_1h_total": 0, "input_total": 0}
-    assert shield.prescriptions(sm_clean, clean) == []
+    assert met.prescriptions(sm_clean, clean) == []
 
 
 def _leaf(v, label="MEASURED"):
@@ -454,7 +456,7 @@ def test_dashboard_new_sections_render_with_all_sources_present():
     # Calibrated: with the six shield.render_*() calls commented out of
     # render(), this test goes red (markers missing); restored, it is green.
     with tempfile.TemporaryDirectory() as d:
-        profile = shield.load_profile(_write_json(d, "profile.json",
+        profile = met.load_profile(_write_json(d, "profile.json",
                                                     _synthetic_profile(switch_share=0.5)))
         strategies = adv.load_strategies()
         advise_result = adv.advise(profile, {}, strategies)
@@ -473,7 +475,7 @@ def test_dashboard_new_sections_render_with_all_sources_present():
             f.write(json.dumps({"label": "shrink-claude-md", "confidence": "VERIFIED",
                                 "floor_reduction_tokens": 500,
                                 "timestamp": "2026-08-12T10:00:00+0000"}) + "\n")
-        experiment_rows = shield.load_experiment_rows(os.path.join(d, "savings.jsonl"))
+        experiment_rows = met.load_experiment_rows(os.path.join(d, "savings.jsonl"))
 
         sm, sessions = _sm_and_sessions()
         html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
@@ -597,7 +599,7 @@ def test_suppressed_treatment_reduces_the_rendered_queue():
     assert len(without["queue"]) == 2
     assert len(with_t["queue"]) == 1
 
-    n = shield.suppressed_recommendation_count(adv, profile, treatments, strategies)
+    n = met.suppressed_recommendation_count(adv, profile, treatments, strategies)
     assert n == 1
 
     # One fewer card renders once suppression bites. The rendered counts are
@@ -632,7 +634,7 @@ def test_companion_only_suppression_never_reads_as_the_users_own_choice():
     with_t = adv.advise(profile, treatments, strategies)
     assert len(with_t["queue"]) == 0
 
-    user_n, companion_n = shield.suppressed_recommendation_counts(adv, profile, treatments, strategies)
+    user_n, companion_n = met.suppressed_recommendation_counts(adv, profile, treatments, strategies)
     assert user_n == 1, user_n
     assert companion_n == 1, companion_n
 
@@ -646,7 +648,7 @@ def test_companion_only_suppression_never_reads_as_the_users_own_choice():
     # honesty defect this fix closes.
     companion_only = {"startup.b": treatments["startup.b"]}
     with_c = adv.advise(profile, companion_only, strategies)
-    user_n2, companion_n2 = shield.suppressed_recommendation_counts(adv, profile, companion_only, strategies)
+    user_n2, companion_n2 = met.suppressed_recommendation_counts(adv, profile, companion_only, strategies)
     assert user_n2 == 0, user_n2
     assert companion_n2 == 1, companion_n2
     html_c = shield.render_recommendation_queue(with_c, user_n2, companion_n2)
@@ -686,7 +688,7 @@ def test_verified_headline_is_per_label_and_never_a_cross_label_total():
         {"label": "prune-mcp", "confidence": "VERIFIED", "direction": "regression",
          "floor_reduction_tokens": -8000, "timestamp": "2026-08-03T10:00:00+0000"},
     ]
-    verified = shield.verified_by_label(rows)
+    verified = met.verified_by_label(rows)
     assert [r["label"] for r in verified] == ["diet-claude-md", "prune-mcp"], verified
     assert [r["floor_reduction"] for r in verified] == [5000, -8000], verified
     # M3/m1. A regression must never carry the same shape as a saving on the
@@ -720,7 +722,7 @@ def test_verified_headline_shows_one_labels_own_number():
              "floor_reduction_tokens": 7000, "timestamp": "2026-08-04T10:00:00+0000"},
             {"label": "half-done", "confidence": "NOT_PROVEN",
              "floor_reduction_tokens": 900, "timestamp": "2026-08-05T10:00:00+0000"}]
-    verified = shield.verified_by_label(rows)
+    verified = met.verified_by_label(rows)
     assert len(verified) == 1, verified              # NOT_PROVEN is not VERIFIED
     assert verified[0]["floor_reduction"] == 7000    # latest run of the label wins
     big, under = shield.render_verified_hero(verified)
@@ -750,7 +752,7 @@ def test_experiment_label_is_escaped_before_it_reaches_the_page():
     assert "<script>" not in history, history
     assert "&lt;img src=x onerror=alert(1)&gt;" in history, history
 
-    hero_big, hero_under = shield.render_verified_hero(shield.verified_by_label(rows))
+    hero_big, hero_under = shield.render_verified_hero(met.verified_by_label(rows))
     assert payload not in hero_big + hero_under
 
     companions = shield.render_companions(
@@ -772,7 +774,7 @@ def test_experiment_label_is_escaped_before_it_reaches_the_page():
 
     sm, sessions = _sm_and_sessions()
     html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
-                         verified=shield.verified_by_label(rows), profile=None,
+                         verified=met.verified_by_label(rows), profile=None,
                          advise_result=advice, companions_data=None, experiment_rows=rows)
     assert payload not in html
     assert "onerror=alert(1)>" not in html
@@ -813,7 +815,7 @@ def test_waterfall_never_sums_percentages_or_marginal_deltas():
          "floor_reduction_tokens": 410000, "fingerprint_start": "fpB",
          "fingerprint_end": "fpC", "cohort_before": {"start": 3000, "end": 4000}},
     ]
-    wf = shield.build_waterfall(rows, "core", "companion")
+    wf = met.build_waterfall(rows, "core", "companion")
     assert wf["separable"] is True, wf
     assert wf["baseline_a"] == 1000000 and wf["point_b"] == 800000 and wf["point_c"] == 400000
     assert wf["core_delta"] == 200000 and wf["companion_delta"] == 410000
@@ -855,7 +857,7 @@ def test_waterfall_declares_interaction_not_separable_on_fingerprint_break():
          "floor_reduction_tokens": 410000, "fingerprint_start": "fpB-companion-v2",
          "fingerprint_end": "fpC", "cohort_before": {"start": 3000, "end": 4000}},
     ]
-    wf = shield.build_waterfall(rows, "core", "companion")
+    wf = met.build_waterfall(rows, "core", "companion")
     assert wf["separable"] is False, wf
     assert wf["total_delta"] is None and wf["total_delta_pct"] is None, wf
     assert "NOT SEPARABLE" in wf["interaction_note"], wf["interaction_note"]
@@ -882,7 +884,7 @@ def test_waterfall_declares_interaction_not_separable_on_overlapping_windows():
          "floor_reduction_tokens": 410000, "fingerprint_start": "fpB",
          "fingerprint_end": "fpC", "cohort_before": {"start": 2500, "end": 4000}},
     ]
-    wf = shield.build_waterfall(rows, "core", "companion")
+    wf = met.build_waterfall(rows, "core", "companion")
     assert wf["separable"] is False, wf
     assert "NOT SEPARABLE" in wf["interaction_note"], wf["interaction_note"]
     assert "overlap" in wf["interaction_note"], wf["interaction_note"]
@@ -892,7 +894,7 @@ def test_waterfall_empty_ledger_is_no_data_not_zero():
     # Calibrated: an empty ledger must never render a total of 0 or a blank
     # section; it must say NO DATA. If build_waterfall silently defaulted
     # missing records to 0 instead of NO DATA, this goes red.
-    wf = shield.build_waterfall([], "core", "companion")
+    wf = met.build_waterfall([], "core", "companion")
     assert wf["core"]["status"] == "NO DATA" and wf["companion"]["status"] == "NO DATA", wf
     assert wf["separable"] is False and wf["total_delta"] is None, wf
     html = shield.render_waterfall(wf, "core", "companion")
@@ -915,7 +917,7 @@ def test_waterfall_confidence_labels_never_blend_on_one_line():
         {"label": "companion", "confidence": "NOT_PROVEN", "timestamp": "2026-08-05T10:00:00+0000",
          "reasons": ["only 1 sessions after the change, need 3"]},
     ]
-    wf = shield.build_waterfall(rows, "core", "companion")
+    wf = met.build_waterfall(rows, "core", "companion")
     assert wf["core"]["status"] == "VERIFIED" and wf["companion"]["status"] == "NOT_PROVEN", wf
     assert wf["separable"] is False, wf
 
@@ -932,7 +934,7 @@ def test_top_strip_shows_confidence_labelled_cells_when_data_is_present():
     # install check render_companions() runs, the ranked prescriptions list,
     # and the advisor's own top pick.
     with tempfile.TemporaryDirectory() as d:
-        profile = shield.load_profile(_write_json(d, "profile.json",
+        profile = met.load_profile(_write_json(d, "profile.json",
                                                     _synthetic_profile(switch_share=0.5)))
         strategies = adv.load_strategies()
         advise_result = adv.advise(profile, {}, strategies)
@@ -951,8 +953,8 @@ def test_top_strip_shows_confidence_labelled_cells_when_data_is_present():
             f.write(json.dumps({"label": "shrink-claude-md", "confidence": "VERIFIED",
                                 "floor_reduction_tokens": 500,
                                 "timestamp": "2026-08-12T10:00:00+0000"}) + "\n")
-        experiment_rows = shield.load_experiment_rows(os.path.join(d, "savings.jsonl"))
-        verified = shield.verified_by_label(experiment_rows)
+        experiment_rows = met.load_experiment_rows(os.path.join(d, "savings.jsonl"))
+        verified = met.verified_by_label(experiment_rows)
 
         sm, sessions = _sm_and_sessions()
         html = shield.render(mt, sm, sessions, 30, "stamp", include_sessions=False,
@@ -1004,7 +1006,7 @@ def test_verified_row_with_matching_fingerprint_renders_verified_not_historical(
     rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
              "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000",
              "fingerprint_end": "current-fp", "schema": 2, "treats": None}]
-    verified = shield.verified_by_label(rows, exp_mod)
+    verified = met.verified_by_label(rows, exp_mod)
     assert verified[0]["historical"] is False, verified
     assert verified[0]["historical_reason"] is None, verified
 
@@ -1026,7 +1028,7 @@ def test_verified_row_with_differing_fingerprint_renders_historical_with_reason(
     rows = [{"label": "diet-claude-md", "confidence": "VERIFIED",
              "floor_reduction_tokens": 5000, "timestamp": "2026-08-01T10:00:00+0000",
              "fingerprint_end": "stale-fp-from-last-week", "schema": 2, "treats": None}]
-    verified = shield.verified_by_label(rows, exp_mod)
+    verified = met.verified_by_label(rows, exp_mod)
     assert verified[0]["historical"] is True, verified
     assert verified[0]["historical_reason"], verified
     assert "moved" in verified[0]["historical_reason"], verified
@@ -1048,7 +1050,7 @@ def test_verified_row_with_no_fingerprint_stays_verified_never_false_historical(
     exp_mod = _FakeExpMod()
     rows = [{"label": "legacy-label", "confidence": "VERIFIED",
              "floor_reduction_tokens": 3000, "timestamp": "2026-08-01T10:00:00+0000"}]
-    verified = shield.verified_by_label(rows, exp_mod)
+    verified = met.verified_by_label(rows, exp_mod)
     assert verified[0]["historical"] is False, verified
     assert verified[0]["historical_reason"] is None, verified
 
@@ -1057,7 +1059,7 @@ def test_verified_row_with_no_fingerprint_stays_verified_never_false_historical(
 
     # Same guarantee with exp_mod entirely absent (the default), the shape
     # every existing caller in this file already uses.
-    verified_no_mod = shield.verified_by_label(rows)
+    verified_no_mod = met.verified_by_label(rows)
     assert verified_no_mod[0]["historical"] is False, verified_no_mod
 
 

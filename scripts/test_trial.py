@@ -16,6 +16,8 @@ import measure_tokens as mt
 import token_shield as ts
 
 
+import metrics as met
+import formatting as fmt
 def _rec(ts_str, model="claude-x", inp=100, w5=0, w1=0, read=900, out=50,
          sidechain=False):
     msg = {
@@ -353,7 +355,7 @@ def test_main_never_writes_and_returns_zero_on_real_data():
 # --- labels stay separate, never merged or totalled -------------------------
 
 def test_labels_stay_separate_and_no_dollars_shown():
-    # Calibrated: replacing the NATIVE line's `ts.human(native)` call with a
+    # Calibrated: replacing the NATIVE line's `fmt.human(native)` call with a
     # combined MEASURED+NATIVE total, or adding a "$" figure, makes the
     # dollar-free assertion below go red.
     with tempfile.TemporaryDirectory() as d:
@@ -369,7 +371,7 @@ def test_labels_stay_separate_and_no_dollars_shown():
         # exists.
         sessions = mt.collect(d, 30)
         sm = mt.summarize(sessions)
-        native = ts.savings_breakdown(sm)["saved"]
+        native = met.savings_breakdown(sm)["saved"]
     assert rc == 0, rc
     assert "$" not in text, "trial.py must never print a dollar figure"
     # SHARPENED, not loosened. This was `text.count("NATIVE") == 1`, which
@@ -384,7 +386,7 @@ def test_labels_stay_separate_and_no_dollars_shown():
               if "MEASURED" in ln and "NATIVE" in ln and "ESTIMATED" in ln]
     assert len(legend) == 1, "the legend defining the labels should appear exactly once"
     assert text.count("MEASURED") >= 1
-    assert ts.human(native) in text
+    assert fmt.human(native) in text
 
 
 def test_lever_line_present_with_enough_data():
@@ -505,7 +507,7 @@ def test_the_trial_agrees_with_the_command_it_recommends_about_the_headline():
             ])
 
         sm = mt.summarize(mt.collect(d, 30))
-        rx = ts.prescriptions(sm, mt.collect(d, 30))
+        rx = met.prescriptions(sm, mt.collect(d, 30))
         assert len(rx) > 1, (
             "fixture produced only one lever, so this contract cannot fail and "
             "the test would prove nothing")

@@ -84,10 +84,10 @@ def test_net_saving_is_the_canonical_formula():
 def test_dashboard_and_meter_agree_on_the_formula():
     # The dashboard's savings_breakdown must equal net_saving on the same
     # aggregate, or two views would quote different savings.
-    import token_shield as ts
+    import metrics as met
     sm = {"read_total": 100_000, "write_5m_total": 10_000, "write_1h_total": 5_000,
           "input_total": 0}
-    sv = ts.savings_breakdown(sm)
+    sv = met.savings_breakdown(sm)
     check("dashboard saving == canonical net_saving on the aggregate",
           abs(sv["saved"] - mt.net_saving(100_000, 10_000, 5_000)) < 1e-6)
 
@@ -247,8 +247,8 @@ def test_summary_scans_the_transcripts_once_and_says_so_on_stderr():
     calls = []
     passed = []
     sessions = ["<the one collected batch>"]
-    real = (cli.mt.collect, cli.mt.summarize, cli.ts.savings_breakdown,
-            cli.ts.native_note, cli.ts.prescriptions, cli.ROOT)
+    real = (cli.mt.collect, cli.mt.summarize, cli.met.savings_breakdown,
+            cli.ts.native_note, cli.met.prescriptions, cli.ROOT)
 
     def fake_collect(root, days):
         calls.append((root, days))
@@ -261,15 +261,15 @@ def test_summary_scans_the_transcripts_once_and_says_so_on_stderr():
     with tempfile.TemporaryDirectory() as d:
         cli.mt.collect = fake_collect
         cli.mt.summarize = lambda s: {"first_request_median": 0}
-        cli.ts.savings_breakdown = lambda sm: {"saved": 0}
+        cli.met.savings_breakdown = lambda sm: {"saved": 0}
         cli.ts.native_note = lambda sv: ""
-        cli.ts.prescriptions = fake_prescriptions
+        cli.met.prescriptions = fake_prescriptions
         cli.ROOT = d
         try:
             rc, out, err = _capture(cli.summary)
         finally:
-            (cli.mt.collect, cli.mt.summarize, cli.ts.savings_breakdown,
-             cli.ts.native_note, cli.ts.prescriptions, cli.ROOT) = real
+            (cli.mt.collect, cli.mt.summarize, cli.met.savings_breakdown,
+             cli.ts.native_note, cli.met.prescriptions, cli.ROOT) = real
 
     check("summary exits 0", rc == 0)
     check("the transcripts are collected once, not twice", len(calls) == 1)

@@ -11,6 +11,7 @@ import experiment as ex
 import measure_tokens as mt
 import token_shield as ts
 
+import metrics as met
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Every module global compute_fingerprint reads, and the temp-dir name each is
@@ -827,7 +828,7 @@ def test_non_default_metric_verified_record_never_reaches_verified_by_label():
     check("sanity: floor_reduction_tokens is None on a non-default metric",
           rec["floor_reduction_tokens"] is None)
     rows = [dict(rec, timestamp=rec.get("timestamp") or "2026-08-30T00:00:00")]
-    out = ts.verified_by_label(rows)
+    out = met.verified_by_label(rows)
     check("a non-default-metric VERIFIED record contributes no row to "
           "verified_by_label (a hit-ratio proof must never render as a "
           "token saving)", out == [])

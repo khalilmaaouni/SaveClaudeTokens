@@ -42,9 +42,9 @@ import measure_tokens as mt
 import profile as pf
 
 try:
-    import token_shield as ts
+    import metrics as met
 except Exception:
-    ts = None
+    met = None
 
 DEFAULT_ROOT = os.path.expanduser("~/.claude/projects")
 DEFAULT_OUT_DIR = os.path.expanduser("~/.token-shield/reports")
@@ -425,13 +425,13 @@ def build_report(year, month, root=None):
 
     # NATIVE BENEFIT
     lines.append("## Native caching benefit (NATIVE)")
-    if ts is None:
+    if met is None:
         lines.append("NO DATA: token_shield module not importable, so the native benefit "
                      "could not be computed.")
     elif not sm:
         lines.append("NO DATA: no usage this month to compute a native benefit from.")
     else:
-        native = ts.savings_breakdown(sm)
+        native = met.savings_breakdown(sm)
         lines.append(f"- net caching benefit: {mt.fmt(native['saved'])} base-input units "
                      f"(Anthropic's own caching, not this tool's)")
     lines.append("")
@@ -451,11 +451,11 @@ def build_report(year, month, root=None):
 
     # ADDRESSABLE OPPORTUNITY (ESTIMATED)
     lines.append("## Addressable opportunity (ESTIMATED)")
-    if ts is None or not sm:
+    if met is None or not sm:
         lines.append("NO DATA: cannot estimate an addressable opportunity without "
                      "measured usage this month.")
     else:
-        rx = ts.prescriptions(sm, sessions)
+        rx = met.prescriptions(sm, sessions)
         if not rx:
             lines.append("NO DATA: no prescription triggered against this month's sessions.")
         else:
