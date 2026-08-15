@@ -1,5 +1,34 @@
 # Token Shield: the 14 day leadership WBS, three windows
 
+## CORRECTED 2026-08-15 late, after an independent evidence audit
+
+Three corrections, kept visible here rather than edited in silently, following
+the precedent set by the field map correction in pull request 83. A plan that
+quietly repairs itself teaches nobody anything.
+
+1. **T10.1's done-check was unrunnable as written.** It chained the CLAUDE.md
+   full test line and the MCP install in one breath. That line begins
+   `python3 scripts/check_py311.py && cd scripts && ...` and never returns, so
+   the shell is left in `scripts/`, where `./mcp-server` does not exist. CI
+   never hit it because CI runs the two as separate steps from the repository
+   root. Fixed in the T10.1 and T10.2 rows below. Method defect: the done-check
+   was assembled by concatenating two commands that were each known to work,
+   without running the concatenation.
+
+2. **"Zero connectors" and "no export of any kind" were false.**
+   `scripts/obsidian_export.py` exists, is registered as a layer 7 module in
+   `test_architecture.py`, and writes markdown with an `--out` flag. What is
+   genuinely absent is a MACHINE READABLE export: no CSV, no webhook, and no
+   `csv` import anywhere under `scripts/` or `mcp-server/`. E7 is unchanged,
+   because CSV is still the missing thing. What changes is E1: obsidian_export
+   is not routed through `cli.py`, so it is a SIXTH front door, and the epic
+   that exists to make five doors into one was counting five.
+
+3. **The count in "three modules each overwrite one hash file" was wrong.** It
+   is two modules across three files: `optimize.py` at lines 175 and 369, and
+   `memory_trim.py` at line 128. `plugin_prune.py:142` overwrites a bundle
+   JSON, not a hash file. E6 is unaffected; the journal is still absent.
+
 Written 2026-08-15 evening. Governs 2026-08-15 through 2026-08-28.
 Compresses the founder's 45 day plan (TOKEN_SHIELD_CLAUDE_LEADERSHIP_WBS.md)
 into 14 days of parallel agent work. The release gate stays live the whole
@@ -168,8 +197,8 @@ provenance. OTel remains attributed, not competed with.
 
 | ID | Task | Owner | Model | Depends on | Files owned | Files forbidden | Deliverable | Done-check |
 |---|---|---|---|---|---|---|---|---|
-| T10.1 | Window 2 integration: the full documented suite plus the MCP suite and the bench run on the integration branch after the last W2 merge; fixes only, each signed off by A0, no redesign | A10 | sonnet | all W2 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run | the CLAUDE.md full test line, then `python3 -m pip install ./mcp-server && cd mcp-server && python3 test_mcp_server.py`, both exit 0 with output quoted in the integration PR |
-| T10.2 | Window 3 integration and close out: same commands, plus the close note naming everything UNVERIFIED with its blocker | A10 | sonnet | all W3 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run plus close note | same two commands, both exit 0, output quoted; the close note lists each UNVERIFIED item with its blocker |
+| T10.1 | Window 2 integration: the full documented suite plus the MCP suite and the bench run on the integration branch after the last W2 merge; fixes only, each signed off by A0, no redesign | A10 | sonnet | all W2 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run | three SEPARATE commands, each started from the repository root, never chained (see correction 1 at the top of this file): (a) the CLAUDE.md full test line; (b) `cd /Users/khalil.maaouni/SaveClaudeTokens && python3 -m pip install ./mcp-server && cd mcp-server && python3 test_mcp_server.py`; (c) `cd /Users/khalil.maaouni/SaveClaudeTokens && python3 bench/test_bench.py && python3 bench/generate_corpus.py --out /tmp/bench-corpus && python3 bench/run_benchmark.py --corpus /tmp/bench-corpus`. All three exit 0, output quoted in the integration PR |
+| T10.2 | Window 3 integration and close out: same commands, plus the close note naming everything UNVERIFIED with its blocker | A10 | sonnet | all W3 tasks merged | integration branch only | production files except A0 signed fixes | quoted green run plus close note | the same three separate commands as T10.1, each exit 0, output quoted; the close note lists each UNVERIFIED item with its blocker |
 
 No task in this table is NEEDS SCOPING. The one that came closest, T5.5, was
 scoped by deciding the semantics here: what is captured is the installed CLI
