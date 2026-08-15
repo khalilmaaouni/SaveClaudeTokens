@@ -21,6 +21,17 @@ import time
 import doctor as dr
 
 
+def _no_data_canary(root=None):
+    """A safe stand-in for dr._canary_result in every test that calls
+    dr.report() or dr.main(): never touches the founder's real
+    ~/.claude/projects, and keeps rc == 0 for tests asserting the pre-canary
+    contract."""
+    return {"transcripts": 0, "messages": 0, "recognised": 0, "parse_health": None,
+            "state": "NO DATA",
+            "reason": "NO DATA: no transcripts found; nothing to check yet.",
+            "exit_code": 0}
+
+
 def _companion(name, hook_footprint, last_reviewed="2026-08-13"):
     return {"name": name, "hook_footprint": hook_footprint, "last_reviewed": last_reviewed,
             "tested_version_range": {"min": "0", "max": "0", "tested_on": "2026-08-13"}}
@@ -102,11 +113,13 @@ def test_report_prints_shared_hook_and_never_conflict():
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
     dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -118,6 +131,7 @@ def test_report_prints_shared_hook_and_never_conflict():
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
 
     assert rc == 0
     assert "SHARED HOOK" in out, out
@@ -203,12 +217,14 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_compatibility = lambda: (None, "Expecting value: line 1 column 1 (char 0)")
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
     dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -221,6 +237,7 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
 
     assert rc == 0
     assert "malformed" in out.lower(), out
@@ -234,11 +251,13 @@ def test_main_completes_without_traceback_with_zero_companions_active():
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": [], "mentions": []}
     dr._ensure_fresh_state = lambda: {"schema": 1, "checked_at": "x", "discovered": [], "registry_match": {}}
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
     dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -250,6 +269,7 @@ def test_main_completes_without_traceback_with_zero_companions_active():
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
     assert rc == 0
     assert "conflict" not in out.lower(), out
 
@@ -294,11 +314,13 @@ def test_report_version_drift_detects_change_and_clean_line_when_matched():
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: matching_state
     dr._load_state = lambda path=None: matching_state
     dr.dc.discover = lambda: live_matching
     dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -310,6 +332,7 @@ def test_report_version_drift_detects_change_and_clean_line_when_matched():
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
 
     assert rc == 0
     assert "Version drift" in out, out
@@ -328,11 +351,13 @@ def test_report_version_drift_no_data_when_state_missing():
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: None
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: live
     dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -344,6 +369,7 @@ def test_report_version_drift_no_data_when_state_missing():
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
 
     assert rc == 0
     assert "Version drift" in out, out
@@ -476,12 +502,14 @@ def test_report_prints_facts_staleness_section_live():
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
     orig_load_facts = dr._load_facts
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
     dr._open_experiments = lambda exp_dir=None: []
     dr._load_facts = lambda path=None: ([_fact("A1", verified="2026-01-01", review_interval_days=90)], [], None)
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -494,6 +522,7 @@ def test_report_prints_facts_staleness_section_live():
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
         dr._load_facts = orig_load_facts
+        dr._canary_result = orig_canary
 
     assert rc == 0
     assert "Facts" in out, out
@@ -510,12 +539,14 @@ def test_report_facts_section_is_no_data_when_facts_file_malformed():
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
     orig_load_facts = dr._load_facts
+    orig_canary = dr._canary_result
     dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
     dr._open_experiments = lambda exp_dir=None: []
     dr._load_facts = lambda path=None: ([], [], "Expecting value: line 1 column 1 (char 0)")
+    dr._canary_result = _no_data_canary
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -528,6 +559,7 @@ def test_report_facts_section_is_no_data_when_facts_file_malformed():
         dr.dc.discover = orig_discover
         dr._open_experiments = orig_open_exp
         dr._load_facts = orig_load_facts
+        dr._canary_result = orig_canary
 
     assert rc == 0
     facts_section = out.split("Facts (staleness", 1)[1]
@@ -549,6 +581,82 @@ def test_fact_without_its_own_interval_uses_the_thirty_day_default():
     assert "A9" in "\n".join(flagged), flagged
     # 2026-07-01 to 2026-07-20 is 19 days: inside 30, so silent.
     assert dr._fact_staleness_lines([bare], today="2026-07-20") == []
+
+
+def test_canary_result_delegates_to_measure_tokens_without_touching_real_transcripts():
+    """_canary_result(root=...) must call through to
+    measure_tokens.format_canary with the given root rather than always
+    reading TRANSCRIPT_ROOT, so a test can point it at a temp directory
+    instead of the founder's real ~/.claude/projects."""
+    with tempfile.TemporaryDirectory() as d:
+        result = dr._canary_result(root=d)
+    assert result["state"] == "NO DATA", result
+    assert result["transcripts"] == 0, result
+    assert result["exit_code"] == 0, result
+
+
+def test_canary_lines_healthy_state_is_not_needs_review():
+    canary = {"reason": "5/5 assistant message(s) across 1 transcript(s) yielded "
+                        "a recognised usage key.", "parse_health": None}
+    lines = dr._canary_lines(canary)
+    joined = "\n".join(lines)
+    assert "NEEDS REVIEW" not in joined, lines
+    assert "5/5" in joined, lines
+
+
+def test_canary_lines_unrecognised_state_is_needs_review():
+    canary = {"reason": "FORMAT UNRECOGNISED: 4 assistant message(s) across "
+                        "1 transcript(s), 0 recognised a usage key.",
+              "parse_health": "UNRECOGNISED"}
+    lines = dr._canary_lines(canary)
+    joined = "\n".join(lines)
+    assert "NEEDS REVIEW" in joined, lines
+    assert "FORMAT UNRECOGNISED" in joined, lines
+
+
+def test_report_surfaces_format_unrecognised_and_returns_nonzero():
+    """The alarm this whole task exists to wire: when the canary reports
+    FORMAT UNRECOGNISED, doctor's report() must print it beside the other
+    NEEDS REVIEW lines AND return a nonzero exit code, unlike every other
+    finding in this module which is informational only."""
+    companions = []
+    state = _state([])
+    unrecognised_canary = {
+        "transcripts": 2, "messages": 6, "recognised": 0,
+        "parse_health": "UNRECOGNISED", "state": "FORMAT UNRECOGNISED",
+        "reason": "FORMAT UNRECOGNISED: 6 assistant message(s) across 2 "
+                  "transcript(s), 0 recognised a usage key.",
+        "exit_code": 1,
+    }
+
+    orig_load = dr.cfg.load_companions
+    orig_fresh = dr._ensure_fresh_state
+    orig_load_state = dr._load_state
+    orig_discover = dr.dc.discover
+    orig_open_exp = dr._open_experiments
+    orig_canary = dr._canary_result
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr._ensure_fresh_state = lambda: state
+    dr._load_state = lambda path=None: None
+    dr.dc.discover = lambda: []
+    dr._open_experiments = lambda exp_dir=None: []
+    dr._canary_result = lambda root=None: unrecognised_canary
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.report()
+        out = buf.getvalue()
+    finally:
+        dr.cfg.load_companions = orig_load
+        dr._ensure_fresh_state = orig_fresh
+        dr._load_state = orig_load_state
+        dr.dc.discover = orig_discover
+        dr._open_experiments = orig_open_exp
+        dr._canary_result = orig_canary
+
+    assert rc != 0, rc
+    assert "NEEDS REVIEW" in out and "FORMAT UNRECOGNISED" in out, out
+    assert "Transcript format canary" in out, out
 
 
 if __name__ == "__main__":

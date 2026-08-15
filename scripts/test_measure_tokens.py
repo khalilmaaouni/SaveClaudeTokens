@@ -230,6 +230,116 @@ def test_a_hostile_usage_value_is_skipped_not_a_crash_and_not_a_fake_zero():
             assert sess["read"] == 1500, f"{name}: read total is {sess['read']}"
 
 
+def _assistant_rec(usage):
+    return json.dumps({"type": "assistant", "message": {"usage": usage}})
+
+
+def test_no_transcripts_is_no_data_exit_zero():
+    """Zero transcripts is not an error: a new user has no history yet."""
+    with tempfile.TemporaryDirectory() as d:
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 0, result
+    assert result["state"] == "NO DATA", result
+    assert result["parse_health"] is None, result
+    assert result["exit_code"] == 0, result
+
+
+def test_renamed_usage_field_is_unrecognised_not_zero():
+    """The section 2a hole: a renamed field must not silently read as a
+    measured zero. It must be caught and named as FORMAT UNRECOGNISED,
+    which is exactly what pricing.py, experiment.py and profile.py cannot
+    do, because they only skip on the shape they do not recognise."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [
+            _assistant_rec({"prompt_tokens": 100, "completion_tokens": 5,
+                            "cached_tokens": 10}),
+            _assistant_rec({"prompt_tokens": 200, "completion_tokens": 8}),
+        ])
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 1, result
+    assert result["messages"] == 2, result
+    assert result["recognised"] == 0, result
+    assert result["state"] == "FORMAT UNRECOGNISED", result
+    assert result["parse_health"] == "UNRECOGNISED", result
+    assert result["exit_code"] != 0, result
+
+
+def test_healthy_corpus_reports_healthy():
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [
+            _assistant_rec({"input_tokens": 100, "output_tokens": 5,
+                            "cache_read_input_tokens": 10}),
+            _assistant_rec({"input_tokens": 200, "output_tokens": 8}),
+        ])
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 1, result
+    assert result["messages"] == 2, result
+    assert result["recognised"] == 2, result
+    assert result["state"] == "OK", result
+    assert result["parse_health"] is None, result
+    assert result["exit_code"] == 0, result
+
+
+def test_partially_recognised_corpus_does_not_report_unrecognised():
+    """Some messages recognised, some not: this must never fire the alarm.
+    A single genuinely bad message is expected noise, not a format break."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        _write(fp, [
+            _assistant_rec({"prompt_tokens": 100}),           # unrecognised
+            _assistant_rec({"input_tokens": 200, "output_tokens": 8}),  # recognised
+        ])
+        result = mt.format_canary(d, days=9999)
+    assert result["messages"] == 2, result
+    assert result["recognised"] == 1, result
+    assert result["state"] == "OK", result
+    assert result["parse_health"] is None, result
+
+
+def test_format_canary_survives_hostile_lines_without_crashing_or_miscounting():
+    """RED before the fix, each ending a stranger's first run:
+
+      not-json      json.JSONDecodeError
+      json-not-dict a top level list, e.g. `["assistant"]`
+      message-str   `message` holds a string instead of an object
+
+    None of the three may crash the walk, and none may be counted as a
+    recognised message: they carry no usable usage block at all."""
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "s.jsonl")
+        with open(fp, "w") as f:
+            f.write(_assistant_rec({"input_tokens": 1, "output_tokens": 1}) + "\n")
+            f.write('{"type": "assistant", "message": truncated\n')
+            f.write(json.dumps(["assistant", "not", "an", "object"]) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": "not an object"}) + "\n")
+            f.write(_assistant_rec({"input_tokens": 2, "output_tokens": 2}) + "\n")
+        result = mt.format_canary(d, days=9999)
+    assert result["transcripts"] == 1, result
+    # Only the two genuine records with a message object are counted.
+    assert result["messages"] == 2, result
+    assert result["recognised"] == 2, result
+    assert result["state"] == "OK", result
+
+
+def test_format_canary_survives_an_unreadable_file():
+    with tempfile.TemporaryDirectory() as d:
+        fp = os.path.join(d, "locked.jsonl")
+        _write(fp, [_assistant_rec({"input_tokens": 1, "output_tokens": 1})])
+        os.chmod(fp, 0o000)
+        try:
+            result = mt.format_canary(d, days=9999)
+        finally:
+            os.chmod(fp, 0o644)
+    # The file is a candidate transcript even though it could not be opened;
+    # unreadable is not the same claim as "format unrecognised", so this
+    # must not silently become messages == 0 turning into a crash.
+    assert result["transcripts"] == 1, result
+    assert result["messages"] == 0, result
+    assert result["state"] == "NO DATA", result
+
+
 def test_an_unreadable_directory_is_counted_rather_than_silently_dropped():
     """RED before the fix: skip_counts stayed at 0 while a whole directory of
     transcripts vanished, so the honest 'some files were skipped' line never

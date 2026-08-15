@@ -303,6 +303,151 @@ def collect(root, days):
     return out
 
 
+# Keys this codebase's parsers actually branch on. pricing.py:90 reads
+# cache_read_input_tokens and split_writes(); experiment.py:340-342 reads
+# input_tokens, cache_read_input_tokens, output_tokens and split_writes();
+# profile.py:332 reads output_tokens; read_session() above reads all four
+# flat keys and split_writes(). A renamed field survives json.loads and
+# str() fine, it just is not one of these, which is the whole failure this
+# canary exists to catch. Grep "usage.get" and "split_writes(usage)" across
+# scripts/pricing.py, scripts/experiment.py, scripts/profile.py before
+# adding or removing a key here: this set is that grep, kept in one place.
+RECOGNISED_USAGE_KEYS = frozenset({
+    "input_tokens", "output_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+})
+# cache_creation is a nested object; split_writes() (shared by all three
+# parsers above) only trusts these two fields inside it.
+RECOGNISED_CACHE_CREATION_KEYS = frozenset({
+    "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens",
+})
+
+
+def _usage_recognised(usage):
+    """True when a usage dict carries at least one key a parser in this
+    codebase actually reads. False, never a raise, for anything else: not a
+    dict, an empty dict, or a dict full of unfamiliar keys (the renamed
+    field case this canary exists to catch)."""
+    if not isinstance(usage, dict):
+        return False
+    if any(k in usage for k in RECOGNISED_USAGE_KEYS):
+        return True
+    cc = usage.get("cache_creation")
+    return isinstance(cc, dict) and any(k in cc for k in RECOGNISED_CACHE_CREATION_KEYS)
+
+
+def format_canary(root, days=90):
+    """Format canary, layer 0, docs/plan/2026-08-15-STATE-MODEL.md section 2a.
+
+    Walks the same transcripts read_session() reads (iter_session_files, so
+    there is exactly one transcript walk defined in this file, not two) and
+    counts, per assistant record that carries a `message` object: how many
+    there are, and how many of their usage blocks yield at least one
+    recognised usage key (RECOGNISED_USAGE_KEYS above).
+
+    Its ground truth is a file this project does not write, which is why it
+    can see a renamed field neither reconcile.py nor the bench fixtures can:
+    reconcile.py's two halves read the same renamed field from the same
+    files and would agree with each other at zero, and
+    bench/generate_corpus.py writes the same format its own readers expect,
+    so a real rename never shows up in a fixture.
+
+    Returns a dict:
+      transcripts   candidate .jsonl files found under root in the window
+      messages      assistant records carrying a `message` object
+      recognised    of those, how many yielded >= 1 recognised usage key
+      parse_health  None, or the string "UNRECOGNISED": feed this straight
+                    into metrics.command_center_state(..., parse_health=...)
+      state         "NO DATA" | "FORMAT UNRECOGNISED" | "OK"
+      reason        one line, plain text, no markup (layer 0 may not render)
+      exit_code     0 for NO DATA and OK, 1 for FORMAT UNRECOGNISED
+
+    Two cases this function refuses to merge, per the memo:
+      messages == 0: nothing WAS READ (no transcript files at all, or the
+        ones found could not be opened or parsed). NO DATA, exit 0: a new
+        user with no history yet, or a stray permission error, is not
+        evidence the format broke, it is an absence of evidence.
+      messages > 0 and recognised == 0: real assistant messages were read,
+        but not one usage block matched a key this codebase's parsers
+        know. FORMAT UNRECOGNISED, exit 1: the alarm, and the only case
+        that fires it.
+
+    A file this cannot open, a line that will not parse as JSON, a line
+    that parses but is not a JSON object, and a `message` key holding
+    something other than an object are all treated as "no message here"
+    rather than raising, and never counted toward `recognised`: an
+    unreadable file or a single bad line is evidence of a truncated write,
+    not evidence the format changed.
+    """
+    transcripts = 0
+    messages = 0
+    recognised = 0
+    cutoff = time.time() - days * 86400
+    for fp in iter_session_files(root, cutoff):
+        transcripts += 1
+        try:
+            f = open(fp, "r", errors="ignore")
+        except OSError:
+            continue  # sbe: allow-silent an unopenable transcript is absence of evidence, not a format break, so it contributes zero messages and never fires the alarm
+        with f:
+            for line in f:
+                # Cheap prefilter, same shape as read_session's `"usage"`
+                # check: a genuine assistant record always contains the
+                # literal substring, so this never produces a false
+                # negative, only an occasional wasted parse of a line that
+                # turns out not to match.
+                if '"assistant"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (json.JSONDecodeError, RecursionError, ValueError):
+                    continue  # sbe: allow-silent a line that will not parse as JSON is a truncated write, not evidence the usage format changed, so it is skipped rather than counted either way
+                if not isinstance(rec, dict) or rec.get("type") != "assistant":
+                    continue
+                msg = rec.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                messages += 1
+                usage = msg.get("usage") or rec.get("usage")
+                if _usage_recognised(usage):
+                    recognised += 1
+
+    if messages == 0:
+        if transcripts == 0:
+            reason = (f"NO DATA: no transcripts found under {root} in the "
+                      f"last {days:g} days; nothing to check yet.")
+        else:
+            reason = (f"NO DATA: {transcripts} transcript(s) found under {root} "
+                      f"but none yielded a readable assistant message; "
+                      f"nothing to check yet.")
+        return {
+            "transcripts": transcripts, "messages": 0, "recognised": 0,
+            "parse_health": None, "state": "NO DATA",
+            "reason": reason,
+            "exit_code": 0,
+        }
+    if recognised == 0:
+        return {
+            "transcripts": transcripts, "messages": messages, "recognised": 0,
+            "parse_health": "UNRECOGNISED", "state": "FORMAT UNRECOGNISED",
+            "reason": (f"FORMAT UNRECOGNISED: {messages} assistant message(s) "
+                       f"across {transcripts} transcript(s), 0 recognised a "
+                       f"usage key any parser in this codebase reads. Every "
+                       f"counter measure_tokens.py, pricing.py, experiment.py "
+                       f"and profile.py feed from usage may now silently read "
+                       f"as zero rather than absent."),
+            "exit_code": 1,
+        }
+    return {
+        "transcripts": transcripts, "messages": messages, "recognised": recognised,
+        "parse_health": None, "state": "OK",
+        "reason": (f"{recognised}/{messages} assistant message(s) across "
+                   f"{transcripts} transcript(s) yielded a recognised usage "
+                   f"key."),
+        "exit_code": 0,
+    }
+
+
 def summarize(sessions):
     if not sessions:
         return None

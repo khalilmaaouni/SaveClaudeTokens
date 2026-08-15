@@ -42,6 +42,7 @@ import time
 
 import discover_companions as dc
 import experiment as ex
+import measure_tokens as mt
 import profile as pf
 import config as cfg
 
@@ -57,6 +58,9 @@ STALENESS_DAYS = 180  # founder-reviewable threshold, plan ambiguity 3, 2026-08-
 # a fact that went stale surfaces within one reporting cycle rather than three.
 # Fallback only; every fact in data/facts.json states its own.
 DEFAULT_FACT_REVIEW_DAYS = 30
+
+TRANSCRIPT_ROOT = os.path.expanduser("~/.claude/projects")
+CANARY_DAYS = 90  # matches measure_tokens.py's own --days default
 
 
 def _load_state(path=None):
@@ -283,6 +287,25 @@ def _fact_staleness_lines(facts, today=None):
     return lines
 
 
+def _canary_result(root=None):
+    """Wraps measure_tokens.format_canary so a test can override it without
+    ever touching real transcripts, the same seam every other _xxx() in this
+    module already uses for real state (_ensure_fresh_state, dc.discover,
+    _open_experiments, _load_facts)."""
+    return mt.format_canary(root or TRANSCRIPT_ROOT, days=CANARY_DAYS)
+
+
+def _canary_lines(canary):
+    """One line, NEEDS REVIEW styled when the canary is the alarm, matching
+    the wording convention _staleness_lines and _fact_staleness_lines use
+    elsewhere in this module. FORMAT UNRECOGNISED is the section 2a hole:
+    the transcript parsers stopped recognising the format, so every counter
+    fed from usage may now silently read as zero rather than absent."""
+    if canary.get("parse_health") == "UNRECOGNISED":
+        return [f"  NEEDS REVIEW: {canary['reason']}"]
+    return [f"  {canary['reason']}"]
+
+
 def _version_drift_lines(drift):
     """Render a dc.version_drift() result (drift["no_data"] is False) to
     print-ready lines: one DRIFT line per companion whose version moved,
@@ -460,7 +483,14 @@ def report():
         stale_facts = _fact_staleness_lines(facts)
         for line in (stale_facts or ["  no facts past their review interval."]):
             print(line)
-    return 0
+    print()
+
+    print("Transcript format canary (layer 0 parser health, STATE-MODEL section 2a)")
+    canary = _canary_result()
+    for line in _canary_lines(canary):
+        print(line)
+
+    return canary.get("exit_code", 0)
 
 
 def main(argv):
