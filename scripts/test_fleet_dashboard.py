@@ -10,6 +10,7 @@ Every test builds its own fixture store under a temp dir, never a real
 read-only by design; nothing here spawns a subprocess).
 """
 
+import datetime
 import json
 import os
 import shutil
@@ -20,6 +21,14 @@ import fleet as fl
 import fleet_dashboard as fd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _day_offset(n):
+    """A YYYY-MM-DD string n days before today. Fixtures that must land
+    inside (or outside) the default --days window are built relative to the
+    real calendar, never hardcoded, so they do not silently fall out of the
+    window as the months pass."""
+    return (datetime.date.today() - datetime.timedelta(days=n)).isoformat()
 
 
 def _write(path, content):
@@ -71,25 +80,29 @@ def test_two_healthy_machines_aggregate_by_day_team_and_environment():
                      _healthy_record("2026-08-10", "bbbb", team="web", environment="prod",
                                      input_tokens=200, output_tokens=75,
                                      cache_read=300, cache_write=10))
-        rows, empty = fd.collect_org(d, "acme")
+        rows, empty, _meta = fd.collect_org(d, "acme", days=0)
         assert len(rows) == 2
         assert empty == []
         healthy = [r for r in rows if r["error"] is None]
         assert len(healthy) == 2
 
         by_day = fd.aggregate_counters_by_day(healthy)
-        assert by_day["2026-08-10"]["unknown"]["input_tokens"] == 300
-        assert by_day["2026-08-10"]["unknown"]["output_tokens"] == 125
+        assert by_day["2026-08-10"]["totals"]["input_tokens"] == 300
+        assert by_day["2026-08-10"]["totals"]["output_tokens"] == 125
+        # Two distinct machines stand behind that day's cell, which is what
+        # the minimum group size is checked against before it is published.
+        assert by_day["2026-08-10"]["machines"] == 2
 
         by_team = fd.aggregate_totals_by_tag(healthy, "team")
-        assert by_team["ios"] == 100 + 50 + 900 + 25
-        assert by_team["web"] == 200 + 75 + 300 + 10
+        assert by_team["ios"]["total"] == 100 + 50 + 900 + 25
+        assert by_team["web"]["total"] == 200 + 75 + 300 + 10
+        assert by_team["ios"]["machines"] == 1
 
         by_env = fd.aggregate_totals_by_tag(healthy, "environment")
-        assert by_env["ci"] == 100 + 50 + 900 + 25
-        assert by_env["prod"] == 200 + 75 + 300 + 10
+        assert by_env["ci"]["total"] == 100 + 50 + 900 + 25
+        assert by_env["prod"]["total"] == 200 + 75 + 300 + 10
 
-        body = fd.render(d, "acme", "2026-08-15 09:00")
+        body = fd.render(d, "acme", "2026-08-15 09:00", days=0)
         assert "aaaa" in body
         assert "bbbb" in body
         assert "ios" in body
@@ -103,7 +116,7 @@ def test_invalid_json_record_gets_its_own_no_data_row_other_machine_still_render
         _write(_machine_path(d, "acme", "bad-json", "2026-08-10"), "{not json at all")
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, empty = fd.collect_org(d, "acme")
+        rows, empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "bad-json"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         assert bad["error"] is not None
@@ -113,7 +126,7 @@ def test_invalid_json_record_gets_its_own_no_data_row_other_machine_still_render
         assert "invalid JSON" in bad["error"]
         assert healthy_row["error"] is None
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "bad-json" in body
         assert "invalid JSON" in body
         assert "healthy" in body
@@ -127,7 +140,7 @@ def test_newer_schema_record_gets_its_own_no_data_row():
                      {"schema": fl.SCHEMA_VERSION + 1, "date": "2026-08-10"})
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "future"][0]
         assert bad["error"] is not None
         assert "newer" in bad["error"]
@@ -140,7 +153,7 @@ def test_newer_schema_record_gets_its_own_no_data_row():
 def test_record_missing_required_field_gets_its_own_no_data_row():
     with tempfile.TemporaryDirectory() as d:
         _write_record(d, "acme", "no-date", "2026-08-10", {"schema": 1})
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = rows[0]
         assert bad["error"] is not None
         # RED before the fix: _validate_record_shape did not exist and a
@@ -164,7 +177,7 @@ def test_experiment_label_with_html_is_escaped_not_injected():
                 "direction": "saving",
             }])
         _write_record(d, "acme", "aaaa", "2026-08-10", record)
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         # RED before the fix: rendering the raw label instead of ts.esc(...)
         # would put the literal tag into the page, so this assertion (the
         # raw tag is absent) is the one a missing esc() call would fail.
@@ -179,12 +192,12 @@ def test_machine_directory_with_no_records_gets_its_own_no_data_row():
         os.makedirs(os.path.join(d, "fleet", "acme", "empty-machine"))
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, empty = fd.collect_org(d, "acme")
+        rows, empty, _meta = fd.collect_org(d, "acme", days=0)
         assert empty == ["empty-machine"]
         healthy = [r for r in rows if r["error"] is None]
         assert len(healthy) == 1
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "empty-machine" in body
         assert "no records found for this machine" in body
 
@@ -195,7 +208,7 @@ def test_negative_counter_gets_its_own_no_data_row():
     with tempfile.TemporaryDirectory() as d:
         bad = _healthy_record("2026-08-10", "aaaa", input_tokens=-5)
         _write_record(d, "acme", "aaaa", "2026-08-10", bad)
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         row = rows[0]
         assert row["error"] is not None
         # RED before the fix: minimum:0 in data/fleet.schema.json documents
@@ -226,7 +239,7 @@ def test_all_six_hostile_fixtures_alongside_two_healthy_machines_in_one_render()
         _write_record(d, "acme", "healthy-two", "2026-08-11",
                      _healthy_record("2026-08-11", "healthy-two", team="web"))
 
-        rows, empty = fd.collect_org(d, "acme")
+        rows, empty, _meta = fd.collect_org(d, "acme", days=0)
         assert len(rows) == 7  # every machine except no-records wrote one file
         assert empty == ["no-records"]
         bad = {r["machine_id"]: r["error"] for r in rows if r["error"] is not None}
@@ -234,7 +247,7 @@ def test_all_six_hostile_fixtures_alongside_two_healthy_machines_in_one_render()
         healthy_ids = {r["machine_id"] for r in rows if r["error"] is None}
         assert healthy_ids == {"html-label", "healthy-one", "healthy-two"}
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         for mid in ("not-json", "future-schema", "missing-field", "negative-counter",
                    "no-records", "html-label", "healthy-one", "healthy-two"):
             assert mid in body
@@ -263,7 +276,7 @@ def test_latest_experiment_per_label_never_summed_across_labels_or_runs():
                           "timestamp": "2026-08-11T09:00:00", "metric_delta": 1500,
                           "direction": "saving"},
                      ]))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         healthy = [r for r in rows if r["error"] is None]
         items = fd.latest_experiment_by_label(healthy)
         by_label = {i["label"]: i for i in items}
@@ -279,7 +292,7 @@ def test_latest_experiment_per_label_never_summed_across_labels_or_runs():
         assert by_label["companion-x"]["metric_delta"] == -500
         assert by_label["companion-x"]["direction"] == "regression"
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "-500" in body
         assert "+1,500" in body
         # The earlier claude-md-diet run's own delta must not appear as a
@@ -291,10 +304,10 @@ def test_latest_experiment_per_label_never_summed_across_labels_or_runs():
 
 def test_empty_store_renders_no_data_everywhere_no_crash():
     with tempfile.TemporaryDirectory() as d:
-        rows, empty = fd.collect_org(d, "acme")
+        rows, empty, _meta = fd.collect_org(d, "acme", days=0)
         assert rows == []
         assert empty == []
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "NO DATA" in body
         assert "acme" in body
 
@@ -302,11 +315,14 @@ def test_empty_store_renders_no_data_everywhere_no_crash():
 # --- (k) label helpers are the imported ones, not a local re-implementation --
 #
 # Note: this identity check alone let the F3 fix-round's finding 5 slip
-# through review once already: it proves fleet_dashboard.py IMPORTS
-# token_shield.verified_by_label, but says nothing about whether anything
-# actually CALLS it instead of keeping a second, drifted copy of its
-# tiebreak. test_tied_timestamp_across_machines_matches_verified_by_labels_tiebreak
-# below is the behavioral test that closes that gap.
+# through review once already: it proves fleet_dashboard.py IMPORTS the
+# helper, but says nothing about whether anything actually CALLS it instead
+# of keeping a second, drifted copy of its tiebreak.
+# test_tied_timestamp_across_machines_matches_verified_by_labels_tiebreak
+# below is the behavioral test that closes that gap. The pick now runs
+# through latest_row_per_label (one row per label across EVERY confidence,
+# which is what the page copy promises, D20), so that is the identity that
+# matters here.
 
 def test_label_helpers_are_imported_from_token_shield_not_reimplemented():
     import token_shield as ts
@@ -314,7 +330,7 @@ def test_label_helpers_are_imported_from_token_shield_not_reimplemented():
     assert fd.ts.human is ts.human
     assert fd.ts.pct is ts.pct
     assert fd.ts._cpill is ts._cpill
-    assert fd.ts.verified_by_label is ts.verified_by_label
+    assert fd.ts.latest_row_per_label is ts.latest_row_per_label
 
 
 # --- (l) finding 5: the tiebreak must match token_shield.verified_by_label's
@@ -335,7 +351,7 @@ def test_tied_timestamp_across_machines_matches_verified_by_labels_tiebreak():
                           "timestamp": "2026-08-10T09:00:00", "metric_delta": 200,
                           "direction": "saving"},
                      ]))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         healthy = [r for r in rows if r["error"] is None]
         items = fd.latest_experiment_by_label(healthy)
         by_label = {i["label"]: i for i in items}
@@ -358,7 +374,7 @@ def test_filename_date_disagreeing_with_record_date_gets_its_own_no_data_row():
         # under 2026-08-10.json.
         record = _healthy_record("2026-08-11", "aaaa")
         _write_record(d, "acme", "aaaa", "2026-08-10", record)
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         row = rows[0]
         # RED before the fix: the record's own "date" field was trusted
         # as-is, with nothing checking it against the filename it was found
@@ -380,7 +396,7 @@ def test_org_profile_json_sibling_is_skipped_not_treated_as_a_machine():
         _write(os.path.join(org_dir, "org-profile.json"), "{}")
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         assert len(rows) == 1
         assert rows[0]["machine_id"] == "healthy"
 
@@ -393,7 +409,7 @@ def test_machine_entry_replaced_by_plain_file_gets_its_own_no_data_row():
             f.write(b"just a file, not a machine directory")
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "not-a-directory"]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: `if not os.path.isdir(machine_dir): continue`
@@ -461,7 +477,7 @@ def test_invalid_utf8_bytes_get_their_own_no_data_row():
             f.write(b"\xff\xfe\x00\x01binary")
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "bad-bytes"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: _load_one caught only OSError,
@@ -476,7 +492,7 @@ def test_invalid_utf8_bytes_get_their_own_no_data_row():
         assert "unreadable record" in bad["error"]
         assert healthy_row["error"] is None
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "bad-bytes" in body
         assert "healthy" in body
 
@@ -493,7 +509,7 @@ def test_nan_counter_gets_its_own_no_data_row():
             f.write(raw.encode("utf-8"))
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "nan-counter"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: json.load accepts a bare NaN token by default
@@ -508,7 +524,7 @@ def test_nan_counter_gets_its_own_no_data_row():
         assert "non-finite" in bad["error"]
         assert healthy_row["error"] is None
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "nan-counter" in body
         assert "healthy" in body
 
@@ -525,7 +541,7 @@ def test_stack_exhausting_nested_array_gets_its_own_no_data_row():
                                                              # not the size cap
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "deep-nest"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: json's recursive-descent parser raises
@@ -547,7 +563,7 @@ def test_oversized_record_file_is_refused_by_name_not_read_into_memory():
             f.write(b"x" * (fd.MAX_RECORD_BYTES + 100))
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "too-big"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: there was no size cap at all; _load_one went
@@ -576,7 +592,7 @@ def test_symlink_record_pointing_outside_store_is_refused():
         os.symlink(secret_path, os.path.join(machine_dir, "2026-08-10.json"))
         _write_record(d, "acme", "healthy", "2026-08-10",
                      _healthy_record("2026-08-10", "healthy"))
-        rows, _empty = fd.collect_org(d, "acme")
+        rows, _empty, _meta = fd.collect_org(d, "acme", days=0)
         bad = [r for r in rows if r["machine_id"] == "sym-machine"][0]
         healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
         # RED before the fix: collect_org built `path` with a plain
@@ -589,7 +605,7 @@ def test_symlink_record_pointing_outside_store_is_refused():
         assert "refusing" in bad["error"]
         assert healthy_row["error"] is None
 
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "should-never-be-read" not in body
         assert "healthy" in body
 
@@ -614,7 +630,7 @@ def test_error_rows_never_publish_the_admins_home_path_to_the_org():
             os.symlink(secret_path, os.path.join(machine_dir, "2026-08-10.json"))
             _write_record(d, "acme", "healthy", "2026-08-10",
                           _healthy_record("2026-08-10", "healthy"))
-            body = fd.render(d, "acme", "stamp")
+            body = fd.render(d, "acme", "stamp", days=0)
             # RED before the scrub: the symlink refusal reached the row as
             # "refusing to read: ... at /Users/<account>/.token-shield-..."
             assert home not in body, (
@@ -639,12 +655,12 @@ def test_counter_too_big_for_a_float_is_one_row_not_the_whole_page():
         _write(os.path.join(md, "2026-08-10.json"),
                '{"schema":1,"date":"2026-08-10","counters":'
                '{"unknown":{"input_tokens":' + "1" + "0" * 400 + "}}}")
-        rows, _e = fd.collect_org(d, "acme")
+        rows, _e, _meta = fd.collect_org(d, "acme", days=0)
         healthy = [r for r in rows if r["machine_id"] == "healthy"][0]
         huge = [r for r in rows if r["machine_id"] == "huge"][0]
         assert healthy["error"] is None, "a hostile record cost a healthy machine its row"
         assert huge["error"] is not None
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "healthy" in body
 
 
@@ -664,7 +680,7 @@ def test_non_string_label_or_confidence_is_one_row_not_the_whole_page():
                                    "metric_delta": 1.0,
                                    "timestamp": "2026-08-10T00:00:00Z"}]
             _write_record(d, "acme", name, "2026-08-10", rec)
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "healthy" in body, "hostile experiment fields killed the page"
 
 
@@ -681,7 +697,7 @@ def test_a_symlink_at_the_org_directory_itself_is_refused():
                                           team="should-never-be-read")))
         os.makedirs(os.path.join(d, "fleet"))
         os.symlink(outside, os.path.join(d, "fleet", "acme"))
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         assert "should-never-be-read" not in body, (
             "the reader escaped the store through a symlinked org directory")
         assert "NO DATA" in body
@@ -697,7 +713,7 @@ def test_the_page_is_written_as_utf8_whatever_the_locale_is():
         rec = _healthy_record("2026-08-10", "healthy")
         rec["team"] = "東京"
         _write_record(d, "acme", "healthy", "2026-08-10", rec)
-        body = fd.render(d, "acme", "stamp")
+        body = fd.render(d, "acme", "stamp", days=0)
         try:
             body.encode("ascii")
             ascii_safe = True
@@ -708,6 +724,326 @@ def test_the_page_is_written_as_utf8_whatever_the_locale_is():
         with open(out, "w", encoding="utf-8") as f:
             f.write(body)
         assert os.path.getsize(out) > 0
+
+
+# --- (q) SCALE: the store is read through a date window, and what the window
+# left behind is counted on the page, never dropped in silence.
+
+def test_records_outside_the_days_window_are_never_opened_and_the_count_is_named():
+    with tempfile.TemporaryDirectory() as d:
+        inside = _day_offset(1)
+        outside = _day_offset(365)
+        _write_record(d, "acme", "aaaa", inside, _healthy_record(inside, "aaaa"))
+        _write_record(d, "acme", "aaaa", outside, _healthy_record(outside, "aaaa"))
+        opened = []
+        real_load = fl.load_record
+
+        def spy(path):
+            opened.append(path)
+            return real_load(path)
+
+        fl.load_record = spy
+        try:
+            rows, _empty, meta = fd.collect_org(d, "acme")
+        finally:
+            fl.load_record = real_load
+        assert fd.DEFAULT_DAYS == 30
+        # RED before the fix: collect_org read the ENTIRE store history, so
+        # both records came back as rows, the year-old file WAS opened, and
+        # there was no third return value carrying the skipped count at all.
+        assert [r["date"] for r in rows] == [inside]
+        assert meta["outside_window"] == 1
+        assert not [p for p in opened if outside in p], (
+            "a record outside the window was opened; the filename date must be "
+            "filtered BEFORE the file is read")
+        body = fd.render(d, "acme", "stamp")
+        assert "1 record file" in body
+        assert "outside" in body
+
+
+def test_machine_rows_are_capped_and_the_dropped_count_is_named_on_the_page():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        total = fd.MAX_TABLE_ROWS + 3
+        for i in range(total):
+            mid = f"m{i:04d}"
+            _write_record(d, "acme", mid, day, _healthy_record(day, mid))
+        body = fd.render(d, "acme", "stamp")
+        last = f"m{total - 1:04d}"
+        # RED before the fix: nothing capped the row count, so every one of
+        # the machines rendered its own table row and the page said nothing.
+        assert "m0000" in body
+        assert last not in body, "the row cap did not drop anything"
+        assert "3 more" in body, "rows were dropped without saying so on the page"
+
+
+# --- (r) PRIVACY: minimum group size, and a per-machine table that carries
+# operational health only.
+
+def test_an_aggregate_backed_by_fewer_than_the_minimum_group_is_suppressed_with_a_reason():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i in range(6):
+            mid = f"big{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="bigteam", environment="ci",
+                                          input_tokens=1000, output_tokens=0,
+                                          cache_read=0, cache_write=0))
+        for i in range(3):
+            mid = f"small{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="smallteam", environment="ci",
+                                          input_tokens=1000, output_tokens=0,
+                                          cache_read=0, cache_write=0))
+        assert fd.MIN_GROUP_MACHINES == 5
+        body = fd.render(d, "acme", "stamp")
+        # RED before the fix: every tag total was published whatever the group
+        # size, so the three-machine team's 3.0K sat on the page beside the
+        # six-machine team's 6.0K.
+        assert "6.0K" in body, "a team backed by six machines must still publish"
+        assert "3.0K" not in body, "a team backed by three machines was published"
+        assert "smallteam" in body, "the suppressed row must still name itself"
+        assert "suppressed" in body
+        assert "fewer than 5 machines" in body
+
+
+def test_the_machines_table_publishes_operational_health_not_per_machine_tokens():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i, value in enumerate((137, 241, 353, 467, 571)):
+            mid = f"mach{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="ios", environment="ci",
+                                          input_tokens=value, output_tokens=0,
+                                          cache_read=0, cache_write=0))
+        rows, empty, meta = fd.collect_org(d, "acme")
+        table = fd.render_machines_table(rows, empty, meta)
+        # RED before the fix: the machines table carried a Tokens column with
+        # one machine's own total in it, which in almost every org is one
+        # person's own output, published to the whole org.
+        assert "<th>Tokens</th>" not in table
+        for value in ("137", "241", "353", "467", "571"):
+            assert value not in table, (
+                f"the per-machine table published one machine's own {value} tokens")
+        assert "mach0" in table, "the operational row itself must stay"
+        assert "Status" in table
+        body = fd.render(d, "acme", "stamp")
+        assert "1.8K" in body, (
+            "the five-machine aggregate must still publish; suppression is about "
+            "small groups, not about hiding the org's own totals")
+
+
+def test_a_machine_that_stopped_reporting_is_named_stale_with_its_last_report_date():
+    with tempfile.TemporaryDirectory() as d:
+        fresh_day = _day_offset(0)
+        old_day = _day_offset(20)
+        _write_record(d, "acme", "freshmachine", fresh_day,
+                      _healthy_record(fresh_day, "freshmachine"))
+        _write_record(d, "acme", "oldmachine", old_day,
+                      _healthy_record(old_day, "oldmachine"))
+        rows, empty, meta = fd.collect_org(d, "acme")
+        table = fd.render_machines_table(rows, empty, meta)
+        old_row = [chunk for chunk in table.split("<tr>") if "oldmachine" in chunk][0]
+        fresh_row = [chunk for chunk in table.split("<tr>") if "freshmachine" in chunk][0]
+        # RED before the fix: the table had no status at all, so a machine
+        # that stopped reporting three weeks ago looked exactly like one that
+        # reported this morning.
+        assert "stale" in old_row
+        assert old_day in old_row
+        assert "stale" not in fresh_row
+        assert "reporting" in fresh_row
+
+
+def test_the_minimum_group_size_can_be_raised_but_never_lowered():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i in range(6):
+            mid = f"m{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="sixteam", environment="ci",
+                                          input_tokens=1000, output_tokens=0,
+                                          cache_read=0, cache_write=0))
+        # RED before the fix: render() took no min_group argument at all.
+        lowered = fd.render(d, "acme", "stamp", min_group=1)
+        assert "6.0K" in lowered, "six machines clear the floor of five"
+        raised = fd.render(d, "acme", "stamp", min_group=10)
+        assert "6.0K" not in raised, "an admin raised the threshold and it was ignored"
+        assert "fewer than 10 machines" in raised
+
+        with tempfile.TemporaryDirectory() as d2:
+            for i in range(3):
+                mid = f"m{i}"
+                _write_record(d2, "acme", mid, day,
+                              _healthy_record(day, mid, team="threeteam", environment="ci",
+                                              input_tokens=1000, output_tokens=0,
+                                              cache_read=0, cache_write=0))
+            body = fd.render(d2, "acme", "stamp", min_group=1)
+            assert "3.0K" not in body, (
+                "min_group was lowered below the MIN_GROUP_MACHINES floor")
+            assert "fewer than 5 machines" in body
+
+
+# --- (s) D20: one row per label ACROSS confidences, matching the page copy.
+
+def test_a_newer_not_proven_supersedes_an_older_verified_for_the_same_label():
+    with tempfile.TemporaryDirectory() as d:
+        older = _day_offset(2)
+        newer = _day_offset(1)
+        _write_record(d, "acme", "aaaa", older,
+                      _healthy_record(older, "aaaa", experiments=[
+                          {"label": "cohort-skip", "confidence": "VERIFIED",
+                           "timestamp": f"{older}T09:00:00", "metric_delta": 1500,
+                           "target_metric": "first_request_median",
+                           "direction": "saving"}]))
+        _write_record(d, "acme", "bbbb", newer,
+                      _healthy_record(newer, "bbbb", experiments=[
+                          {"label": "cohort-skip", "confidence": "NOT_PROVEN",
+                           "timestamp": f"{newer}T09:00:00", "metric_delta": -400,
+                           "target_metric": "first_request_median",
+                           "direction": "regression"}]))
+        rows, _empty, _meta = fd.collect_org(d, "acme")
+        healthy = [r for r in rows if r["error"] is None]
+        items = fd.latest_experiment_by_label(healthy)
+        # RED before the fix: latest-wins was keyed on (label, confidence), so
+        # BOTH rows survived and the stale VERIFIED +1,500 sat beside the
+        # newer NOT_PROVEN -400 under a sentence promising one row per label.
+        assert len(items) == 1, "one row per label, across every confidence"
+        assert items[0]["confidence"] == "NOT_PROVEN"
+        assert items[0]["metric_delta"] == -400
+        body = fd.render(d, "acme", "stamp")
+        assert body.count("cohort-skip") == 1
+        assert "+1,500" not in body
+
+
+# --- (t) D9: no per-model table, a named NO DATA statement instead.
+
+def test_no_model_column_only_a_named_no_data_statement_about_model_identity():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i in range(5):
+            mid = f"m{i}"
+            _write_record(d, "acme", mid, day, _healthy_record(day, mid))
+        body = fd.render(d, "acme", "stamp")
+        # RED before the fix: the counters table carried a Model column whose
+        # every cell read "unknown", because the telemetry ledger records a
+        # model COUNT and never a model IDENTITY.
+        assert "<th>Model</th>" not in body
+        assert "<td>unknown</td>" not in body
+        assert "model identity" in body
+
+
+# --- (u) D21 items that live in this file.
+
+def test_an_unreadable_org_directory_is_one_row_not_an_exception_out_of_render():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        _write_record(d, "acme", "healthy", day, _healthy_record(day, "healthy"))
+        real_listdir = os.listdir
+
+        def deny_org(path, *args, **kwargs):
+            if os.path.basename(path) == "acme":
+                raise PermissionError(13, "Permission denied")
+            return real_listdir(path, *args, **kwargs)
+
+        os.listdir = deny_org
+        try:
+            # RED before the fix: os.listdir(org_dir) was unguarded while the
+            # per-machine listdir was, so this raised PermissionError straight
+            # out of collect_org and out of render, against a docstring
+            # promising it never raises.
+            rows, _empty, _meta = fd.collect_org(d, "acme")
+            body = fd.render(d, "acme", "stamp")
+        finally:
+            os.listdir = real_listdir
+        assert len(rows) == 1
+        assert rows[0]["error"] is not None
+        assert "could not list" in rows[0]["error"]
+        assert "NO DATA" in body
+
+
+def test_a_non_finite_metric_delta_never_renders_as_nan():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        path = _machine_path(d, "acme", "deltamachine", day)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        raw = ('{"schema": 1, "date": "' + day + '", "machine_id": "' + "a" * 64 + '", '
+               '"counters": {}, "experiments": [{"label": "delta-label", '
+               '"confidence": "VERIFIED", "timestamp": "' + day + 'T09:00:00", '
+               '"target_metric": "first_request_median", "metric_delta": NaN, '
+               '"direction": "saving"}]}')
+        with open(path, "wb") as f:
+            f.write(raw.encode("utf-8"))
+        body = fd.render(d, "acme", "stamp")
+        # RED before the fix: the delta cell was formatted with f"{delta:+,}"
+        # for anything numeric, and NaN is numeric, so the page published
+        # "+nan" as if it were a measured saving.
+        assert "delta-label" in body
+        assert "nan" not in body
+        assert "+nan" not in body
+
+
+def test_a_filename_that_is_not_a_real_calendar_date_gets_its_own_no_data_row():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        _write_record(d, "acme", "healthy", day, _healthy_record(day, "healthy"))
+        _write_record(d, "acme", "bogus", "9999-99-99",
+                      _healthy_record("9999-99-99", "bogus"))
+        rows, _empty, _meta = fd.collect_org(d, "acme")
+        bogus = [r for r in rows if r["machine_id"] == "bogus"][0]
+        healthy_row = [r for r in rows if r["machine_id"] == "healthy"][0]
+        # RED before the fix: the filename was never validated, so
+        # "9999-99-99" loaded cleanly and rendered as a day of the year in
+        # the counters table.
+        assert bogus["error"] is not None
+        assert "calendar date" in bogus["error"]
+        assert bogus["date"] is None
+        assert healthy_row["error"] is None
+        body = fd.render(d, "acme", "stamp")
+        assert "<td>9999-99-99</td>" not in body
+
+
+def test_a_non_string_team_never_renders_a_python_repr():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        rec = _healthy_record(day, "dictteam")
+        rec["team"] = {"k": 1}
+        _write_record(d, "acme", "dictteam", day, rec)
+        rows, empty, meta = fd.collect_org(d, "acme")
+        table = fd.render_machines_table(rows, empty, meta)
+        # RED before the fix: the cell was ts.esc(rec.get("team") or ...),
+        # and esc() calls str(), so a dict team printed a Python repr into
+        # the org's page.
+        assert "&#x27;" not in table
+        assert "(untagged)" in table
+
+
+def test_main_takes_days_and_min_group_and_refuses_a_negative_window():
+    with tempfile.TemporaryDirectory() as d:
+        day = _day_offset(0)
+        for i in range(6):
+            mid = f"m{i}"
+            _write_record(d, "acme", mid, day,
+                          _healthy_record(day, mid, team="sixteam", environment="ci",
+                                          input_tokens=1000, output_tokens=0,
+                                          cache_read=0, cache_write=0))
+        out = os.path.join(d, "out.html")
+        argv_backup = sys.argv
+        try:
+            sys.argv = ["fleet_dashboard.py", "--store-dir", d, "--org", "acme",
+                        "--out", out, "--days", "7", "--min-group", "9"]
+            # RED before the fix: main() had no --days and no --min-group, so
+            # argparse exited 2 with "unrecognized arguments" before any page
+            # was written.
+            assert fd.main() == 0
+            with open(out, encoding="utf-8") as f:
+                page = f.read()
+            assert "6.0K" not in page, "--min-group 9 was ignored"
+            assert "fewer than 9 machines" in page
+            sys.argv = ["fleet_dashboard.py", "--store-dir", d, "--org", "acme",
+                        "--out", out, "--days", "-1"]
+            assert fd.main() == 2
+        finally:
+            sys.argv = argv_backup
 
 
 if __name__ == "__main__":

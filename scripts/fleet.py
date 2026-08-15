@@ -126,9 +126,38 @@ experiments=[]) for the day, still whitelisted through the exact same
 frozen schema as every other record; it just never applies build_record's
 "nothing to report" refusal.
 
+WHAT MADE THIS UNUSABLE AT FLEET SCALE
+----------------------------------------
+Five mechanics, fixed together, that between them kept an org's view empty
+after a rollout no matter how many machines joined:
+
+  - `fleet push` required --store on every invocation even though `fleet
+    join` had already saved the store URL locally and nothing ever read it
+    back. cmd_push now defaults to the saved value (--store still
+    overrides), so the daily command fits in a cron line.
+  - the push clone had no depth limit, so against a store holding a year
+    of records from a thousand machines it could not finish inside
+    GIT_TIMEOUT_SECONDS, and that timeout was caught and downgraded to a
+    local queue on every machine. It is --depth 1 now, the same flags the
+    profile-check clone already used.
+  - a push rejected non-fast-forward (two machines pushing on the same day,
+    the ordinary case after standup) was never retried. push_record now
+    pulls with rebase once and retries before falling back to the queue.
+  - the queue was silent: cmd_push printed nothing and returned 0 whether
+    the record reached the store or sat on disk, so a cron line reading the
+    exit code saw success fleet-wide while nothing arrived. A queued push
+    now says NOT DELIVERED on stderr with the number waiting and the
+    command that replays them (`push --drain`, which is also how a backlog
+    gets replayed at all), and exits EXIT_QUEUED, never 0.
+  - records were committed under one identity shared by every machine in
+    the org. Each record now commits as its own machine_id, so git history
+    attributes it to the machine that CLAIMS to have written it. Records
+    remain UNSIGNED and forgeable by anyone with store write access;
+    signing is a separate unit and a half-signature would be worse.
+
 USAGE
   python3 fleet.py build [--day YYYY-MM-DD] [--config PATH] [--telemetry-ledger PATH] [--experiment-ledger PATH] [--config-fingerprint STR] [--token-shield-version STR]
-  python3 fleet.py push --store URL [--day YYYY-MM-DD] [--config PATH] [--telemetry-ledger PATH] [--experiment-ledger PATH] [--config-fingerprint STR] [--token-shield-version STR] [--queue-dir PATH]
+  python3 fleet.py push [--store URL] [--drain] [--day YYYY-MM-DD] [--config PATH] [--telemetry-ledger PATH] [--experiment-ledger PATH] [--config-fingerprint STR] [--token-shield-version STR] [--queue-dir PATH]
   python3 fleet.py init <store-url> --org NAME --salt SALT --default-mode conservative|balanced|aggressive [--force]
   python3 fleet.py join <store-url> --org NAME --salt SALT [--team TAG] [--environment TAG] [--hostname HOST] [--day YYYY-MM-DD] [--config PATH] [--queue-dir PATH]
   python3 fleet.py leave [--config PATH] [--queue-dir PATH]
@@ -162,6 +191,25 @@ LOCAL_QUEUE_DIR = os.path.expanduser("~/.token-shield/fleet-queue/")
 ORG_PROFILE_FILENAME = "org-profile.json"
 ORG_PROFILE_SCHEMA_VERSION = 1
 VALID_DEFAULT_MODES = ("conservative", "balanced", "aggressive")
+
+# The local copy of DISCLOSURE_TEXT `fleet join` leaves next to the fleet
+# config, so the owner of an MDM-enrolled machine can read offline what
+# their machine shares (see cmd_join).
+DISCLOSURE_FILENAME = "fleet-disclosure.txt"
+
+# Every git subprocess in this file runs under this one timeout, named here
+# so an org with a slow store can see it and change it in one place instead
+# of hunting for a number inside a call. It is not a per-call knob on
+# purpose: a fleet where one git call needs longer than another is a fleet
+# with a store problem to fix, not a timeout to tune.
+GIT_TIMEOUT_SECONDS = 30
+
+# cmd_push's exit status when the record was QUEUED LOCALLY rather than
+# delivered to the store. Distinct from 0 (delivered) and from 2 (refused,
+# or NO DATA) precisely so a cron line that reads only the exit code can
+# tell "the store has this record" from "this machine is holding it": that
+# gap is how a fleet-wide delivery failure stayed invisible.
+EXIT_QUEUED = 3
 
 
 # --- SECURITY REVIEW FIXES (post-F2 independent review) --------------------
@@ -371,6 +419,37 @@ def _write_local_config(path, config):
         pass
 
 
+def _disclosure_path(config_path):
+    """Where `fleet join` leaves the machine owner's readable copy of
+    DISCLOSURE_TEXT: beside the local fleet config, so `fleet leave` can
+    remove it along with the rest of this machine's trace."""
+    return os.path.join(os.path.dirname(config_path) or ".", DISCLOSURE_FILENAME)
+
+
+def _write_disclosure_copy(config_path):
+    """Write DISCLOSURE_TEXT beside the local fleet config, with the same
+    permission discipline _write_local_config applies (parent dir 0700,
+    file 0600). Printing the disclosure during `fleet join` tells whoever
+    ran the join; the copy is what lets the machine's owner read it again
+    later, offline, long after an MDM one-liner scrolled past. Returns the
+    path written."""
+    path = _disclosure_path(config_path)
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+    with open(path, "wb") as f:
+        f.write((DISCLOSURE_TEXT + "\n").encode("utf-8"))
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
 def _day_counters(ledger_path, day):
     """Aggregate one day's telemetry ledger rows (session_end_telemetry.py's
     DEFAULT_LEDGER shape) into raw usage-schema counters, bucketed under
@@ -578,7 +657,7 @@ def load_record(path):
 
 # --- the git store adapter --------------------------------------------------
 
-def _run_git(args, cwd=None, timeout=30):
+def _run_git(args, cwd=None, timeout=GIT_TIMEOUT_SECONDS):
     """Run one git subprocess call, always checking the exit code
     explicitly. Returns (ok, stdout, stderr); ok is True only on exit 0.
     Never raises for a nonzero exit or a missing git binary: both are
@@ -605,7 +684,7 @@ def _has_staged_changes(clone_dir):
     try:
         proc = subprocess.run(["git", "diff", "--cached", "--quiet"],
                               cwd=clone_dir, capture_output=True, text=True,
-                              timeout=30)
+                              timeout=GIT_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode == 0:
@@ -740,15 +819,41 @@ def push_record(record, store_url, org, machine_id, date, queue_dir=None):
     symlink at the record's path or one of its parent directories: this is
     the one failure push_record does NOT downgrade to a local queue
     fallback, because writing the queued copy instead would silently mask
-    a store that has been tampered with rather than refuse loudly."""
+    a store that has been tampered with rather than refuse loudly.
+
+    THE CLONE IS SHALLOW (--depth 1), the same flags _fetch_org_profile
+    already used: a store holding a year of records from a thousand
+    machines is hundreds of thousands of files and commits, and a full
+    clone of it cannot finish inside GIT_TIMEOUT_SECONDS. That timeout is
+    caught and downgraded to a local queue, so an unbounded clone here
+    meant every push on every machine quietly stopped reaching the store
+    while each one still looked like it had worked. This push needs one
+    commit's worth of tree, never the history.
+
+    A REJECTED PUSH IS RETRIED ONCE, after `git pull --rebase`: when two
+    machines push on the same day the second is rejected non-fast-forward,
+    which is the ordinary case at any fleet size (a hundred machines
+    pushing after standup collide constantly), not an exceptional one. One
+    rebase and one retry resolves it; anything still failing after that
+    falls through to the local queue exactly as before."""
     _validate_org(org)
     _validate_machine_id(machine_id)
     _validate_day(date)
     rel_path = f"fleet/{org}/{machine_id}/{date}.json"
+    # Commit as the machine, not as one identity shared by the whole org:
+    # git history can then attribute each record to the machine that
+    # CLAIMS to have written it. machine_id is 64-char lowercase hex by
+    # _validate_machine_id above, so it is safe to interpolate here.
+    # Records stay UNSIGNED and forgeable by anyone with write access to
+    # the store; real signing is a separate unit, and a half-signature
+    # would be worse than none.
+    identity = ["-c", f"user.name={machine_id}",
+                "-c", f"user.email={machine_id}@fleet.token-shield.local"]
 
     with tempfile.TemporaryDirectory(prefix="fleet-push-") as tmp:
         clone_dir = os.path.join(tmp, "store")
-        ok, _out, err = _run_git(["clone", "--quiet", store_url, clone_dir])
+        ok, _out, err = _run_git(
+            ["clone", "--quiet", "--depth", "1", store_url, clone_dir])
         if not ok:
             reason = _last_line(err) or "could not clone the fleet store"
             _queue_locally(record, org, machine_id, date, queue_dir, reason)
@@ -772,11 +877,10 @@ def push_record(record, store_url, org, machine_id, date, queue_dir=None):
         if not staged:
             return True  # identical record already upstream: nothing to do
 
-        ok, _out, err = _run_git([
-            "-c", "user.email=fleet@token-shield.local",
-            "-c", "user.name=token-shield-fleet",
-            "commit", "--quiet", "-m", f"fleet: {org}/{machine_id} {date}",
-        ], cwd=clone_dir)
+        ok, _out, err = _run_git(
+            identity + ["commit", "--quiet", "-m",
+                        f"fleet: {org}/{machine_id} {date}"],
+            cwd=clone_dir)
         if not ok:
             reason = _last_line(err) or "could not commit the fleet record"
             _queue_locally(record, org, machine_id, date, queue_dir, reason)
@@ -784,9 +888,21 @@ def push_record(record, store_url, org, machine_id, date, queue_dir=None):
 
         ok, _out, err = _run_git(["push", "--quiet"], cwd=clone_dir)
         if not ok:
-            reason = _last_line(err) or "could not push to the fleet store"
-            _queue_locally(record, org, machine_id, date, queue_dir, reason)
-            return False
+            # Almost always a same-day collision with another machine, so
+            # rebase this one commit on top of whatever landed first and
+            # try once more. The identity is passed here too: a rebase
+            # rewrites a commit and needs a committer, which a machine with
+            # no git identity configured at all would otherwise not have.
+            rebased, _out, rebase_err = _run_git(
+                identity + ["pull", "--rebase", "--quiet"], cwd=clone_dir)
+            if rebased:
+                ok, _out, err = _run_git(["push", "--quiet"], cwd=clone_dir)
+            else:
+                err = rebase_err or err
+            if not ok:
+                reason = _last_line(err) or "could not push to the fleet store"
+                _queue_locally(record, org, machine_id, date, queue_dir, reason)
+                return False
 
     return True
 
@@ -794,6 +910,98 @@ def push_record(record, store_url, org, machine_id, date, queue_dir=None):
 def _last_line(text):
     lines = [l for l in (text or "").strip().splitlines() if l.strip()]
     return lines[-1].strip() if lines else ""
+
+
+def queued_record_files(queue_dir=None):
+    """Every .json file the local queue is currently holding, sorted by
+    name. An unreadable or absent queue dir is an empty queue, never an
+    error: the queue only exists once something has been queued into it."""
+    queue_dir = os.path.expanduser(queue_dir or LOCAL_QUEUE_DIR)
+    try:
+        names = sorted(os.listdir(queue_dir))
+    except OSError:
+        return []
+    return [os.path.join(queue_dir, n) for n in names if n.endswith(".json")]
+
+
+def _parse_queued_name(path):
+    """Recover (org, machine_id, date) from a local-queue filename, the
+    inverse of _queue_locally's f"{org}__{machine_id}__{date}.json". Splits
+    from the RIGHT because org may legally contain underscores (_ORG_RE
+    allows them, so an org can contain a double underscore too) while
+    machine_id (64 hex chars) and date (YYYY-MM-DD) never can. Returns None
+    when the name does not parse, or when any of the three fails its own
+    anchored pattern: a file this queue did not write is reported by the
+    caller, never guessed at."""
+    base = os.path.basename(path)
+    if not base.endswith(".json"):
+        return None
+    stem = base[:-len(".json")]
+    try:
+        rest, date = stem.rsplit("__", 1)
+        org, machine_id = rest.rsplit("__", 1)
+    except ValueError:
+        return None
+    try:
+        _validate_org(org)
+        _validate_machine_id(machine_id)
+        _validate_day(date)
+    except FleetValidationError:
+        return None
+    return org, machine_id, date
+
+
+def drain_queue(store_url, queue_dir=None):
+    """Replay every record the local queue is holding into the store, and
+    return (delivered, left). Each delivered record's queued copy is
+    removed; a record whose push fails again is re-queued by push_record
+    itself (same filename, same content) and stays for the next drain, so a
+    drain is safe to run on every cadence.
+
+    Nothing is dropped quietly: a queued file this queue did not write, or
+    one that no longer parses as a record, is counted, NAMED on stderr, and
+    left exactly where it is, and it still counts toward `left`. A drain
+    that says "0 still queued" means the queue is genuinely empty.
+
+    One clone per queued record (push_record's own): a drain is normally
+    one or two days of backlog, and batching every queued record into a
+    single clone is worth writing the day a fleet actually shows a backlog
+    deep enough to notice."""
+    delivered = 0
+    skipped = []
+    for path in queued_record_files(queue_dir):
+        parsed = _parse_queued_name(path)
+        if parsed is None:
+            skipped.append(os.path.basename(path))
+            continue
+        org, machine_id, date = parsed
+        try:
+            record = load_record(path)
+        except (OSError, ValueError):
+            # Includes FleetSchemaError (a ValueError): a queued record from
+            # a NEWER token-shield than this one is refused, not guessed at.
+            skipped.append(os.path.basename(path))
+            continue
+        if push_record(record, store_url, org, machine_id, date,
+                       queue_dir=queue_dir):
+            try:
+                os.remove(path)
+                delivered += 1
+            except OSError as e:
+                # Delivered, but still on disk: the next drain will push it
+                # again (an identical record is an idempotent no-op), and
+                # `left` below still counts it, so this never reads as done.
+                print(f"warning: {_display_path(path)} reached the store but "
+                      f"could not be removed from the queue: {e}",
+                      file=sys.stderr)
+
+    left = len(queued_record_files(queue_dir))
+    if skipped:
+        print(f"warning: {len(skipped)} queued file(s) left untouched, not a "
+              f"fleet record this queue wrote: {', '.join(skipped)}",
+              file=sys.stderr)
+    print(f"drained: {delivered} record(s) delivered, {left} still queued.")
+    return delivered, left
 
 
 def _fetch_org_profile(store_url):
@@ -1046,6 +1254,27 @@ def cmd_join(store, org, salt, team, environment, hostname, day,
               "pass --hostname", file=sys.stderr)
         return 2
 
+    config_path = config_path or DEFAULT_FLEET_CONFIG
+
+    # The OWNER of this machine has to be told what it will share, and told
+    # BEFORE it is enrolled. cmd_init prints this too, but init is run once
+    # by the ADMIN on the ADMIN's own machine: on a managed rollout
+    # (scripts/fleet-join.sh, deployed by MDM) join is the only command
+    # that ever runs here, so the developer sitting at this machine never
+    # saw the disclosure at all. Telling them is a legal requirement, not a
+    # courtesy: the UK ICO's guidance on monitoring workers requires that
+    # workers be informed about monitoring, and New York Civil Rights Law
+    # 52-c requires prior written notice of electronic monitoring. Printed
+    # before the store is contacted and before the local config is written,
+    # so it is shown even when the join then refuses or the store is down.
+    print(DISCLOSURE_TEXT)
+    try:
+        disclosure_path = _write_disclosure_copy(config_path)
+        print(f"a copy of the above is at {_display_path(disclosure_path)}")
+    except OSError as e:
+        print(f"warning: could not write the disclosure copy beside "
+              f"{_display_path(config_path)}: {e}", file=sys.stderr)
+
     # When the store is reachable, catch a salt (or org) typo before it
     # ever creates a phantom machine: a wrong salt still hashes to SOME
     # machine_id, just not the one every other push from this same
@@ -1058,7 +1287,6 @@ def cmd_join(store, org, salt, team, environment, hostname, day,
         print(str(e), file=sys.stderr)
         return 2
 
-    config_path = config_path or DEFAULT_FLEET_CONFIG
     local_config = {"org": org, "salt": salt, "hostname": hostname,
                     "store": store}
     if team:
@@ -1115,15 +1343,21 @@ def cmd_leave(config_path, queue_dir=None):
     absent already)."""
     config_path = config_path or DEFAULT_FLEET_CONFIG
     queue_dir = os.path.expanduser(queue_dir or LOCAL_QUEUE_DIR)
+    disclosure_path = _disclosure_path(config_path)
 
     had_config = os.path.isfile(config_path)
     if had_config:
         os.remove(config_path)
+    # The disclosure copy cmd_join leaves for the machine's owner is part
+    # of the same trace, so it goes with the rest.
+    had_disclosure = os.path.isfile(disclosure_path)
+    if had_disclosure:
+        os.remove(disclosure_path)
     removed_queue = os.path.isdir(queue_dir)
     if removed_queue:
         shutil.rmtree(queue_dir)
 
-    if not had_config and not removed_queue:
+    if not had_config and not had_disclosure and not removed_queue:
         print(f"not joined: no local fleet config at "
               f"{_display_path(config_path)}")
         return 0
@@ -1131,6 +1365,8 @@ def cmd_leave(config_path, queue_dir=None):
     removed = []
     if had_config:
         removed.append(_display_path(config_path))
+    if had_disclosure:
+        removed.append(_display_path(disclosure_path))
     if removed_queue:
         removed.append(_display_path(queue_dir))
     print(f"left the fleet: removed {' and '.join(removed)}")
@@ -1168,7 +1404,11 @@ def cmd_build(day, config_path, telem_ledger, exp_ledger, config_fingerprint,
 
 
 def cmd_push(day, config_path, telem_ledger, exp_ledger, config_fingerprint,
-             token_shield_version, store_url, queue_dir):
+             token_shield_version, store_url, queue_dir, drain=False):
+    """Build one day's record and push it. Returns 0 only when the record
+    actually reached the store, EXIT_QUEUED when it is sitting in the local
+    queue instead, and 2 for a refusal or NO DATA: a cron line that reads
+    only the exit code can tell those apart, which is the whole point."""
     day = day or time.strftime("%Y-%m-%d")
     try:
         _validate_day(day)
@@ -1181,6 +1421,30 @@ def cmd_push(day, config_path, telem_ledger, exp_ledger, config_fingerprint,
               f"{_display_path(config_path or DEFAULT_FLEET_CONFIG)} "
               f"(run `fleet join`, not yet built).", file=sys.stderr)
         return 2
+
+    # `fleet join` has always saved the store URL into the local config and
+    # nothing ever read it back, so --store was required on every single
+    # invocation: too long for a cron line, which is how the daily push
+    # stopped happening. The flag still wins when given.
+    if not store_url:
+        saved = local_config.get("store")
+        if isinstance(saved, str) and saved:
+            store_url = saved
+    if not store_url:
+        print(f"refused: no fleet store URL: none saved in "
+              f"{_display_path(config_path or DEFAULT_FLEET_CONFIG)} and no "
+              f"--store given. Run `fleet join <store-url> --org NAME` to "
+              f"save one, or pass --store.", file=sys.stderr)
+        return 2
+
+    drain_left = 0
+    if drain:
+        try:
+            _delivered, drain_left = drain_queue(store_url, queue_dir=queue_dir)
+        except FleetSymlinkError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+
     if config_fingerprint is None:
         try:
             config_fingerprint = exp.compute_fingerprint()
@@ -1210,8 +1474,25 @@ def cmd_push(day, config_path, telem_ledger, exp_ledger, config_fingerprint,
     except FleetSymlinkError as e:
         print(str(e), file=sys.stderr)
         return 2
-    if ok:
-        print(f"pushed: fleet/{org}/{machine_id}/{day}.json")
+
+    # A queued record has NOT been delivered. Before this, cmd_push printed
+    # nothing on this path and returned 0, so an unreachable store looked
+    # exactly like a successful push to every cron line in the fleet while
+    # the org view stayed empty. The queue stays the last resort it always
+    # was; what changed is that it now reports itself, on stderr and in the
+    # exit status, with the count waiting and the command that replays them.
+    if not ok:
+        waiting = len(queued_record_files(queue_dir))
+        print(f"NOT DELIVERED: this record is queued on this machine, not in "
+              f"the fleet store. {waiting} record(s) waiting. Replay them "
+              f"with: python3 fleet.py push --drain", file=sys.stderr)
+        return EXIT_QUEUED
+
+    print(f"pushed: fleet/{org}/{machine_id}/{day}.json")
+    if drain_left:
+        print(f"NOT DELIVERED: {drain_left} record(s) are still queued on "
+              f"this machine after the drain.", file=sys.stderr)
+        return EXIT_QUEUED
     return 0
 
 
@@ -1232,7 +1513,11 @@ def main():
 
     p_push = sub.add_parser("push", help="build one day's record and push it to the fleet store")
     _common(p_push)
-    p_push.add_argument("--store", required=True, help="git remote URL of the org's fleet store")
+    p_push.add_argument("--store", default=None,
+                        help="git remote URL of the org's fleet store; "
+                             "default: the one `fleet join` saved locally")
+    p_push.add_argument("--drain", action="store_true",
+                        help="first replay every record waiting in the local queue")
     p_push.add_argument("--queue-dir", default=None)
 
     p_init = sub.add_parser("init", help="admin, once: create the org profile in the fleet store")
@@ -1270,7 +1555,7 @@ def main():
     if a.action == "push":
         return cmd_push(a.day, a.config, a.telemetry_ledger, a.experiment_ledger,
                         a.config_fingerprint, a.token_shield_version, a.store,
-                        a.queue_dir)
+                        a.queue_dir, a.drain)
     if a.action == "init":
         return cmd_init(a.store, a.org, a.salt, a.default_mode, a.force)
     if a.action == "join":

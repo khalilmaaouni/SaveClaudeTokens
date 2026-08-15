@@ -12,3 +12,12 @@ __pycache__/
 
 # Rendered dashboards / local build output (carry your own numbers, never publish)
 .local-out/
+
+# Python packaging output from `pip install ./mcp-server`, which the README now
+# tells every MCP user to run. Untracked build output in `git status` trains a
+# reader to skim it, and this repo's push gates depend on that list being read.
+mcp-server/build/
+*.egg-info/
+
+# STATE.md is machine-local (see below), and its timestamped backups doubly so.
+STATE.md.bak-*
