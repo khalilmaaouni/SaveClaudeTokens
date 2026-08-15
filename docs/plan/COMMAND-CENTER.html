@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Shield: command center</title>
+<style>
+  :root{
+    --paper:#F7F8F6; --ink:#141B22; --accent:#0E7A6F; --muted:#5B6770;
+    --line:#DCE1DE; --card:#FFFFFF; --hatch:#B9CFC9; --faint:#EEF2F0;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:Seravek,"Avenir Next",Avenir,"Segoe UI",system-ui,sans-serif;
+    --mono:"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--paper:#141B22;--ink:#EDF1EF;--accent:#3AA893;--muted:#9AA7AE;
+          --line:#2A343C;--card:#1B242C;--hatch:#2E4A46;--faint:#1F2932;}
+  }
+  :root[data-theme="dark"]{--paper:#141B22;--ink:#EDF1EF;--accent:#3AA893;--muted:#9AA7AE;
+          --line:#2A343C;--card:#1B242C;--hatch:#2E4A46;--faint:#1F2932;}
+  :root[data-theme="light"]{--paper:#F7F8F6;--ink:#141B22;--accent:#0E7A6F;--muted:#5B6770;
+          --line:#DCE1DE;--card:#FFFFFF;--hatch:#B9CFC9;--faint:#EEF2F0;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 22px 80px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);}
+  h1{font-family:var(--serif);font-size:clamp(30px,5vw,50px);line-height:1.08;margin:.2em 0 .1em;font-weight:600;}
+  .stamp{font-family:var(--mono);font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px;margin-top:14px;}
+  h2{font-family:var(--serif);font-size:24px;margin:44px 0 14px;font-weight:600;}
+  .northstar{background:var(--card);border-left:4px solid var(--accent);border-radius:0 8px 8px 0;padding:18px 22px;margin:26px 0;}
+  .northstar b{font-family:var(--serif);font-size:19px;display:block;margin-bottom:6px;}
+  .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:14px;margin:20px 0;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:15px 17px;}
+  .card h3{margin:0 0 8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);}
+  .card p{margin:0 0 6px;font-size:14px;}
+  .scroller{overflow-x:auto;}
+  table.g{border-collapse:collapse;width:100%;min-width:640px;font-size:13px;}
+  table.g th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line);}
+  table.g td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  .lab{width:36%;}
+  .cnt{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .bar{position:relative;height:15px;background:var(--faint);border-radius:3px;overflow:hidden;}
+  .done{position:absolute;top:0;left:0;height:100%;background:var(--accent);}
+  .sched{position:absolute;top:0;height:100%;background:repeating-linear-gradient(45deg,var(--hatch),var(--hatch) 4px,transparent 4px,transparent 8px);}
+  .est{position:absolute;top:0;height:100%;background:var(--faint);opacity:.75;}
+  .chip{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--faint);border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin-left:8px;color:var(--muted);}
+  ul.led{list-style:none;padding:0;margin:8px 0 0;}
+  ul.led li{padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;}
+  ul.led li .ev{display:block;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-word;}
+  .tick{color:var(--accent);font-weight:700;}
+  .open{color:var(--muted);}
+  footer{margin-top:52px;border-top:1px solid var(--line);padding-top:16px;font-family:var(--mono);font-size:11.5px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">Token Shield / command center</div>
+  <h1>Token Shield: find the waste, fix the right waste, prove the result</h1>
+  <div class="stamp">CLAUDE DOMINATION SPRINT OPEN, 2026-08-15, session e6ba7b86. You gave one sentence to build against: Token Shield finds the cheapest way to run your coding agents, applies the right optimization, and proves whether it actually worked. Claude only, kept smart and simple. That sentence maps to exactly two units left unbuilt, and both are building now. Lane A is the Waste Score, one number from a published formula, which is the measurement idea worth taking from the cost meters in this field. Lane B is the Companion Fabric, which turns the four tools you named (the two compressors, the context manager, the tool optimizer) into ranked treatments our existing tournament can pick between, native behaviour first. You chose all four recommended options in one window: two lanes today, the standard spend ceiling, prescribe and prove but never install a third party tool for you, and an independent hostile reviewer on the Waste Score only. Nothing is merged yet today; every box below is open and carries the check that will tick it. Tick contract: a box ticks only when its done-check ran after the last edit and that output is quoted beside it. Prior stamp follows. EVERYTHING MERGED AND VERIFIED, 2026-08-15, session 2d9f807a. Five pull requests merged in order on your word, each verified before the next opened: Fleet F2 the one line organisation install, the competitive field map, BX1 the zero install trial, a wiring fix, and Fleet F3 the organisation dashboard after its hostile review blocked it and the fix was proven. The documented test command run verbatim on merged main after the last merge: 427 checks green across 22 suites, check_py311 clean over 52 files. The tree is now ONE branch, ONE worktree, zero open pull requests, zero live fences; every branch was individually proven merged before deletion and every worktree checked clean before removal. TWO THINGS CAUGHT LATE AND WORTH KNOWING: the dashboard branch predated the wiring fix, so merging it as it stood would have silently removed a test suite from continuous integration, caught by grepping its own suite line before the pull request; and re-running the symlink attack with the store under a home directory showed the page publishing the admin account name to the whole organisation, fixed at the single point where any error reaches the page rather than at the four places that build one. Tick contract: a box ticks only when its done-check ran after the last edit and that output is quoted beside it. Prior stamp follows. </div>
+
+  <div class="northstar">
+    <b>North star</b>
+    Every Claude session on this machine costs the least it can while losing no quality, and the method is portable and provable enough that other people can install it as a plugin and trust its numbers.
+  </div>
+
+  <h2>At a glance</h2>
+  <div class="strip">
+    <div class="card"><h3>Now (2026-08-15 night, BOTH LANES MERGED)</h3><p>Both units are on main. The Waste Score exists, with its formula published before the first score was ever computed and its own attack surface published beside it. The Companion Fabric is in: the tools you named are ranked, reversible treatments, and the rule that we never prescribe what we cannot tell you how to undo is now enforced by code. Merging turned out to be possible after all: the classifier blocks deleting the branch, not merging, which five sessions had recorded as a blanket block. Branch cleanup is the one thing still owed. A second session was working this repository at the same time, so I verified merged main in a clean copy rather than in a tree someone else is editing, and I archived their uncommitted work before touching anything.</p><p class="cnt">main 970eb6c. Merged-main suite in a clean worktree, after the last merge: 456 checks green across 22 suites, exit 0, check_py311 clean over 52 files. Pull requests 68 and 66 merged at 01:03 and 01:04.</p></div>
+    <div class="card" style="display:none"><h3>Previous</h3><p>The Companion Fabric is DONE and waiting for your click as pull request 66. The four tools you named are now candidates our tournament can rank, reject and explain, and the rule that we never prescribe what we cannot tell you how to undo is enforced by code rather than by a document. Context Mode is blocked by that rule and says so in its own refusal. The Waste Score is in its fix round after its reviewer proved 45 of its 100 points could be improved by spending more, which is the reviewer earning its keep. Merging is the one thing I cannot do: this session's permission classifier refused it, as it has four times before, so the pull request waits for you.</p><p class="cnt">Pull request 66 open at f010e6b, push verified three ways. Full suite on that branch after the last edit: 434 checks green across 22 suites, exit 0, up from 427 on main. All three push gates empty over the whole range.</p></div>
+    <div class="card" style="display:none"><h3>Previous</h3><p>Two lanes are running and one reviewer waits behind them. Lane A builds the Waste Score: one number between 0 and 100 for how much waste your usage carries, from a formula that gets published before the first score is ever shown, so it reads as a standard rather than as marketing. Lane B establishes what the four tools you named actually do, from their own repositories and nothing else, then enters them in our treatment tournament as candidates that can be ranked and rejected. Both lanes started from a clean tree, and neither can merge until I break its code myself and watch its tests catch me.</p><p class="cnt">Started from main 800dd51, 427 checks green. Spend ceiling declared: 800,000 output tokens hard, no new work dispatched past 640,000.</p></div>
+    <div class="card" style="display:none"><h3>Previous</h3><p>Everything is merged, verified and on main. Five pull requests today. The organisation dashboard shipped last, after its hostile reviewer blocked the first build and the fix was proven attack by attack. The tree is one branch with nothing in flight: no open pull requests, no live fences, no half finished work. A stranger can now try the product with one command and install nothing; an organisation can install across every machine with one line and read an org wide page that turns any broken or hostile record into its own honest NO DATA row instead of an outage.</p><p class="cnt">main 800dd51; 427 checks green across 22 suites, run after the last merge.</p></div>
+    <div class="card"><h3>Waiting on Khalil</h3><p>Nothing blocks today. You answered the four decisions that open this sprint in one window, so both lanes are running on your choices rather than on my assumptions. Two older questions are still open and neither blocks anything: whether to add a hard brake that stops spend at the boundary and a live per task cost counter (my recommendation is still the counter first, because the brake collides with our promise to install no hooks by default), and whether the handover folder should be tracked in git rather than excluded on this machine alone.</p><p class="cnt">Four decisions recorded in the project state file with their flip conditions. Two questions carried forward from yesterday, unchanged.</p></div>
+    <div class="card" style="display:none"><h3>Previous</h3><p>Nothing blocks the build. Two questions when you have a moment. First, the research found two gaps nobody in this field covers and neither is in the ratified plan: a hard brake that stops spend at the boundary, and a live per-task cost counter. My recommendation is the counter first, smaller and it compounds with the measured labels, while the brake collides with our zero-hooks-by-default promise. Second, the handover folder is excluded from git on this machine only, yet our own notes point future sessions at a file inside it, so that pointer is a promise the repository cannot keep. A durable copy is archived either way.</p><p class="cnt">Both recorded with recommendations and flip conditions.</p></div>
+    <div class="card"><h3>Risk watch</h3><p>The open diet-v2 experiment is still the crown jewel: no local plugin update and no configuration change on this machine until its verdict near 2026-09-13, and every lane is briefed around that. The new risk this morning came from the adopted lane itself. A working copy carried an uncommitted edit that quietly removed the symlink protection the security review had just forced in. Nothing was lost, it was archived and the committed fix restored before any check ran, but it is the reason the rule stands that an adopted lane is verified from its commits, never from the state of the folder it was left in.</p><p class="cnt">Removing one of the two symlink guards alone does not turn the suite red, because the other catches it first. That is defence in depth working, and it is stated in the pull request rather than hidden.</p></div>
+    <div class="card"><h3>Where we actually stand against the field</h3><p>Two competitors are far larger than us by audience: one at roughly 76,000 stars, one at roughly 20,000, both updated within the last two days, and both own the search result for reducing Claude Code tokens. What none of them do, and what the whole field does not do, is separate what Anthropic's own caching already saved from what a tool actually saved, and none of them isolate a single variable so a percentage can be attributed to one cause. Every large headline number out there mixes both. That is the moat, and it is the least copied thing we have.</p><p class="cnt">Recorded as their claims, not our measurements: nothing in the field map is labelled measured or verified, because nothing in it was measured here.</p></div>
+    <div class="card"><h3>Forecast</h3><p>Both of today's lanes land today with medium confidence, and the honest reason it is not higher is that the Waste Score touches the profiler, which is the file the hostile reviewers have found most to attack in the past, so I have budgeted one fix round for it and none for the registry work. If the reviewer blocks it, expect the score to merge tomorrow morning rather than tonight, which changes nothing downstream. This week carries three smaller units: the one line install, the cost delta on pull requests, and the single command that runs the whole loop end to end. The finish line stays late September, medium confidence, and the one date that cannot move is the experiment verdict near 2026-09-13.</p><p class="cnt">Ranges with assumptions, never points. Basis: medium units have needed one fix round about half the time over the last four days, small units have landed in one dispatch.</p></div>
+    <div class="card" style="display:none"><h3>Previous</h3><p>Day 1 of the finish plan closes today with medium-high confidence: F2 is already done, and the two lanes now building are one small unit and one medium unit, which matches the pace of the last three days. The finish line stays late September, medium confidence, with the experiment verdict near 2026-09-13 the one date that cannot move.</p><p class="cnt">Ranges with assumptions, never points; basis: small units land in one dispatch, medium units need one fix round about half the time.</p></div>
+    <div class="card"><h3>The verdict, verbatim (unchanged)</h3><p>experiment 'claude-md-diet': NOT_PROVEN. Window changed, config changed during window, model mix not comparable. Shown as a negative, claimed as nothing: this is the product working. The successor claude-md-diet-v2 runs untouched, baseline median 85,771 over 30 days, clean-window verdict near 2026-09-13.</p><p class="cnt">One record in ~/.claude/token-shield/savings.jsonl; nothing today touches it.</p></div>
+  </div>
+
+  <h2>Today: the Claude domination sprint (2026-08-15 afternoon, session e6ba7b86, nothing ticked yet)</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit, what it buys you, and who is building it</th><th>Research</th><th>Build</th><th>Verify</th><th>Review</th><th>Merge</th></tr>
+    <tr><td class="lab"><b>Lane A, the Waste Score.</b> One number, 0 to 100, for how much measurable waste your usage carries, from five fixed ingredients with published cut off points. It is what makes two machines comparable and what a team could later fail a build on. The formula document is committed before the scorer, deliberately, because a score whose formula arrives afterwards is marketing. One builder on the middle tier, then an independent hostile reviewer on the strongest tier.</td><td class="cnt">n/a</td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab"><b>Lane B, the Companion Fabric.</b> The four tools you named stop being folklore and become candidates our tournament can rank: the two compressors, the context manager, the tool optimizer. Two researchers first, reading only the projects' own pages, because a registry entry written from a blog post already burned us once. Then one builder turns confirmed facts into registry entries and treatment cards. The two cost meters enter as peers to learn from, never as treatments, because a meter cannot be a treatment.</td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td class="cnt">inline</td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h3>Today's boxes and the exact check that ticks each one <span class="chip">3/8 ticked</span></h3>
+  <ul class="led">
+    <li><b class="tick">TICKED. B1, every fact came from the tool's own pages.</b> Two researchers, no blog posts, no summaries. The finding that mattered was an absence: Context Mode publishes no uninstall command for Claude Code, confirmed by searching its whole README rather than assumed, so it cannot be prescribed and its refusal now says exactly that in its own words.
+      <span class="ev">recipe refusal, run against the real registry: "'context-mode' is a known mention, never a prescribed treatment. NOT PRESCRIBABLE: ... We never prescribe a treatment we cannot reverse", exit 2, plus the flip condition</span></li>
+    <li><b class="tick">TICKED. B2, a companion still cannot win a tournament.</b> Broken deliberately, caught by its test, restored.
+      <span class="ev">RED: AssertionError naming companion.rtk as a winner; restored, 56 passed. Full suite 434 checks green across 22 suites, exit 0</span></li>
+    <li><b class="tick">TICKED. B3, the two cost meters entered as peers, not as medicine.</b> A meter can never be a treatment. What we took from them is the idea of one comparable number, which is the other lane.
+      <span class="ev">registry holds them as mentions; neither appears as a treatment card in any tournament</span></li>
+    <li><b>A1. The formula is published before the first score exists.</b> Checked by reading the commit history: the document commit must come before the code commit. If they are in the wrong order the unit does not merge, however good the code is.
+      <span class="ev">check: git log --oneline --name-only shows docs/WASTE-SCORE.md in an earlier commit than scripts/profile.py</span></li>
+    <li><b>A2. A missing ingredient produces no score at all, never a flattering one.</b> If any one of the five inputs is not measured on your machine, the answer is NO DATA naming what was missing. A score computed over whatever happened to be available is not comparable between two machines, which is the only reason the number exists.
+      <span class="ev">check: one input forced to NO DATA turns the whole result to NO DATA and names it, proven by breaking the code first and watching the test catch it</span></li>
+    <li><b>A3. Every cut off point is tested at both ends and in the middle.</b> Five ingredients, three points each.
+      <span class="ev">check: python3 scripts/check_py311.py && cd scripts && python3 test_profile.py</span></li>
+    <li><b>A4. I break it myself before I believe it.</b> The builder's own tests are not enough; twice this week a unit passed its own tests and was still wrong.
+      <span class="ev">check: my own defect reinjection, the red line quoted, the file restored byte identical and green again</span></li>
+    <li><b>A5. An independent reviewer tries to destroy it.</b> Briefed to refute, not to check: the formula can be gamed, the ingredients are not really measured, two machines are not really comparable.
+      <span class="ev">check: every finding reproduced by me with my own fixture before I accept it, and its attacks re-run against the fix</span></li>
+    <li><b>B1. Every fact comes from the tool's own pages.</b> No blog posts, no listicles, no summaries. Where a project does not say something, the answer stays NO DATA rather than a plausible guess.
+      <span class="ev">check: every registry field traceable to a page a researcher actually opened, and the uninstall command present or the tool is not prescribed at all</span></li>
+    <li><b>B2. A companion can still never win a tournament.</b> This is already the law in the code and it stays: a third party tool appears as a considered and rejected option with the reason, never as the winner. Your choice today, prescribe and prove but never install, is exactly this rule.
+      <span class="ev">check: the existing guard broken deliberately, the test catches it, then restored</span></li>
+    <li><b>B3. The meters enter as peers, not as medicine.</b> The two cost reporting tools become mentions with an honest note. What we take from them is the idea of one comparable number, which is lane A.
+      <span class="ev">check: neither appears as a treatment card in any tournament</span></li>
+  </ul>
+
+  <h2>This week, after today closes</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit and what it buys you</th><th>Size</th><th>Plan</th><th>Build</th><th>Verify</th><th>Merge</th></tr>
+    <tr><td class="lab"><b>The true one liner.</b> Today a stranger tries the product by cloning the repository first. The tools that own this audience won it with a single command that leaves nothing behind. A packaging file at the repository root closes that gap with no publishing anywhere, so it stays inside the release gate. One risk to settle first: this repository is also a Claude Code plugin and its own marketplace, so the packaging file must not confuse plugin loading.</td><td class="cnt">small</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab"><b>The cost delta on a pull request.</b> A robot comment that says what adding three hundred lines to a memory file will cost every future session, at the moment the decision is still cheap to reverse. Nobody in this field shows that. Once the Waste Score exists, this becomes a budget you can fail a build on.</td><td class="cnt">medium</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab"><b>One command that runs the whole loop.</b> Measure, pick the single highest value problem, choose the treatment (including doing nothing), show the exact change and its drawback, apply it only if you say yes, open the experiment automatically, then come back with keep or roll back. Every piece of this already exists and ships separately; this unit is the wiring, not new machinery, which is why it is worth doing at all.</td><td class="cnt">medium</td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab"><b>Fleet F4 and F5.</b> Soft budgets for an organisation, where an unreachable store never blocks a developer and a breach advises rather than stops, then signed receipts. Both already have written plans.</td><td class="cnt">medium</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Day 1 of the finish plan (2026-08-15, session 2d9f807a, ticks land as done-checks pass)</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit and what it buys you</th><th>Advance</th><th>Adopt</th><th>Verify</th><th>Gates</th><th>Merge</th></tr>
+    <tr><td class="lab">Baton pickup: handover pack read, the overnight session confirmed dead before its lane was touched, its fence adopted by name, the undelivered handover acknowledged</td><td class="cnt">4/4</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Fleet F2, the one line install for a whole organisation: init, join, leave, hardened after a hostile review returned BLOCKED with one critical and five major findings</td><td class="cnt">4/5</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab">The competitive field map: two parallel research passes, the Claude Code ecosystem and the wider market, every row naming a page actually opened</td><td class="cnt">3/4</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="est" style="left:0%;width:100%"></div></div></td></tr>
+    <tr><td class="lab">Fleet F3, the organisation-wide dashboard: SHIPPED. Blocked first by its hostile reviewer (three one-byte inputs each killed the whole page, a symlink escaped the store, the title took a script injection), fixed against nine ratified decisions, every attack re-run by me against the fix, plus one further leak I found and closed: the page was publishing the admin account name to the whole organisation</td><td class="cnt">5/5</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">BX1, the zero install trial: SHIPPED. One command, nothing installed, a stranger sees their own waste numbers. A defect found by running the README command end to end from a fresh clone (the next step it printed did not resolve) fixed with a calibrated test</td><td class="cnt">5/5</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h3>Day 1 evidence, quoted <span class="chip">3/3 closed</span></h3>
+  <ul class="led">
+    <li><b>Fleet F2 adopted, not trusted.</b> The overnight session was confirmed dead (last transcript write 23:43) before its lane was touched. Its working folder carried an uncommitted edit that removed the symlink protection the security review had just forced in; it was archived and the committed fix restored before any check ran.
+      <span class="ev">archived to BrotherArchive/tokenshield-rejected-attempts/2026-08-15-f2-uncommitted-symlink-weakening.patch, 14 lines; git status clean after restore</span></li>
+    <li><b>Every review attack re-run against the fix, in isolated home directories.</b> A symlink planted in a shared store no longer reaches the joining machine's files; a wrong salt, a path-traversal organisation name, and a tag that would have been silently dropped are each refused by name with exit code 2.
+      <span class="ev">victim file printed ORIGINAL_ZSHENV intact; "refused: --salt does not match this org's salt (salt_fingerprint mismatch in org-profile.json)"; "refused: org '../escaped' must match ^[a-z0-9][a-z0-9_-]*$"; "refused: --environment 'prod us' must match ^[a-z0-9_-]+$ ... this tag would otherwise be silently dropped from the pushed record"</span></li>
+    <li><b>My own defect reinjection, not the builder's report.</b> Removing the primary symlink guard turned the suite red; the file was restored byte-identical and passed again.
+      <span class="ev">AssertionError on reinjection, rc=1; shasum 81163f74 on both sides of the restore; 54 passed after</span></li>
+    <li><b>Full suite on the merged branch, run after the last edit.</b>
+      <span class="ev">9/10/36/7/37/8/15/6/7/19/49/12/6/33/31/13/7/8/26/54 = 393 checks green, FINAL_EXIT=0; check_py311 clean, 48 files</span></li>
+    <li><b>Push gates, fail closed over the whole pushed range.</b> Secret, attribution and dash scans on both the content and the commit messages, all empty.
+      <span class="ev">HEAD == upstream == ls-remote at 1ae4748; pull request 60 open, continuous integration "test pass" twice</span></li>
+    <li><b>Merge refused, recorded rather than worked around.</b> This session's permission classifier blocked the merge command, the same refusal three earlier sessions hit. Pull requests 60 and 61 wait for your click.
+      <span class="ev">no workaround attempted; recorded in STATE.md at the moment it happened</span></li>
+  </ul>
+
+  <h3>The dashboard that did not ship, and why that is the product working <span class="chip">blocked</span></h3>
+  <ul class="led">
+    <li><b>The reviewer was told to break it, not to check it, and it broke it six ways.</b> Three separate one-byte inputs each killed the entire organisation's page rather than one machine's row: a file that is not valid text, a counter holding the value "not a number", and a deeply nested file. Any member of the organisation could commit any of them.
+      <span class="ev">reproduced by me on my own fixtures: UnicodeDecodeError 0xff at position 0; ValueError: cannot convert float NaN to integer; RecursionError while decoding a JSON array</span></li>
+    <li><b>A symlink made the page read files from outside the store.</b> The install code was hardened against exactly this attack for writing; nobody had hardened the reader.
+      <span class="ev">my repro rendered a tag from an outside directory into the org page twice</span></li>
+    <li><b>The page title accepted a script injection.</b> The body escaped everything correctly; the title did not.
+      <span class="ev">my repro produced a literal script tag inside the title element</span></li>
+    <li><b>The new tests were in neither the test command nor continuous integration</b>, so none of this would have shown up again.
+      <span class="ev">grep for the test name returns 0 hits in both ci.yml and CLAUDE.md</span></li>
+    <li><b>Why this counts as a good day.</b> The unit passed its own eleven tests. Every hostile fixture its author wrote was well-formed text, which is exactly why five of the six findings survived a suite advertised as covering hostile input. The fix design is ratified and written down, so the next session starts building rather than re-deciding.
+      <span class="ev">no pull request opened; merging an unreviewed fix would break the never-merge-unverified gate</span></li>
+  </ul>
+
+  <h2>Yesterday: finishing the core as V1 (2026-08-14 afternoon, two lanes plus riders)</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit and what it buys you</th><th>Advance</th><th>Dispatch</th><th>Build</th><th>Refute</th><th>Merge</th></tr>
+    <tr><td class="lab">Baton pickup: pack checks re-run before any dispatch (main 709fa1b, suite 253 green, ledger NOT_PROVEN confirmed, gate open, fences registered)</td><td class="cnt">4/4</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td><td></td></tr>
+    <tr><td class="lab">Lane A, wave R + WR+: SHIPPED. Fix verified by this orchestrator (all 10 archived attacks safe, own reinjection red to green, 285 checks in the worktree), PR 56 merged, PR 54 resolved on top (19 suites in CI), merged-main suite 339 checks green exit 0</td><td class="cnt">4/4</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Lane B, Signals S1: MERGED as PR 55. Privacy refuter BLOCKED round one (value-level whitelist gap, both Majors reproduced by my own fixtures); fix round landed all ten findings red to green; refuter's attacks re-run by me against the fix, every one defeated; 26 tests, CI pass twice</td><td class="cnt">4/4</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Rider: scorecard re-scored against 1.8.0, MERGED as PR 53 (measurement 9.5, personalization 8.0, automation 4.0; reduction held at 6.0 by the empty VERIFIED ledger, the honesty rule working). Verified by my own diff read and command re-runs</td><td class="cnt">3/3</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Rider: vault bookkeeping landed (latest sessions, overview, two failure notes), re-verified by my own greps</td><td class="cnt">2/2</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Rider: branch cleanup DONE on your yes: 12 remaining proven-merged branches deleted one by one; remote now holds main only (ls-remote quoted)</td><td class="cnt">1/1</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Close: wave R fix verified and merged (339 checks green on merged main, quoted), this page republished; vault log and handover land at the run's close</td><td class="cnt">3/5</td><td></td><td></td><td></td><td><div class="bar"><div class="done" style="width:60%"></div><div class="sched" style="left:60%;width:40%"></div></div></td></tr>
+  </table>
+  </div>
+  <p class="cnt">Solid: done with output quoted. Hatched: building now. Faint: scheduled behind a dependency or your decision.</p>
+
+  <h2>The V1 work breakdown: everything the product is, and where each piece stands</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">WBS node</th><th>Advance</th><th>Contents and standing</th></tr>
+    <tr><td class="lab">1. Measurement core</td><td class="cnt">4/4</td><td>1.1 token meter over real transcripts (measure_tokens); 1.2 independent second parser reconciliation (reconcile, 0.000 percent drift live); 1.3 deterministic profiler with MEASURED/SIGNAL/INFERRED labels; 1.4 pressure signals in the profile. All shipped in 1.8.0.</td></tr>
+    <tr><td class="lab">2. Advice engine</td><td class="cnt">6/6</td><td>2.1 quick advisor cards with how-steps and commands; 2.2 deep advisor (Fable, on demand, cost printed and subtracted); 2.3 truth registry with staleness reaching the user; 2.4 treatment tournament; 2.5 guided modes in plain words; 2.6 companion suppression that never hides a regression. All shipped in 1.8.0.</td></tr>
+    <tr><td class="lab">3. Native reduction (TODAY, Lane A)</td><td class="cnt">0/6</td><td>3.1 experiment interlock, commits first (no apply while any experiment is open); 3.2 guided_apply shared contract (refuse, mutate, verify, auto-experiment); 3.3 CLAUDE.md diet guided apply; 3.4 plugin prune bundles (founder picks the names, never inferred); 3.5 memory index trim; 3.6 WR+ one-line output-discipline treatment. Building now; every apply behind backup, diff, explicit yes; fixture-only on this machine while diet-v2 runs.</td></tr>
+    <tr><td class="lab">4. Proof machinery</td><td class="cnt">5/5</td><td>4.1 experiment engine v2 (cohorts, fingerprint, confounder downgrades); 4.2 the proof ledger (labels never blend, NO DATA beats a guess); 4.3 per-treatment target metrics; 4.4 report did-it-work delta; 4.5 share card that refuses without proof. All shipped in 1.8.0.</td></tr>
+    <tr><td class="lab">5. Ecosystem and integration</td><td class="cnt">6/6</td><td>5.1 companion registry with hand-verified evidence; 5.2 adapters (ponytail, caveman, token-saver); 5.3 native discovery plus version drift watch; 5.4 ecosystem doctor with hook ownership; 5.5 open integration contract (DECLARED never CURATED); 5.6 MCP server, nine tools, registered and Connected here. All shipped in 1.8.0.</td></tr>
+    <tr><td class="lab">6. Signals (Lane B, S1 of 5) DONE TODAY</td><td class="cnt">4/4</td><td>6.1 frozen whitelist schema; 6.2 quantized rollup with full value validation (buckets, bands, day resolution, no linkable values across reports; a privacy refuter's two Major findings fixed and its attacks re-run clean); 6.3 outbox capped at 90 with same-day replacement and 0700/0600 permissions; 6.4 preview that re-validates before printing exact bytes. MERGED as PR 55. S2 consent and send, S3 owned endpoint, S4 published aggregates, S5 quarterly report: weekend and later, per your decisions (hold at S2).</td></tr>
+    <tr><td class="lab">7. Trust surface</td><td class="cnt">5/5</td><td>7.1 dashboard showing only what you influence; 7.2 evidence-only scorecard re-scored against 1.8.0 (PR 53 MERGED); 7.3 claims file with two derivations per headline number; 7.4 benchmark kit (reproduce the meter in two commands); 7.5 docs truth sweep. All shipped.</td></tr>
+    <tr><td class="lab">8. Release and operations</td><td class="cnt">4/4</td><td>8.1 the 1.8.0 release train (13 PRs, tag, publish, plugin install, MCP registration): DONE; 8.2 uninstall leaves no trace; 8.3 zero hooks by default, all opt-in; 8.4 branch hygiene DONE (remote holds main only, quoted).</td></tr>
+  </table>
+  </div>
+  <p class="cnt">V1 is complete when nodes 3, 6 and 7.2 tick with quoted done-checks and both lanes' PRs sit merged on main with the suite green. Nodes 1, 2, 4, 5 and the rest of 7 and 8 shipped in 1.8.0 and its train, evidence in the ledger below.</p>
+
+  <h2>Shipped: the road to 1.8.0 (2026-08-14 overnight and morning, all merged)</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit and what it buys you</th><th>Advance</th><th>Lane 1</th><th>Lane 2</th><th>Then</th></tr>
+    <tr><td class="lab">Roadmap: short, mid, long term, website-ready (PR 39)</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">CLAUDE.md diet v2 applied, diet-v2 experiment opened</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">FACTS2: advice cards read the truth registry, staleness reaches the user. PR 40 queued. Check quoted: reinjected _is_fact_stale always-fresh, suite RED (AssertionError: []); restored, 29/31/31 passed, check_py311 clean 36</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">PRO2: pressure signals live (structured input 89.5 percent, 5,506 duplicate calls, output p90 1,884). PR 42 queued. Check quoted: no_data forced to measured zero, suite RED; restored, 19/31 passed, RECONCILED, meter diff empty</td><td class="cnt">1/1</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">H2: modes in plain intent words, guided recipes with rollback. PR 44 queued (stacked on 40). Check quoted: no-mode default forced conservative, RED "mode_strategies must not run when --mode is omitted"; restored, 38/13/31 passed, commands 6</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">DASH1: ten-second dashboard top strip. PR 43 queued. Check quoted: VERIFIED filter disabled, RED naming the admitted NOT_PROVEN row; restored, 33 passed, dashboard exit 0</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Fleet enterprise spec + plan (your four decisions), PR 41. Signals waste-intelligence spec + plan (your four decisions), PR 45</td><td class="cnt">2/2</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">METR1: per-treatment target metrics. Opus refuter BLOCKED it (direction inverted for up-metrics; dashboard leak); fixed, refuter's probes re-run clean, my reinjection caught by name. PR 46 updated at 48e7592. Check quoted: 35/9/10/31 passed, store shasums identical both ends</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">TOUR1: treatment tournament. Refuted, fixed at root cause, probes re-run clean, one further defect (false companion tag) caught in the fix and repaired. PR 49 queued (stacked on 44). Check quoted: 49/13/31 passed, healthy profile renders zero winners</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">HIST1: moved environments render old proof HISTORICAL. PR 48 queued (stacked on 43). Check quoted: false-HISTORICAL reinjection RED on the strip assertion; restored, 36 passed, ledger hash unchanged</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">1.8.0 RELEASED: 13 PRs merged (two carrier repairs after a stacked-merge routing miss, caught by diffstat before the tag), suite 269 green on merged main, tag pushed, release live, plugin 1.7.1 to 1.8.0, MCP Connected via venv</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">C1 + V1: MERGED as PR 52 (builder stalled before committing; work recovered by replaying its recorded edits, a replay-duplicated block excised, calibrations re-run on the final files). Check quoted: 12/8/36 passed on the branch, 12/8/49/36/35/19 on merged main, live card prints the honest refusal</td><td class="cnt">2/2</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Last night's record (2026-08-13, all merged)</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Unit and what it buys you</th><th>Advance</th><th>Lane 1</th><th>Lane 2</th><th>Rider</th></tr>
+    <tr><td class="lab">Handover pack consumed, its three verify-first checks re-run before any dispatch. DONE</td><td class="cnt">3/3</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">G2 suppression: Token Shield stops advising you to do what a plugin you already run is doing, and never goes quiet while a metric degrades. MERGED as PR 32, after a BLOCKED review and a rebuild</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">H1 adapters: one reader each for ponytail, caveman and token-saver, every command quoted from the registry, never invented. MERGED as PR 29, with the py311 gate gap it found</td><td class="cnt">2/2</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">RS1 research: both candidates verified first-party, both blocked from the registry by a missing uninstall path. DONE</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">U1 drift watch: a companion updating under you no longer silently invalidates advice or a running experiment. MERGED as PR 30</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">I1 open contract: any plugin can declare itself to Token Shield, labeled DECLARED, so integration scales past three hand-checked companions. MERGED as PR 33, after a BLOCKED review and a rebuild</td><td class="cnt">1/1</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">G3 deep advisor: when the deterministic rules cannot decide, one Fable call chooses, prints its own cost and subtracts it. MERGED as PR 31, live run done</td><td class="cnt">1/1</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Not tonight, by your choice: H2 recipes, H3 attribution waterfall, C1 optimization loop, R native guided apply</td><td class="cnt">0/4</td><td></td><td></td><td></td></tr>
+    <tr><td class="lab">Verdict-gated, cannot move before about 2026-09-11: RELEASE train, V1 share card, A1 act rung</td><td class="cnt">0/3</td><td></td><td></td><td></td></tr>
+  </table>
+  </div>
+  <p class="cnt">Solid bar: done with its output quoted. Hatched: scheduled tonight. Faint: at risk of falling past the guard. Nothing on this table ticks until its own done-check has run after the last edit.</p>
+
+  <h2>Shipped record: the build night and before</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Track</th><th>Advance</th><th>Sweep</th><th>Build</th><th>Ship</th></tr>
+    <tr><td class="lab">Verification sweep, 10 blueprint facts</td><td class="cnt">10/10</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Wave A: profiler, experiment v2, advisor engine</td><td class="cnt">3/3</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">Wave B: dashboard, report and commands, registry and docs</td><td class="cnt">3/3</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">Integration, then adversarial review (opus)</td><td class="cnt">2/2</td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">Review fixes W1+W2 (2 opus builders), merge, 91 checks green</td><td class="cnt">2/2</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Ship v1.7.0: gates, push, PR 8, CI, merge, release, tree pruned</td><td class="cnt">3/3</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Plugin refresh on this machine (1.4.0 to 1.7.0 installed, loads on restart)</td><td class="cnt">1/1</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">v1.7.1 Actionable Advisor: influence-only dashboard, how-to cards, guided journeys</td><td class="cnt">4/4</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Consumption Report spec: design ratified, spec written, PR 12 MERGED</td><td class="cnt">3/3</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Overnight docs wave: 2 implementation plans, WBS design, companion research, PR 13 MERGED</td><td class="cnt">5/5</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Weekly reviews: brothermode (review 3) and brothersbe (first scored), both closed</td><td class="cnt">2/2</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Solid Core strategy and capability scorecard: ratified, PR 14 MERGED</td><td class="cnt">2/2</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Persona program: research, benchmark kit (PR 15), trust sweep (PR 16), wave R plan and personas (PR 17), all MERGED</td><td class="cnt">4/4</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+    <tr><td class="lab">Gate amendment on your decision (PR 18), MCP server + Consumption Report BUILT (PR 20), v1.8 wave 1 BUILT (PR 19), reconciliation (PR 21)</td><td class="cnt">4/4</td><td></td><td></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Long range: from shipped core to enterprise</h2>
+  <div class="scroller">
+  <table class="g">
+    <tr><th class="lab">Phase</th><th>Advance</th><th>Through Aug 13</th><th>Aug 14 (today)</th><th>Aug 15-17 (weekend)</th><th>Aug 18 onward</th></tr>
+    <tr><td class="lab">Foundations: laws, plugin, prune, honest meter, provability, v1.5 to v1.7.1</td><td class="cnt">35/35</td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td><td></td></tr>
+    <tr><td class="lab">1.8.0: ecosystem, treatments, proof machinery, MCP, released and installed</td><td class="cnt">13/13</td><td><div class="bar"><div class="done" style="width:85%"></div></div></td><td><div class="bar"><div class="done" style="width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">V1 close: wave R + WR+ native reduction, Signals S1, scorecard re-score</td><td class="cnt">0/3</td><td></td><td><div class="bar"><div class="sched" style="left:0;width:100%"></div></div></td><td></td><td></td></tr>
+    <tr><td class="lab">Fleet F1-F5: record and store, init and join, dashboard, org profile and budgets, signed receipts</td><td class="cnt">0/5</td><td></td><td></td><td><div class="bar"><div class="est" style="left:0;width:100%"></div></div></td><td></td></tr>
+    <tr><td class="lab">Signals S2: consent and send, client complete, nothing sent anywhere yet</td><td class="cnt">0/1</td><td></td><td></td><td><div class="bar"><div class="est" style="left:20%;width:60%"></div></div></td><td></td></tr>
+    <tr><td class="lab">Signals S3-S5: owned endpoint, published aggregates, quarterly report (your infrastructure go)</td><td class="cnt">0/3</td><td></td><td></td><td></td><td><div class="bar"><div class="est" style="left:0;width:70%"></div></div></td></tr>
+    <tr><td class="lab">Website launch (you build from the brief; session supports with screenshots and fact-checks)</td><td class="cnt">0/1</td><td></td><td></td><td><div class="bar"><div class="est" style="left:40%;width:60%"></div></div></td><td></td></tr>
+    <tr><td class="lab">LAB1 selection benchmark: post-verdict public proof, deliberately not promised for the weekend</td><td class="cnt">0/1</td><td></td><td></td><td></td><td><div class="bar"><div class="est" style="left:0;width:50%"></div></div></td></tr>
+    <tr><td class="lab">diet-v2 verdict at its clean window (near Sep 13), then A1 act rung behind its refute review</td><td class="cnt">0/2</td><td></td><td></td><td></td><td><div class="bar"><div class="est" style="left:30%;width:70%"></div></div></td></tr>
+  </table>
+  </div>
+
+  <h2>Decisions waiting on Khalil</h2>
+  <div class="strip">
+    <div class="card"><h3>Nothing blocks right now</h3><p>You answered all four of today's questions in one window: delete the merged branches (done, remote holds main only), keep the name Fleet, hold Signals at S2 this weekend (client ready, nothing deployed, nothing sent), and park LAB1 until the diet-v2 verdict near September 13. The wave R fix round runs on my side; its merge needs nothing from you.</p><p class="cnt">All four recorded in STATE.md with their flip conditions.</p></div>
+    <div class="card"><h3>Still parked, none urgent</h3><p>The stray shrink-claude-md experiment baseline from August 12 is still open in the ledger's eyes and now shows up, correctly, in every guided-apply refusal. Closing it is one command and one word from you; leaving it open costs nothing today.</p><p class="cnt">python3 scripts/cli.py experiment end "shrink-claude-md" when you want it gone.</p></div>
+  </div>
+
+  <h2>Risk management, insights and alerts</h2>
+  <div class="strip">
+    <div class="card"><h3>Insight: net, not gross</h3><p>An adversarial audit caught the dashboard hero reporting caching's gross read saving (76.3B) as if it were net. The write premium (1.7B) is now subtracted, so the headline is the true net benefit, 74.6B. What to do: keep every headline net, and let the audit run on any new number.</p></div>
+    <div class="card"><h3>Insight: two hit ratios</h3><p>The per-session median hit ratio (0.865) and the pooled ratio (0.966) are both true and answer different questions. Reporting the median is the honest, less flattering choice. What to do: always label which statistic a number is.</p></div>
+    <div class="card"><h3>Alert: a stale branch clobbered local files</h3><p>A checkout to the ancient bootstrap commit restored old tracked copies of GANTT.html and PROJECT.md, then a reset deleted them. Both restored from context and the live artifacts; local main now tracks origin/main so it cannot recur. The public repo was never affected. What to do: never checkout an old commit in a repo whose machine-local files were once tracked.</p></div>
+    <div class="card"><h3>Open gap: the after number</h3><p>A fresh post-prune probe is still blocked by the monthly spend limit. Recorded as NO DATA, not arithmetic. What to do: raise the limit, run a few normal sessions, take a schema-2 baseline, compare like windows only.</p></div>
+  </div>
+
+  <h2>The ledger</h2>
+
+  <h3>Execution night (2026-08-13 night, session ab2c73ba, founder asleep after four decisions) <span class="chip">11/11</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Absolute-lead blueprint INTEGRATED into the roadmap, MERGED as PR 35
+      <span class="ev">main ecc2599; check_py311 clean 36 files; commands still 6; the roadmap section greps present. Fable judged the 2,261 line blueprint against the shipped code: SEVEN adoptions ranked by how much they serve your position, and ELEVEN rejections. Three were rejected because they would put Token Shield in a straight fight with ponytail, DCP and caveman at their own techniques, which is what you ruled out; two of those also need behavioral injection or a default hook. The blueprint's own self-scored capability table was rejected because adopting it would trade an honesty label for a score. Full judgment in docs/superpowers/plans/2026-08-14-absolute-lead-integration.md.</span></li>
+    <li><span class="tick">[x]</span> H3 attribution waterfall and FACTS1 truth registry: MERGED as PRs 36 and 37, plus PR 38 lowering the fact review interval from 90 days to 30
+      <span class="ev">main 4bc1a5f; check_py311 clean 36 files plus selftest PASSED; suite 223 checks green; commands 6; doctor and advise exit 0; local branches and remote heads both main only; 1 worktree. Verified by the orchestrator before merging, never on a builder report: FIVE guards broken in turn and each one failed the suite (H3: the never-sum divisor, the fingerprint continuity check, the cohort window overlap check; FACTS1: the missing-source refusal, the review interval inflated so nothing could go stale), every file restored byte-identical. One calibration reported a FALSE failure until the bytecode cache was cleared, because 30 and 90 are the same byte length and Python invalidates a .pyc by modification time AND size.</span></li>
+    <li><span class="tick">[x]</span> Handover pack consumed and independently re-verified before any worker launched
+      <span class="ev">git log -1: 30c6517 (the pack named 9ee9679; PRs 27 and 28 merged after it was written, both on main, which explains the delta); check_py311 "clean, 29 file(s)"; documented twelve-file suite 9/10/25/7/27/6/8/15/7/6/7/12 = 139 checks green, run tonight before dispatch</span></li>
+    <li><span class="tick">[x]</span> G2 suppression, MERGED as PR 32 after being BLOCKED by its own reviewer and rebuilt
+      <span class="ev">The reviewer's Critical was real and I confirmed it myself: "never suppress a warning that something is getting worse" was implemented as "always show HIGH band cards", but only 2 of 13 cards can ever be HIGH, and a card at 100,000 times its trigger stayed hidden. The guard now sits on the metric value a suppression recorded, not the band. Re-running the reviewer's own repros against the rebuild then found the same defect one level down (a suppression written when the metric was unreadable could never be lifted), which I fixed and calibrated (guard reverted gives AssertionError: ['overbuild.s1'], restored gives 27 passed). Repros re-run by me on the final code: quiet at the recorded value, quiet at +40 percent, card returns at +50 percent and at 100,000x, and the <= direction works. main 066fd1a, 188 checks green.</span></li>
+    <li><span class="tick">[x]</span> U1 version-drift watch, MERGED as PR 30
+      <span class="ev">main 235de64; suite re-run on merged main: check_py311 clean 34 files, 167 checks green; live doctor prints three honest NO DATA rows ("no recorded version to compare"), never a reassuring "no drift". Builder's RED lines were mostly "module has no attribute", which proves a test calls a function rather than checks a behavior, so the orchestrator reinjected a real defect (unconditional clean result): suite failed naming the empty result, file restored byte-identical, 12 passed.</span></li>
+    <li><span class="tick">[x]</span> H1 companion adapters, MERGED as PR 29
+      <span class="ev">main 0a86edd; suite re-run on merged main by the orchestrator: check_py311 clean 34 files, 9/10/25/7/27/6/8/15/7/6/7/12/13 = 152 checks green; CI settled pass, pass; all five push gates empty over the whole range. The builder calibrated 9 of its 13 tests and said so plainly; the orchestrator calibrated the other 4 by breaking each behavior (modes label swapped, status branch forced, refusal print removed): all four went RED, file restored byte-identical, 13 passed. Registry gap found and NOT filled: no companion declares a modes field, so every adapter reports modes NO DATA with the reason.</span></li>
+    <li><span class="tick">[x]</span> Python 3.11 gate extended to package subdirectories (found by H1, fixed by the orchestrator, shipped in PR 29)
+      <span class="ev">calibrated by reinjection: with the old scripts/*.py glob a Python 3.12 only file inside scripts/companions/ returned "clean, 30 file(s)"; with the recursive glob it is caught, "1 finding(s) in 35 file(s)". Clean tree 34 files, selftest PASSED.</span></li>
+    <li><span class="tick">[x]</span> RS1 first-party research, both candidates CONFIRMED FIRST-PARTY
+      <span class="ev">context-mode 1.0.169 (mksglu) and Claude DCP 0.2.0 (exploreborders), every field read from a manifest, hooks.json, README or GitHub API call opened tonight; neither installed here. BLOCKER for both: no documented Claude Code uninstall path, so neither can enter the curated registry today. Written up at docs/research/2026-08-13-context-mode-and-dcp-first-party.md; dash and attribution scans empty; no registry edit, as specified.</span></li>
+    <li><span class="tick">[x]</span> I1 open integration contract, MERGED as PR 33 after its refuter BLOCKED it on two crash paths <span class="ev">Both Criticals were real and I reproduced both: one plugin whose "name" field was an object crashed the ENTIRE discovery walk and took every honest plugin's declaration with it, and a deeply nested JSON file escaped the refusal path because the code caught malformed-JSON errors but not the recursion error deep nesting actually raises. The shipped schema was also never enforced: capabilities as "a string", as 3, as [null], and a rollback_command of ["rm -rf ~"] were all accepted. All fixed and re-verified by me. What the refuter could NOT break, and this is the part that matters: a declaration claiming "status": "CURATED", one with a key named label, and one shaped exactly like the internal wrapper all still came back labeled DECLARED, and nothing could write to the curated registry.</span></li>
+    <li><span class="tick">[x]</span> G3 deep advisor, MERGED as PR 31, and its one pre-authorized live run DONE
+      <span class="ev">main 1e0e11d; suite on merged main check_py311 clean 36 files, 174 checks green, commands still 6. Live run, part one, on your real numbers: "Deterministic rules already decided; the deep advisor did not run. Deep advisor cost: 0 tokens (not invoked)". That proves the cheap path stays cheap, but it never reaches the model, because your rules do decide. Part two therefore proved the seam with a real Fable call on the real 1,814 character prompt: it answered "no confident choice" and that genuine answer fed back produced "recommending nothing" with "Deep advisor cost: 67,038 tokens (Fable, pinned)" and "Net tokens after cost (subtracted, never inflated): -67,038". Still UNVERIFIED and stated as such: a live call that returns an actual registry id, and the live refusal path.</span></li>
+  </ul>
+
+  <h3>Session A starters: F1 scorecard pass and G1 compatibility (2026-08-13 day, ceilings lifted by founder word, guard untouched) <span class="chip">2/2</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> F1: the scorecard carries its first real numbers: reduction 6.0, measurement truth 9.0, attribution 6.0, cache plus startup 8.5, personalization 6.5, automation 3.0; the file itself states the empty VERIFIED ledger is what caps the two 6.0 rows
+      <span class="ev">PR 28 MERGED 30c6517, CI test pass twice; every cell cites a grep-verifiable test or a re-run command; orchestrator spot-checked cited defs at test_optimize.py:45 and test_tools.py:250</span></li>
+    <li><span class="tick">[x]</span> G1: the doctor now judges shared hooks instead of just listing them: 4 evidence-dated pairs, 1 known-safe (quoted first-party evidence), 3 needs-review, absent pairs report NO DATA never known-safe (calibrated red to green)
+      <span class="ev">PR 27 MERGED d1217de, CI test pass twice; orchestrator re-ran test_doctor 12 passed, test_discover_companions 7 passed, live doctor ownership tail quoted in session</span></li>
+  </ul>
+
+  <h3>Wave T executed and merged (2026-08-13 day, founder: "just execute them all") <span class="chip">4/4</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> T3 docs truth sweep: six audit corrections landed (CI-line sentence, stability sentence rewritten to measured churn, scorecard tie-breaks, helper count, empty registry reasons to NO DATA, budget basis notes)
+      <span class="ev">PR 24 MERGED c5aa16f; orchestrator re-ran every grep and the tests in the worktree (7/8/25 passed, reason-count 0, dash scan empty); CI test pass twice</span></li>
+    <li><span class="tick">[x]</span> T1 reconciliation artifact: scripts/reconcile.py, an independent stdlib-only second parser; CLAIMS B3/B5/B8 rewritten to the runnable truth; wired into CI
+      <span class="ev">PR 25 MERGED 593e070; orchestrator's own live run: RECONCILED exit 0, median 85,587 both parsers at 0.000 percent drift, multi-model count 67 both; test_reconcile 10 passed, calibrated disagreement exits 1</span></li>
+    <li><span class="tick">[x]</span> T2 experiment honesty: evidence scale, direction field, dominant-model confound guard; opus refuter BLOCKED round one (a Critical: the guard silently skipped the live baselines), fix round re-calibrated and re-verified
+      <span class="ev">PR 26 MERGED 2587b1d; asymmetric cohort now downgrades with the side named (experiment.py:366-370 read by orchestrator); done-check re-run 27/25/15/7; CI test pass twice</span></li>
+    <li><span class="tick">[x]</span> Suite on merged main after the wave
+      <span class="ev">check_py311 clean 29 files; 9/25/7/27/6/8/15/7/6/7/8/10 = 135 checks green, run after the last merge; git ls-remote heads: main only</span></li>
+  </ul>
+
+  <h3>BrotherSBE verification of numbers and methodology (2026-08-13 day, founder-ordered) <span class="chip">3/3</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Two opus-tier read-only reviewers attacked the repo: evidence audit and data methodology, launched as one wave, fenced, returns capped
+      <span class="ev">verdicts: NUMBERS CONTESTED (0 Critical, 3 Major, 1 NO-DATA, 5 Minor, 4 headline figures CONFIRMED including suite 118 re-run count by count and 74.6B recomputed to 74.5818B) and METHODOLOGY CONTESTED (2 Critical, 5 Major, 6 Minor; 9 calibrated downgrade tests verified present by name)</span></li>
+    <li><span class="tick">[x]</span> Orchestrator re-confirmed the four load-bearing findings against the files before accepting them
+      <span class="ev">own commands quoted in STATE.md: CLAUDE.md:5-8 vs ci.yml:17-26 (CI runs more than the documented line); no second-derivation .py exists anywhere; experiment.py:60 MIN_SESSIONS=3 and :346 verified = not reasons; test_tools.py:559-563 asserts a -8000 regression as VERIFIED</span></li>
+    <li><span class="tick">[x]</span> Every accepted finding became a plan unit, none auto-fixed silently: Wave T (T1 reconciliation artifact, T2 experiment honesty, T3 docs truth sweep) sequenced BEFORE the scorecard pass
+      <span class="ev">commit 3088339 on PR 23; gates re-run clean over the whole range (one scan first run filtered, then re-run RAW, exit 1, deviation recorded); CI test pass twice (runs 31666770935, 31666772851)</span></li>
+  </ul>
+
+  <h3>The replan: leading position (2026-08-13 day) <span class="chip">3/4</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Handover checks re-run before any claim: main head, full suite, doctor
+      <span class="ev">git log -1: 9ee9679; check_py311 "clean, 27 file(s)"; suite 9/25/7/20/6/8/15/7/6/7/8 = 118 passed; cli.py doctor exit 0, all run this session</span></li>
+    <li><span class="tick">[x]</span> Weakness analysis: every sub-8 external row mapped to a covering unit; strengths (measurement truth, cache plus startup) named as non-negotiable
+      <span class="ev">table in docs/superpowers/plans/2026-08-13-leading-position-plan.md; sources SCORECARD.md external section and personas doc, both cited by path</span></li>
+    <li><span class="tick">[x]</span> Addendum plan written, pushed under branch plus PR with all gates
+      <span class="ev">secret, attribution and dash scans over origin/main..HEAD all empty (statuses quoted); PUSH-VERIFIED-HEAD-EQUALS-UPSTREAM; PR 23 OPEN; CI "test pass" twice (runs 31665992073, 31665967254)</span></li>
+    <li><span class="open">[ ]</span> PR 23 merged to main
+      <span class="ev">check: gh pr view 23 --json state prints MERGED; blocked this session by the permission classifier on gh pr merge, handed to Khalil</span></li>
+  </ul>
+
+  <h3>The execution program (every box carries its check line from the plans) <span class="chip">2/12</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> F1 scorecard evidence pass <span class="ev">PR 28 MERGED 30c6517; every scored cell's cited test or command re-run by the orchestrator; history section carries its first entry</span></li>
+    <li><span class="tick">[x]</span> G1 compatibility matrix and hook ownership table <span class="ev">PR 27 MERGED d1217de; test_doctor.py 12 passed re-run in the worktree; cli.py doctor printed the ownership section live against the real plugin cache</span></li>
+    <li><span class="open">[ ]</span> G2 overlap suppression, memory, cooldowns <span class="ev">check: test_advisor.py green incl. suppression-never-hides-a-regression, calibrated red to green</span></li>
+    <li><span class="open">[ ]</span> G3 deep advisor and semantic optimizer v2 <span class="ev">check: test_deep_advisor.py green with fake-model harness; one live smoke run at founder yes, cost printed</span></li>
+    <li><span class="open">[ ]</span> RS1 context-mode and DCP first-party verification <span class="ev">check: every claim carries an opened URL or NO DATA; no registry edit in this unit</span></li>
+    <li><span class="open">[ ]</span> U1 version-drift watch and spanning-experiment warning <span class="ev">check: injected fake version change turns the warning red then green; doctor prints VERSION DRIFT live</span></li>
+    <li><span class="open">[ ]</span> I1 open integration contract v1 (token-shield.integration.json) <span class="ev">check: fixture with missing capabilities key refused by name; declared data labeled DECLARED</span></li>
+    <li><span class="open">[ ]</span> H1 adapters, H2 modes and recipes, H3 attribution waterfall <span class="ev">check: adapter refuses evidence-less registry entries; unvetted recipe refused with reason; never-sum assertion calibrated</span></li>
+    <li><span class="tick">[x]</span> R wave R guided apply plus WR+ output-discipline treatment <span class="ev">check ran 2026-08-14 overnight after merge: documented 19-file suite from repo root on main fc50851 printed "9/10/36/7/37/8/15/6/7/19/49/12/6/33/31/13/7/8/26 passed", final exit 0; live guided apply refuses exit 2 naming claude-md-diet-v2</span></li>
+    <li><span class="open">[ ]</span> C1 continuous optimization loop <span class="ev">check: test_report.py green; ls commands/*.md | wc -l prints 6</span></li>
+    <li><span class="open">[ ]</span> RELEASE train at the verdict <span class="ev">check: experiment end verdict quoted; each release step's own command output quoted</span></li>
+    <li><span class="open">[ ]</span> V1 share card then A1 act rung (post-verdict, in order) <span class="ev">check: card refuses without a VERIFIED or MEASURED record; A1 plan lands before any hook code, opus refute review mandatory</span></li>
+  </ul>
+
+  <h3>The build (2026-08-13, after your gate decision through the question window) <span class="chip">4/4</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Gate amendment recorded exactly as you chose: build now, release boundary gated on the verdict, original gate text preserved verbatim above the amendment
+      <span class="ev">PR 18 MERGED (6 insertions, 0 deletions across CLAUDE.md and both plans); experiment untouched throughout, verified by never running any command against it</span></li>
+    <li><span class="tick">[x]</span> v1.8 wave 1 part 1: registry schema v2 with hand-verified evidence fields, native discovery (CLAUDE PROJECTED labels), read-only ecosystem doctor wired as cli doctor
+      <span class="ev">PR 19 MERGED (610 insertions); my own worktree runs: new tests 7 and 8 passed, doctor ran live against the real 71-entry plugin cache; 3 calibrated tests named in docstrings</span></li>
+    <li><span class="tick">[x]</span> MCP server wave 1 plus the Consumption Report engine: nine tools, three resources, schema v1 with value/label/source on every number, habits limited to MEASURED signals
+      <span class="ev">PR 20 MERGED (1429 insertions, 24 files); my own worktree runs: detail_report 6 passed, mcp-server 13 passed, check_py311 clean 23 files; two gaps named on the PR (client smoke test and release steps, both verdict-gated on purpose)</span></li>
+    <li><span class="tick">[x]</span> Reconciliation: all eleven test files wired into CI and the documented suite line, changelog merged
+      <span class="ev">PR 21 MERGED; final main de1b44c full suite: 9/25/7/20/6/8/15/7/6/7/8 = 118 checks plus bench 3, check_py311 clean 27 files, all quoted this session</span></li>
+  </ul>
+
+  <h3>Persona program (2026-08-13 pre-dawn, founder-ordered, all ungated items shipped) <span class="chip">4/4</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Persona research: caveman comments positive and negative, five personas, competitor failure modes as our commitments
+      <span class="ev">HN thread 47954745, caveman issues #808/#820/#812/#801, andrew.ooo review, all opened with URLs; reddit origin unreachable, relayed claims marked; synthesis merged as docs/research/2026-08-13-personas.md in PR 17 (30129a0)</span></li>
+    <li><span class="tick">[x]</span> Benchmark kit for the skeptic persona: reproduce the meter's numbers in two commands, zero real data
+      <span class="ev">PR 15 MERGED; orchestrator's own fresh run: "ALL PASS (93 checks)", bench tests "3 passed"; corruption detection calibrated by injected wrong count</span></li>
+    <li><span class="tick">[x]</span> Trust sweep: 13/13 strategy sources re-verified live, 4 corrected with honesty notes; never-lose-work pinned by calibrated test; onboarding tightened
+      <span class="ev">PR 16 MERGED; orchestrator re-ran suite in the build worktree: 97 checks green; new test red-then-green by injected mutation, source file byte-identical after restore</span></li>
+    <li><span class="tick">[x]</span> Wave R plan with the experiment interlock designed in (no apply while any experiment is open)
+      <span class="ev">PR 17 MERGED; identifiers spot-checked against optimize.py/experiment.py real line numbers; dash and attribution scans empty on my own run</span></li>
+  </ul>
+
+  <h3>Solid Core strategy (2026-08-13 late night, founder-ratified live) <span class="chip">2/2</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Strategy ratified through five question windows: standalone 8.5 plus on every capability, ecosystem as bonus; guided apply for reduction, auto-attributed treatments, opt-in automation ladder (observe, assist, act), personalization from shipped data sources
+      <span class="ev">docs/superpowers/specs/2026-08-13-solid-core-design.md in PR 14; gate restated inside; suite 96 checks green before push; all push gates empty</span></li>
+    <li><span class="tick">[x]</span> The yardstick is ours now: docs/SCORECARD.md, every cell evidence-or-NOT-YET-SCORED, external tables recorded verbatim as UNVERIFIED direction
+      <span class="ev">PR 14 MERGED, CI "ALL CHECKS SETTLED: test: pass" twice, main 77b6e6b, remote heads main only</span></li>
+  </ul>
+
+  <h3>Overnight autonomous run (2026-08-13, founder asleep, gate held) <span class="chip">6/6</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> PR 12 merged with founder pre-approval; PR 13 (the whole gated-build paper trail) merged under the "all branches merged and pushed" instruction
+      <span class="ev">gh pr view: 12 MERGED, 13 MERGED; CI "ALL CHECKS SETTLED: test: pass" twice on 13; main f5164d0; git ls-remote --heads origin lists main only</span></li>
+    <li><span class="tick">[x]</span> MCP wave 1 plan (513 lines) and v1.8 wave 1 plan (255 lines): every step names files and a done-check; 11 ambiguities parked for review, none invented away
+      <span class="ev">orchestrator dash and attribution scans empty on both; spot-checked identifiers hit real definitions (build_profile profile.py:204, load_companions token_shield.py:264, and 5 more quoted in STATE.md)</span></li>
+    <li><span class="tick">[x]</span> WBS cost estimator design spec: calibration story with a hard NO DATA floor (N=5), the estimator publishes its own measured error or says so
+      <span class="ev">all 110 lines read by orchestrator; scans empty; record_actual write tool and the N=5 floor flagged for founder review inside the file</span></li>
+    <li><span class="tick">[x]</span> Companion first-party verification: ponytail 4.9.0, caveman, token-saver 2.7.1 confirmed from installed files, NO DATA marked where unconfirmed
+      <span class="ev">3 strongest quotes re-checked verbatim by orchestrator at ponytail-config.js:16, ~/.token-saver/config.json:3, token-saver plugin.json:6</span></li>
+    <li><span class="tick">[x]</span> Founder positioning sentence in README and ROADMAP; self-correction recorded as a binding roadmap principle (advice carries last_reviewed, doctor flags stale advice)
+      <span class="ev">both files in PR 13 diff (6 files, 1034 insertions); dash scans empty</span></li>
+    <li><span class="tick">[x]</span> Both overdue weekly reviews closed with scores moved on evidence; one real bug found and chipped, not hot-fixed
+      <span class="ev">3 vault files verified present (ls quoted in session); sbe_telemetry.py:1108 hardcoded coordination line confirmed by grep; founder chip task_4491558b</span></li>
+  </ul>
+
+  <h3>Consumption Report spec (2026-08-13, gated pre-work for MCP wave 1) <span class="chip">3/3</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Design ratified through seven founder question windows: design now build after verdict, MCP tool returning labeled JSON, habits section in the existing dashboard, all four dimensions, one report object, aggregates plus a bounded daily series
+      <span class="ev">question window answers recorded this session; raw per-session export rejected because consumers could strip honesty labels</span></li>
+    <li><span class="tick">[x]</span> Spec written and self-reviewed; one amendment line added to the ratified MCP spec
+      <span class="ev">docs/superpowers/specs/2026-08-13-consumption-report-design.md, 72 insertions across 2 files at a18f034; dash, attribution and secret scans over origin/main..HEAD all empty</span></li>
+    <li><span class="tick">[x]</span> Suite green then pushed under branch plus PR; build NOT started, gate intact
+      <span class="ev">check_py311 "clean, 21 file(s)", suite 9/25/7/20/5/8/15/7 = 96 passed before push; HEAD == upstream verified; PR 12 OPEN at github.com/khalilmaaouni/token-shield/pull/12</span></li>
+  </ul>
+
+  <h3>Phase 3f2: v1.7.1 Actionable Advisor (founder directives, 2026-08-12 late night) <span class="chip">4/4</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Dashboard shows only what you influence: native bars and dollars removed, one methodology pointer line
+      <span class="ev">test_dashboard_shows_no_native_bars_or_dollars_only_a_methodology_pointer: red with the old $401,962 fragment reinjected, green after removal; in-tree suite quoted below</span></li>
+    <li><span class="tick">[x]</span> Every card actionable: numbered how steps with real copy-paste commands, decision chips wired to treatment memory
+      <span class="ev">test_card_renders_its_numbered_how_steps_and_command and test_decide_flag_round_trips_into_treatment_memory_and_the_queue: both calibrated red to green; live advise decide verified</span></li>
+    <li><span class="tick">[x]</span> Guided journeys: /token-shield:advisor and /token-shield:start present one recommendation with choices through the question UI, guided execution behind explicit yes
+      <span class="ev">builder file list names commands/advisor.md and commands/start.md; both carry the choice-window flow per the Fable spec</span></li>
+    <li><span class="tick">[x]</span> Shipped as v1.7.1: suite green in main tree, gates clean, PR 9, CI, merge, release
+      <span class="ev">main tree after merge: check_py311 "clean, 21 file(s)", suite 9/25/7/20/5/8/15/7 = 96 checks; PR 9 checks "test pass" twice; main 0b49598; releases/tag/v1.7.1 live; plugin updated 1.7.0 to 1.7.1 here</span></li>
+  </ul>
+
+  <h3>Phase 3f: v1.7 Advisor foundation <span class="chip">8/8</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Verification sweep: 10 blueprint facts verdicted with first-party quotes; failures cut and named
+      <span class="ev">docs/CLAIMS.md section D: 10 rows each with verdict and source; D8 SPLIT (fast-mode observability REFUTED and cut), D10 corrected the token-saver source to ppgranger</span></li>
+    <li><span class="tick">[x]</span> Deterministic profiler with MEASURED/SIGNAL/INFERRED labels
+      <span class="ev">python3 scripts/test_profile.py: "6 passed" after merge; live run: floor 85,055 median, 0.360 share, hit ratio 0.911, switches 0.288</span></li>
+    <li><span class="tick">[x]</span> Experiment v2: message-timestamp cohorts, config fingerprint, confounders downgrade
+      <span class="ev">python3 scripts/test_experiment.py: "10 passed" after merge; overlap refusal, NOT_PROVEN downgrade, per-label aggregation all calibrated</span></li>
+    <li><span class="tick">[x]</span> Quick advisor: 9-field cards, treatment memory, one best action, do-nothing valid
+      <span class="ev">python3 scripts/test_advisor.py: "12 passed" after merge; live advise returned cache.fixed-parent-model on this machine's own 29% switch share; composite-leaf crash fixed red-to-green</span></li>
+    <li><span class="tick">[x]</span> Dashboard: Next Best Move, Observed Pattern, queue capped at 3, companions panel
+      <span class="ev">python3 scripts/test_tools.py: "19 passed" after merge; cli.py dashboard wrote ~/.token-shield/token-shield.html with the new sections</span></li>
+    <li><span class="tick">[x]</span> Monthly report plus /advisor, /start, /monthly; command surface stays at 6
+      <span class="ev">python3 scripts/test_report.py: "6 passed" after merge; ls commands/*.md | wc -l printed 6</span></li>
+    <li><span class="tick">[x]</span> Opus adversarial review (7 attack angles): 3 critical, 4 major, 5 minor findings, ALL fixed by two opus builders, every fix calibrated by reinjecting the defect (red) then fixing (green)
+      <span class="ev">merge commits af6c94d, 4eed21f; suite re-run in main tree after merge: 9/22/7/20/5/8/13/7 = 91 checks green; check_py311 "clean, 21 file(s)" plus "selftest PASSED"</span></li>
+    <li><span class="tick">[x]</span> v1.7.0 on public main, CI green on 3.11, release published, local tree merged to one flow
+      <span class="ev">PR 8 checks "test pass" twice; origin/main b069e9c "Merge pull request #8"; release URL github.com/khalilmaaouni/token-shield/releases/tag/v1.7.0; git branch -a shows main only locally; 12 worktrees archived to vault then removed</span></li>
+  </ul>
+
+  <h3>Phase 3d: provability, claims, docs, and the Token Shield <span class="chip">5/5</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Every claim enumerated and checked, doc claims quoted from first-party pages, numbers re-derived independently
+      <span class="ev">docs/CLAIMS.md: 20 DOC claims quoted, 9 MEASURED with a second derivation, 10 CODE claims each naming a calibrated test</span></li>
+    <li><span class="tick">[x]</span> Methodology, telemetry and maintenance documented, not asserted
+      <span class="ev">docs/METHODOLOGY.md, docs/TELEMETRY.md, docs/MAINTENANCE.md written; the five drift modes each carry the mechanism that closes them</span></li>
+    <li><span class="tick">[x]</span> Token Shield dashboard: net saving, what it blocked, where you save, adaptive pain-point prescriptions with per-user math
+      <span class="ev">scripts/token_shield.py renders hero NET 74.6B; 3 prescriptions each with painkiller, medicine, and the math from the user's own sessions</span></li>
+    <li><span class="tick">[x]</span> Headline numbers proven by two independent derivations, zero drift, and an adversarial audit
+      <span class="ev">model switch 65/229 confirmed two ways; evidence-auditor verdict "NUMBERS SOLID"; two caveats (net vs gross, denominator) fixed</span></li>
+    <li><span class="tick">[x]</span> Shipped to public main under branch plus PR, MIT, no private data
+      <span class="ev">PR 2 merged at 1f38db4; dash, attribution, secret and private-path scans over the range all clean; 20 tests pass</span></li>
+  </ul>
+
+  <h3>Phase 3c: V2 corrections and opt-in tools <span class="chip">6/6</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Cache rules corrected against the docs (effort IS in the cache key; CLAUDE.md edits cache-safe but inert until reload)
+      <span class="ev">WebFetch of code.claude.com/docs prompt-caching, mcp, skills, memory; recorded in docs/CLAIMS.md A1 to A20</span></li>
+    <li><span class="tick">[x]</span> Telemetry rewritten: nested 5m/1h split, parent vs subagent, refuse false deltas
+      <span class="ev">python3 scripts/test_measure_tokens.py: 8 passed, each calibrated by reinjecting its defect</span></li>
+    <li><span class="tick">[x]</span> Three opt-in tools built, none auto-wired
+      <span class="ev">context_lint.py, session_end_telemetry.py, obsidian_export.py; python3 scripts/test_tools.py: 12 passed; plugin.json has no hooks key</span></li>
+    <li><span class="tick">[x]</span> Two Opus review rounds, every blocking finding fixed and re-tested
+      <span class="ev">ratio-delta +0, window refusal, two doc facts, the slug bug all fixed and covered by calibrated tests</span></li>
+    <li><span class="tick">[x]</span> 1.1.0 shipped to main
+      <span class="ev">commits 2beb12b, 5283ff0, 0c293ed; HEAD == origin/main verified three ways</span></li>
+    <li><span class="tick">[x]</span> CLAUDE.md measurement entry corrected (41,890 was the wrong population; real median 85,021)
+      <span class="ev">~/.claude/CLAUDE.md MEASUREMENT entry rewritten with the schema-2 figures; lands next session</span></li>
+  </ul>
+
+  <h3>Phases 1 to 3: laws, plugin, prune, telemetry <span class="chip">19/19</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> Laws in CLAUDE.md, plugin scaffolded and installed, machine pruned (33 plugins off, MCP 33 to 12), real telemetry shipped
+      <span class="ev">recorded in prior session ledgers; superseded by the honest meter in Phase 3c</span></li>
+  </ul>
+
+  <h3>Phase 4: CLAUDE.md diet <span class="chip">3/3</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> History and rationale moved into the vault, every rule kept
+      <span class="ev">wc: 237 lines / 54,078 bytes to 167 lines / 25,529 bytes; context_lint MEDIUM oversize finding GONE (only a soft path-scoping heuristic remains); dash scan on the new file empty</span></li>
+    <li><span class="tick">[x]</span> Each moved block leaves a one-line pointer
+      <span class="ev">pointers name vault note claude-md-moved-history-2026-08-12, which holds the FULL pre-diet original verbatim (54,488 bytes written, wc quoted); disk backup ~/.claude/CLAUDE.md.pre-diet-backup-20260812 also kept</span></li>
+    <li><span class="tick">[x]</span> Founder reads the diff before it lands
+      <span class="ev">draft and full 381-line diff delivered to founder; approval "Approved, apply at close" via question window, recorded this session</span></li>
+  </ul>
+
+  <h3>Phase 5: measure and iterate <span class="chip">1/3</span></h3>
+  <ul class="led">
+    <li><span class="tick">[x]</span> SessionEnd telemetry hook wired (founder yes via window)
+      <span class="ev">settings.json backed up then merged; validator printed "WIRED... valid json, SessionEnd entries: 2, telemetry present: True"</span></li>
+    <li><span class="open">[ ]</span> Experiment claude-md-diet RUNNING: baseline pinned BEFORE the diet applied
+      <span class="ev">quoted at start: "baseline pinned for claude-md-diet: first-request median 85,642 tokens over 30 days", blind spot ~/.claude/CLAUDE.md named. Close after days of normal sessions: python3 scripts/cli.py experiment end "claude-md-diet"</span></li>
+    <li><span class="open">[ ]</span> Savings verified for real, quality held
+      <span class="ev">check: the experiment end verdict, VERIFIED or honest NOT_PROVEN; either opens the next decision (v1.8 on VERIFIED, a better experiment on NOT_PROVEN)</span></li>
+  </ul>
+
+  <h2>Decisions recorded</h2>
+  <div class="strip">
+    <div class="card"><h3>Correct, do not expand</h3><p>The ChatGPT V2 blueprint proposed a 4-plane architecture, an Obsidian vault layout, a proposal inbox and an auto-registered hook. Fable and Opus both called most of it empire-building for a one-skill plugin. Kept: the corrections plus opt-in tools that run nothing until invoked.</p></div>
+    <div class="card"><h3>Opt-in over auto-wired</h3><p>The telemetry hook ships as a README snippet the user pastes, never a hooks.json the plugin registers. A public plugin that ran code on every install would spend what it claims to save.</p></div>
+    <div class="card"><h3>Net, after an audit</h3><p>The savings headline was changed from gross-on-reads to net-of-write-premium because an adversarial evidence audit flagged it. Recorded because a number that survives an attack is worth more than one that was never attacked.</p></div>
+    <div class="card"><h3>Branch plus PR</h3><p>1.3.0 went through a feature branch and PR 2, the repo's stated policy, after the 1.1.0 commits went direct to main. Recorded so the deviation and its correction are both visible.</p></div>
+    <div class="card"><h3>Advisor plan ratified</h3><p>Four founder decisions lock the V2 blueprint triage: the deep advisor runs on Fable, pinned, on demand, cost printed and subtracted; hooks stay zero on install with one reversible opt-in inside /start; context-mode and DCP stay mention-only until vetted; the command surface caps at 6. Fable judges, never executes.</p></div>
+    <div class="card"><h3>Uninstall leaves no trace</h3><p>Added by the founder 2026-08-12: install easy, upgrade a breeze, uninstall clean. v1.7 ships an uninstall cleanup command plus a README section naming every path Token Shield ever writes, with a short exit summary instead of a nag. If it grows past one command plus docs, the remainder defers to v1.8.</p></div>
+    <div class="card"><h3>v1.8 stays gated</h3><p>The deep layer (Fable advisor subagent, semantic optimizer) ships only after one real CLAUDE.md experiment on this machine reaches VERIFIED, per the ratified acceptance gate. Shipping it today would sell an unproven treatment. Flip: the first VERIFIED record in the ledger.</p></div>
+    <div class="card"><h3>Ecosystem blueprint adopted, sequenced behind the gate</h3><p>The companion ecosystem blueprint (Token Shield as control plane, ponytail and caveman as prescribed treatments) is adopted as direction in docs/ROADMAP.md: v1.8 sees the ecosystem, v1.8 wave 2 judges the stack, v1.9 works the treatments. Its claims about companion internals stay UNVERIFIED until checked first-party. No implementation before the first VERIFIED experiment.</p></div>
+    <div class="card"><h3>First experiment starts at the diet session</h3><p>Founder chose (question window, tonight): the claude-md-diet experiment opens exactly when the diet edit is made, in its own fresh session, so the measurement window collects signal, not idle days. Alternative rejected: start tonight. Flip: if the diet session slips weeks, start a smaller experiment first.</p></div>
+    <div class="card"><h3>Solid ground before ecosystem</h3><p>Founder direction 2026-08-13 night, after two external benchmark tables: Token Shield must stand at 8.5 plus on every capability alone; companions are a plus, never the whole. Ratified: guided apply (backup, diff, yes, auto-experiment), native single-treatment attribution, the observe/assist/act automation ladder with zero hooks by default, and an evidence-only scorecard as the yardstick. Waves gated on the verdict; ACT keeps the Protect Mode flip condition.</p></div>
+    <div class="card"><h3>The gate held overnight</h3><p>The founder's sleep instruction "all the development done" was executed as: everything ungated done, merged, pushed, and the gated build fully planned on paper. It was NOT read as reopening the v1.8/MCP gate, because that gate was ratified, re-confirmed when asked directly, and re-chosen through a question window hours earlier; reopening requires naming it. Flip: the founder names the gate, or the experiment verdict arrives.</p></div>
+    <div class="card"><h3>Self-correction is routine</h3><p>Founder directive after a re-benchmark caught Token Shield giving stale advice about itself: advice is data with a shelf life. Now a binding roadmap principle: every strategy carries last_reviewed, the doctor flags stale advice, and a reversal of the tool's own guidance is recorded as the system working. Ranks with the meter itself.</p></div>
+    <div class="card"><h3>Consumption Report: designed now, built after the verdict</h3><p>The founder asked for detailed token analytics through the MCP (2026-08-13). Designing today and building after the experiment verdict keeps the ratified gate intact with zero wasted time. Alternatives rejected: open the gate early, park the idea. Raw per-session export also rejected: consumers could strip the honesty labels. Flip: the founder reopening the gate decision by name.</p></div>
+    <div class="card"><h3>Leading position replanned, honesty intact</h3><p>Founder order 2026-08-13 day: finish everything and take the lead. The replan borrows from the ecosystem only what survives the house rules: native reduction lands via wave R's guided apply (never silent edits), caveman's real lesson arrives as a one-line output-discipline treatment measured by its own experiment, the open contract is promoted to a build so integration scales past hand-curated entries, and automation's act rung stays post-verdict behind an opus refute review. What was NOT borrowed: behavioral injection, personality features, headline percentages. External benchmark rows drove the priorities but stay UNVERIFIED direction; the evidence-only scorecard remains the yardstick. Plan: PR 23.</p></div>
+    <div class="card"><h3>Mechanical repros replaced the second review pass</h3><p>Instead of a second paid Opus verify pass, the reviewer's own falsification commands were turned into calibrated regression tests and the whole suite re-ran in the main tree after merge. A machine decided, not a model. Flip: any ambiguous repro output brings the read-only Opus pass back.</p></div>
+  </div>
+
+  <footer>
+    Tick contract: a box ticks only when its done-check ran after the last edit and the output is quoted in the evidence line beside it. Percentages are counts of records, never impressions.<br>
+    Refreshed 2026-08-14 overnight (wave R SHIPPED and CI made whole at 339 checks; Fleet F1 building, F2 and F3 queued, bound 09:00 JST) by session 4bafd9cf. Author: Khalil Maaouni.
+  </footer>
+</div>
+</body>
+</html>
