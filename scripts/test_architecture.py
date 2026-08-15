@@ -57,7 +57,7 @@ LAYERS = {
     5: {"token_shield"},
     6: {"fleet"},
     7: {"cli", "trial", "report", "detail_report", "share_card", "fleet_dashboard",
-        "reconcile", "obsidian_export"},
+        "reconcile", "obsidian_export", "github_cost_guard"},
 }
 
 # Upward imports that exist TODAY, frozen by name so no sixth can be added

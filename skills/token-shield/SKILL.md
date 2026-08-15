@@ -175,6 +175,10 @@ The most expensive token is the one spent re-discovering something a past sessio
 7. The verbose hook. A session-start hook printing kilobytes of digest into every session. Fix: Lever 2, keep hooks quiet.
 8. Optimizing tokens without a denominator. A change that cuts tokens 30 percent and doubles rework is not an optimization. The number worth improving is tokens per accepted result, so record whether the work landed first time, not just what it cost.
 
+## The sibling bill: cloud metered usage
+
+Token discipline has a sibling trap: a cloud provider's metered-usage chart that looks like an invoice and is not one. On 2026-08-16 a GitHub Free account showed $864.61 of August "metered usage"; the verified truth was billed $0.00, because the chart plots the gross list-price value of free-tier compute and discounts it all. Before treating any usage chart as a bill, read in this order: the billing Overview's "next payment due" card, the payment history, one day's hover tooltip (gross versus billed versus discount), then the budgets page. Preventive posture for a free account: no payment method on file, a $0 stop-usage budget per product, CI disabled or manual-trigger only, and since pushing is free, checkpoint pushes continue while verification runs locally. Audit drift with `python3 scripts/github_cost_guard.py` (NO-DATA is never a pass). Full walkthrough: docs/CLOUD-COST-SHIELD.md.
+
 ## Machine-local overlay
 
 This skill is generic. Wire it to your machine with a short section in your global CLAUDE.md that states only the hard rules (pick model and effort at session start, checkpoint before any boundary, the tier table, the prune cadence) and points here for the reasoning. That split is itself the method: rules always loaded, playbook on demand.
