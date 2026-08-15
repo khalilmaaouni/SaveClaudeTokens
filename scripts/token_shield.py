@@ -36,10 +36,11 @@ import json
 import os
 import sys
 
+import config as cfg
+
 CACHE_READ = 0.1  # a cached token bills at 0.1x, so the saving is (1 - 0.1)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-COMPANIONS_PATH = os.path.join(HERE, "..", "data", "companions.json")
 
 # Default experiment labels the marginal attribution waterfall chains: the
 # user runs `experiment start "core"` / `end "core"` around a Token Shield
@@ -312,17 +313,6 @@ def load_profile(path):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None  # sbe: allow-silent an unreadable JSON source becomes NO DATA in the section that needed it; the rest of the dashboard still renders
-
-
-def load_companions(path):
-    """data/companions.json, or None if missing/corrupt. Never raises."""
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None  # sbe: allow-silent same rule for the second source: one unreadable file darkens its own section and never the whole page
 
 
 def load_experiment_rows(path):
@@ -1561,7 +1551,7 @@ def main():
                 adv, profile, treatments, strategies)
     except (OSError, ValueError, ImportError) as e:
         print(f"note: advisor skipped ({e})", file=sys.stderr)
-    companions_data = load_companions(COMPANIONS_PATH)
+    companions_data = cfg.load_companions(cfg.COMPANIONS_PATH)
 
     body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified,
                   profile=profile, advise_result=advise_result, suppressed_n=suppressed_n,

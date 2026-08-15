@@ -43,7 +43,7 @@ import time
 import discover_companions as dc
 import experiment as ex
 import profile as pf
-import token_shield as ts
+import config as cfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMPATIBILITY_PATH = os.path.join(HERE, "..", "data", "compatibility.json")
@@ -377,7 +377,7 @@ def _spanning_warning_lines(open_experiments, drifted):
 
 
 def report():
-    companions_data = ts.load_companions(ts.COMPANIONS_PATH)
+    companions_data = cfg.load_companions(cfg.COMPANIONS_PATH)
     if not companions_data:
         print("NO DATA: data/companions.json not found or unreadable.")
         return 0

@@ -97,12 +97,12 @@ def test_report_prints_shared_hook_and_never_conflict():
         {"name": "caveman", "enabled": True, "source_label": "CLAUDE PROJECTED"},
     ])
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
@@ -113,7 +113,7 @@ def test_report_prints_shared_hook_and_never_conflict():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
@@ -197,13 +197,13 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
         {"name": "caveman", "enabled": True, "source_label": "CLAUDE PROJECTED"},
     ])
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_compat = dr._load_compatibility
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_compatibility = lambda: (None, "Expecting value: line 1 column 1 (char 0)")
     dr._load_state = lambda path=None: None
@@ -215,7 +215,7 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_compatibility = orig_compat
         dr._load_state = orig_load_state
@@ -229,12 +229,12 @@ def test_report_stays_clean_when_compatibility_file_is_malformed():
 
 
 def test_main_completes_without_traceback_with_zero_companions_active():
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
-    dr.ts.load_companions = lambda path: {"companions": [], "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": [], "mentions": []}
     dr._ensure_fresh_state = lambda: {"schema": 1, "checked_at": "x", "discovered": [], "registry_match": {}}
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
@@ -245,7 +245,7 @@ def test_main_completes_without_traceback_with_zero_companions_active():
             rc = dr.main([])
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
@@ -289,12 +289,12 @@ def test_report_version_drift_detects_change_and_clean_line_when_matched():
     live_matching = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
                       "source_label": "CLAUDE PROJECTED"}]
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: matching_state
     dr._load_state = lambda path=None: matching_state
     dr.dc.discover = lambda: live_matching
@@ -305,7 +305,7 @@ def test_report_version_drift_detects_change_and_clean_line_when_matched():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
@@ -323,12 +323,12 @@ def test_report_version_drift_no_data_when_state_missing():
     live = [{"name": "ponytail", "version": "4.9.0", "enabled": True,
              "source_label": "CLAUDE PROJECTED"}]
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: None
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: live
@@ -339,7 +339,7 @@ def test_report_version_drift_no_data_when_state_missing():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
@@ -470,13 +470,13 @@ def test_report_prints_facts_staleness_section_live():
     companions = []
     state = _state([])
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
     orig_load_facts = dr._load_facts
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
@@ -488,7 +488,7 @@ def test_report_prints_facts_staleness_section_live():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover
@@ -504,13 +504,13 @@ def test_report_facts_section_is_no_data_when_facts_file_malformed():
     companions = []
     state = _state([])
 
-    orig_load = dr.ts.load_companions
+    orig_load = dr.cfg.load_companions
     orig_fresh = dr._ensure_fresh_state
     orig_load_state = dr._load_state
     orig_discover = dr.dc.discover
     orig_open_exp = dr._open_experiments
     orig_load_facts = dr._load_facts
-    dr.ts.load_companions = lambda path: {"companions": companions, "mentions": []}
+    dr.cfg.load_companions = lambda path: {"companions": companions, "mentions": []}
     dr._ensure_fresh_state = lambda: state
     dr._load_state = lambda path=None: None
     dr.dc.discover = lambda: []
@@ -522,7 +522,7 @@ def test_report_facts_section_is_no_data_when_facts_file_malformed():
             rc = dr.report()
         out = buf.getvalue()
     finally:
-        dr.ts.load_companions = orig_load
+        dr.cfg.load_companions = orig_load
         dr._ensure_fresh_state = orig_fresh
         dr._load_state = orig_load_state
         dr.dc.discover = orig_discover

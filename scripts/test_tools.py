@@ -29,6 +29,7 @@ lint = _load("context_lint")
 telem = _load("session_end_telemetry")
 export = _load("obsidian_export")
 shield = _load("token_shield")
+cfg = _load("config")
 mt = _load("measure_tokens")
 adv = _load("advisor")
 
@@ -459,7 +460,7 @@ def test_dashboard_new_sections_render_with_all_sources_present():
         advise_result = adv.advise(profile, {}, strategies)
         assert advise_result["best"] is not None  # 0.5 switch share fires a HIGH card
 
-        companions_data = shield.load_companions(_write_json(d, "companions.json", {
+        companions_data = cfg.load_companions(_write_json(d, "companions.json", {
             "companions": [{"name": "ponytail", "when": "test when",
                             "benefit": "smaller diffs", "drawback": "can under-build"}],
             "mentions": [{"name": "ccusage", "repo": "github.com/ccusage/ccusage",
@@ -938,7 +939,7 @@ def test_top_strip_shows_confidence_labelled_cells_when_data_is_present():
         assert advise_result["best"] is not None  # 0.5 switch share fires a HIGH card
         best_title = advise_result["best"]["title"]
 
-        companions_data = shield.load_companions(_write_json(d, "companions.json", {
+        companions_data = cfg.load_companions(_write_json(d, "companions.json", {
             "companions": [{"name": "ponytail", "when": "test when",
                             "benefit": "smaller diffs", "drawback": "can under-build"}],
             "mentions": [],

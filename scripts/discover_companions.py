@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 
-import token_shield as ts
+import config as cfg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.expanduser("~/.token-shield/companions_state.json")
@@ -115,7 +115,7 @@ def _registry_match(names, companions_path):
     """name -> "curated" | "mention" | "unknown", cross-referenced against
     data/companions.json (reuses token_shield.load_companions rather than
     reimplementing the same defensive JSON read)."""
-    data = ts.load_companions(companions_path)
+    data = cfg.load_companions(companions_path)
     curated = {c["name"] for c in (data or {}).get("companions", [])}
     mentioned = {m["name"] for m in (data or {}).get("mentions", [])}
     match = {}
@@ -313,9 +313,9 @@ def discover_declarations(cache_root=None, companions_path=None, live=None):
     declaration is reported here, never merged into or allowed to override
     the curated entry."""
     cache_root = cache_root or os.path.expanduser("~/.claude/plugins/cache")
-    companions_path = companions_path or ts.COMPANIONS_PATH
+    companions_path = companions_path or cfg.COMPANIONS_PATH
     curated_names = {c["name"] for c in
-                      (ts.load_companions(companions_path) or {}).get("companions", [])}
+                      (cfg.load_companions(companions_path) or {}).get("companions", [])}
     live_by_name = {r["name"]: r.get("version") for r in live} if live is not None else None
     if not os.path.isdir(cache_root):
         return []
@@ -383,7 +383,7 @@ def discover_declarations(cache_root=None, companions_path=None, live=None):
     return results
 
 
-def write_state(discovered, path=STATE_PATH, companions_path=ts.COMPANIONS_PATH):
+def write_state(discovered, path=STATE_PATH, companions_path=cfg.COMPANIONS_PATH):
     """Writes the local companion state file. Called only on demand: a direct
     run of this module, or doctor.py when its cached state is missing or
     stale; never from a hook, matching the plugin's zero-hooks-by-default

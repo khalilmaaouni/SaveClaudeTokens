@@ -24,7 +24,7 @@ import json
 import os
 
 import discover_companions as dc
-import token_shield as ts
+import config as cfg
 
 REQUIRED_FIELDS = ("install", "uninstall", "tested_version_range")
 REQUIRED_VERSION_SUBFIELDS = ("min", "max", "tested_on")
@@ -118,7 +118,7 @@ def load_registry(path=None):
     valid JSON, the same tolerance token_shield.load_companions already
     has. Pure read: never writes, mirrors load_state below.
     """
-    data = ts.load_companions(path or ts.COMPANIONS_PATH)
+    data = cfg.load_companions(path or cfg.COMPANIONS_PATH)
     if data is None:
         return None
     for entry in data.get("companions", []):
@@ -152,7 +152,7 @@ def report(name, companions_path=None, state=None):
     fixture state so nothing here ever depends on the live machine).
     Prints the refusal reason when refused, same as discover_companions.py
     prints its own NO DATA lines."""
-    data = ts.load_companions(companions_path or ts.COMPANIONS_PATH)
+    data = cfg.load_companions(companions_path or cfg.COMPANIONS_PATH)
     if state is None:
         state = load_state()
     result = describe(data, state, name)
