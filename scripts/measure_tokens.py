@@ -77,6 +77,7 @@ USAGE
 
 import argparse
 import json
+import math
 import os
 import statistics
 import sys
@@ -115,8 +116,21 @@ def net_saving(read, write_5m, write_1h):
     return gross - write_premium
 
 
+def _walk_error(_err):
+    """os.walk swallows directory errors silently unless onerror is given.
+
+    Without this, a PermissionError on one project directory removed every
+    transcript under it BEFORE this function ever saw a file, so the skip
+    counters stayed at zero and the honest "some files were skipped" line
+    never printed. Measured: 3 unreadable directories out of 10 dropped the
+    session count from 10 to 7 and the NATIVE headline by 10.8M, silently.
+    An unreadable directory is a skipped FILE source, so it is counted the
+    same way, and NO DATA beats a confident undercount."""
+    SKIP_COUNTS["files"] += 1
+
+
 def iter_session_files(root, cutoff):
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, _dirs, files in os.walk(root, onerror=_walk_error):
         for fn in files:
             if not fn.endswith(".jsonl"):
                 continue
@@ -130,6 +144,27 @@ def iter_session_files(root, cutoff):
             yield fp
 
 
+def _count(value):
+    """A usage counter, or 0 if the field is not a usable whole number.
+
+    Every counter here comes from a .jsonl file this tool did not write, and
+    os.walk recurses into anything under the root, so a foreign tool's
+    transcript or a schema variant can put a string, a list, NaN or Infinity
+    where an int belongs. Unguarded, those ended a stranger's first run in a
+    TypeError or a ValueError, and Infinity was worse than a crash: it did
+    not raise at all, it just made every ratio divide by infinity and
+    printed 0.000 share and 0.000 hit ratio as MEASURED facts.
+
+    bool is excluded deliberately: it is an int subclass, and True silently
+    counting as one token is the kind of quiet wrongness this project treats
+    as worse than a refusal."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if isinstance(value, float) and not math.isfinite(value):
+        return 0
+    return int(value)
+
+
 def split_writes(usage):
     """Return (write_5m, write_1h, write_unsplit).
 
@@ -141,16 +176,19 @@ def split_writes(usage):
     records, and on 8 of them the flat counter read 0 while the nested fields
     summed to 2,001. So the nested object is preferred where both exist.
     """
+    # Every counter goes through _count: these three fields are as untrusted
+    # as the rest of the usage object, and a string or a NaN here reached the
+    # arithmetic just the same.
     cc = usage.get("cache_creation")
     if isinstance(cc, dict):
-        w5 = cc.get("ephemeral_5m_input_tokens") or 0
-        w1 = cc.get("ephemeral_1h_input_tokens") or 0
+        w5 = _count(cc.get("ephemeral_5m_input_tokens"))
+        w1 = _count(cc.get("ephemeral_1h_input_tokens"))
         if w5 or w1:
             return w5, w1, 0
     # No nested object, or a nested object accounting for nothing. The flat
     # counter is all there is: zero stays a measured zero, and anything else
     # has an unknown TTL class, so it must not be priced.
-    return 0, 0, usage.get("cache_creation_input_tokens") or 0
+    return 0, 0, _count(usage.get("cache_creation_input_tokens"))
 
 
 def read_session(fp):
@@ -176,16 +214,22 @@ def read_session(fp):
                 continue
             try:
                 rec = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError, ValueError):
+                # RecursionError and ValueError join JSONDecodeError because
+                # a .jsonl anywhere under the root is untrusted input and
+                # os.walk recurses into everything: deeply nested arrays
+                # raise RecursionError out of the decoder, and a bare NaN
+                # parses fine only to raise ValueError later. A stranger's
+                # first run must not end in a traceback.
                 SKIP_COUNTS["lines"] += 1
                 continue
             msg = rec.get("message") or {}
             usage = msg.get("usage") or rec.get("usage")
             if not isinstance(usage, dict):
                 continue
-            inp = usage.get("input_tokens") or 0
-            rd = usage.get("cache_read_input_tokens") or 0
-            out = usage.get("output_tokens") or 0
+            inp = _count(usage.get("input_tokens"))
+            rd = _count(usage.get("cache_read_input_tokens"))
+            out = _count(usage.get("output_tokens"))
             w5, w1, wu = split_writes(usage)
             if inp == 0 and rd == 0 and w5 == 0 and w1 == 0 and wu == 0:
                 continue

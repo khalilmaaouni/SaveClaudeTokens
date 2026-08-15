@@ -192,6 +192,64 @@ def test_dominant_lever_thresholds():
                               "subagent_output_share": 0.1}) == "shrink"
 
 
+def test_a_hostile_usage_value_is_skipped_not_a_crash_and_not_a_fake_zero():
+    """os.walk recurses into every .jsonl under the root, and --root is a
+    documented flag, so a foreign tool's transcript or a schema variant is
+    reachable input. RED before the fix, each ending a stranger's first run:
+
+      nan       ValueError: cannot convert float NaN to integer
+      str       TypeError: unsupported operand type(s) for +=: 'int' and 'str'
+      list      TypeError: unsupported operand type(s) for +=: 'int' and 'list'
+      deepnest  RecursionError: maximum recursion depth exceeded
+
+    Infinity was worse than any of those because it did NOT raise: every
+    ratio divided by infinity and the tool printed 0.000 share and 0.000
+    cache hit ratio as MEASURED facts."""
+    hostile = [
+        ('{"message":{"usage":{"input_tokens":NaN,"output_tokens":1}}}', "nan"),
+        ('{"message":{"usage":{"input_tokens":Infinity,"output_tokens":1}}}', "infinity"),
+        ('{"message":{"usage":{"input_tokens":"1200","output_tokens":1}}}', "string"),
+        ('{"message":{"usage":{"input_tokens":[1],"output_tokens":1}}}', "list"),
+        ('{"usage":' + "[" * 50000 + "]" * 50000 + "}", "deepnest"),
+    ]
+    good = json.dumps({"message": {"usage": {
+        "input_tokens": 1000, "cache_read_input_tokens": 500,
+        "output_tokens": 10,
+        "cache_creation": {"ephemeral_5m_input_tokens": 100,
+                           "ephemeral_1h_input_tokens": 0}}}})
+    for payload, name in hostile:
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "s.jsonl")
+            with open(fp, "w") as f:
+                f.write("\n".join([good] * 3) + "\n" + payload + "\n")
+            sess = mt.read_session(fp)
+            assert sess is not None, f"{name}: the three good records were lost"
+            # The three good records must survive intact: the hostile value is
+            # skipped, never counted as a token and never poisoning the total.
+            assert sess["input"] == 3000, f"{name}: input total is {sess['input']}"
+            assert sess["read"] == 1500, f"{name}: read total is {sess['read']}"
+
+
+def test_an_unreadable_directory_is_counted_rather_than_silently_dropped():
+    """RED before the fix: skip_counts stayed at 0 while a whole directory of
+    transcripts vanished, so the honest 'some files were skipped' line never
+    printed and the user saw a confident undercount. os.walk swallows
+    directory errors unless onerror is passed."""
+    with tempfile.TemporaryDirectory() as d:
+        locked = os.path.join(d, "locked")
+        os.makedirs(locked)
+        with open(os.path.join(locked, "s.jsonl"), "w") as f:
+            f.write("{}\n")
+        os.chmod(locked, 0o000)
+        try:
+            mt.SKIP_COUNTS["files"] = 0
+            list(mt.iter_session_files(d, 0))
+            assert mt.SKIP_COUNTS["files"] > 0, (
+                "an unreadable directory was dropped without being counted")
+        finally:
+            os.chmod(locked, 0o755)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
