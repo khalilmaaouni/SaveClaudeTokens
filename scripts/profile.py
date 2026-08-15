@@ -42,6 +42,7 @@ USAGE
 import argparse
 import datetime
 import json
+import math
 import os
 import statistics
 import sys
@@ -520,6 +521,133 @@ def build_profile(root=None, days=30):
         "environment": environment,
         "pressure": pressure,
         "skipped": skipped,
+    }
+
+
+# WASTE SCORE (docs/WASTE-SCORE.md)
+# ----------------------------------
+# One 0-100 number: how much measurable waste a machine's Claude Code usage
+# carries. The formula, the anchors, the bands and the all-or-nothing rule
+# are all ratified and published in docs/WASTE-SCORE.md; this is only the
+# implementation of that already-published spec. Do not change an anchor,
+# a weight or the rounding rule here without bumping WASTE_SCORE_VERSION
+# and updating that document first: a score is only comparable between
+# machines when it was computed the same way, and the version string is
+# how a later change can never be compared silently against an older one.
+WASTE_SCORE_VERSION = "waste-score/1"
+
+# name, problem_class, weight, profile group, profile key, good anchor (no
+# penalty), bad anchor (full penalty), and how to pull the scalar metric out
+# of that leaf's "value" (identity for every metric except output_verbosity,
+# whose leaf value is the {"median_output_tokens": ..., ...} dict that
+# _output_verbosity() builds).
+_WASTE_COMPONENTS = (
+    {"name": "cache_hit_ratio", "problem_class": "cache_health", "weight": 30,
+     "group": "usage", "key": "cache_hit_ratio_median", "good": 0.90, "bad": 0.50,
+     "extract": lambda v: v},
+    {"name": "startup_floor", "problem_class": "startup_rent", "weight": 25,
+     "group": "instruction", "key": "startup_floor_share", "good": 0.15, "bad": 0.45,
+     "extract": lambda v: v},
+    {"name": "model_switch", "problem_class": "cache_health", "weight": 20,
+     "group": "behavior", "key": "model_switch_session_share", "good": 0.05, "bad": 0.35,
+     "extract": lambda v: v},
+    {"name": "structured_input", "problem_class": "tool_output", "weight": 15,
+     "group": "pressure", "key": "structured_input_share", "good": 0.30, "bad": 0.70,
+     "extract": lambda v: v},
+    {"name": "output_verbosity", "problem_class": "verbosity", "weight": 10,
+     "group": "pressure", "key": "output_verbosity", "good": 400, "bad": 1200,
+     "extract": lambda v: v.get("median_output_tokens") if isinstance(v, dict) else None},
+)
+
+WASTE_BANDS = (
+    (90, "LEAN"),
+    (70, "OK"),
+    (50, "WASTEFUL"),
+)
+
+
+def _linear_penalty(value, good, bad, weight):
+    """Straight-line penalty between two anchors: 0 at `good`, `weight` at
+    `bad`, linear in between, clamped to [0, weight] past either anchor.
+    `good` may be larger or smaller than `bad` (cache_hit_ratio runs
+    backward: higher is better); the fraction-of-the-way formula does not
+    care which direction the anchors point."""
+    frac = (value - good) / (bad - good)
+    frac = max(0.0, min(1.0, frac))
+    return weight * frac
+
+
+def _round_half_up(x, ndigits=1):
+    """Round half up (0.05 -> 0.1, never banker's-rounded down to 0.0).
+    Waste scores are always >= 0, so a plain floor-based half-up is exact;
+    this is not a general-purpose rounder for negative numbers."""
+    factor = 10 ** ndigits
+    return math.floor(x * factor + 0.5) / factor
+
+
+def _waste_band(score):
+    for floor, name in WASTE_BANDS:
+        if score >= floor:
+            return name
+    return "HEAVY WASTE"
+
+
+def compute_waste_score(profile):
+    """Score = 100 minus the sum of five component penalties, per
+    docs/WASTE-SCORE.md. All-or-nothing: computed only when every one of
+    the five inputs carries the MEASURED label; otherwise the whole result
+    is NO DATA, naming every input that failed and why. Never substitutes a
+    zero and never scores over a subset: a score computed over a varying
+    subset of components is not comparable between machines, and
+    comparability is the entire reason this score exists."""
+    values = {}
+    failures = []
+
+    for comp in _WASTE_COMPONENTS:
+        leaf = profile.get(comp["group"], {}).get(comp["key"])
+        path = f"{comp['group']}.{comp['key']}"
+        if leaf is None:
+            failures.append(f"{comp['name']} ({path}): metric absent from profile")
+            continue
+        label = leaf.get("label")
+        if label != "MEASURED":
+            failures.append(f"{comp['name']} ({path}): label is {label}, not MEASURED")
+            continue
+        value = comp["extract"](leaf.get("value"))
+        if value is None:
+            failures.append(f"{comp['name']} ({path}): required field missing from value")
+            continue
+        values[comp["name"]] = value
+
+    if failures:
+        return {
+            "version": WASTE_SCORE_VERSION,
+            "score": None,
+            "band": None,
+            "label": "NO DATA",
+            "missing": failures,
+        }
+
+    components = {}
+    total_penalty = 0.0
+    for comp in _WASTE_COMPONENTS:
+        v = values[comp["name"]]
+        penalty = _linear_penalty(v, comp["good"], comp["bad"], comp["weight"])
+        total_penalty += penalty
+        components[comp["name"]] = {
+            "problem_class": comp["problem_class"],
+            "weight": comp["weight"],
+            "metric_value": v,
+            "penalty": penalty,
+        }
+
+    score = _round_half_up(100.0 - total_penalty)
+    return {
+        "version": WASTE_SCORE_VERSION,
+        "score": score,
+        "band": _waste_band(score),
+        "label": "MEASURED",
+        "components": components,
     }
 
 

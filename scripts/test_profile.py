@@ -400,6 +400,180 @@ def test_pressure_no_data_on_empty_transcripts():
         assert p[key]["value"] is None, (key, p[key])
 
 
+def _leaf(value, label="MEASURED"):
+    return {"value": value, "label": label, "basis": "test fixture"}
+
+
+def _waste_profile(r=0.90, s=0.15, m=0.05, t=0.30, v=400,
+                    r_label="MEASURED", s_label="MEASURED", m_label="MEASURED",
+                    t_label="MEASURED", v_label="MEASURED"):
+    """A minimal profile carrying only the five leaves compute_waste_score
+    reads, at the real profile.py field names and group nesting (see
+    docs/WASTE-SCORE.md's component table). Defaults sit at the no-penalty
+    anchor for every component."""
+    return {
+        "usage": {"cache_hit_ratio_median": _leaf(r, r_label)},
+        "instruction": {"startup_floor_share": _leaf(s, s_label)},
+        "behavior": {"model_switch_session_share": _leaf(m, m_label)},
+        "pressure": {
+            "structured_input_share": _leaf(t, t_label),
+            "output_verbosity": _leaf({"median_output_tokens": v}, v_label),
+        },
+    }
+
+
+def test_waste_score_component_anchors_and_midpoints():
+    # Calibrated: changing `penalty = weight * frac` to `weight * frac / 2`
+    # in pf._linear_penalty makes the full-penalty and midpoint assertions
+    # below go red (e.g. cache_hit_ratio full penalty 15.0 instead of 30.0,
+    # midpoint 7.5 instead of 15.0); the no-penalty (0) assertions stay
+    # green either way, which is exactly why both anchors are checked.
+    # cache_hit_ratio: weight 30, good 0.90, bad 0.50 (runs backward: good > bad)
+    assert pf._linear_penalty(0.90, 0.90, 0.50, 30) == 0
+    assert pf._linear_penalty(0.50, 0.90, 0.50, 30) == 30
+    assert abs(pf._linear_penalty(0.70, 0.90, 0.50, 30) - 15.0) < 1e-9
+
+    # startup_floor: weight 25, good 0.15, bad 0.45
+    assert pf._linear_penalty(0.15, 0.15, 0.45, 25) == 0
+    assert pf._linear_penalty(0.45, 0.15, 0.45, 25) == 25
+    assert abs(pf._linear_penalty(0.30, 0.15, 0.45, 25) - 12.5) < 1e-9
+
+    # model_switch: weight 20, good 0.05, bad 0.35
+    assert pf._linear_penalty(0.05, 0.05, 0.35, 20) == 0
+    assert pf._linear_penalty(0.35, 0.05, 0.35, 20) == 20
+    assert abs(pf._linear_penalty(0.20, 0.05, 0.35, 20) - 10.0) < 1e-9
+
+    # structured_input: weight 15, good 0.30, bad 0.70
+    assert pf._linear_penalty(0.30, 0.30, 0.70, 15) == 0
+    assert pf._linear_penalty(0.70, 0.30, 0.70, 15) == 15
+    assert abs(pf._linear_penalty(0.50, 0.30, 0.70, 15) - 7.5) < 1e-9
+
+    # output_verbosity: weight 10, good 400, bad 1200
+    assert pf._linear_penalty(400, 400, 1200, 10) == 0
+    assert pf._linear_penalty(1200, 400, 1200, 10) == 10
+    assert abs(pf._linear_penalty(800, 400, 1200, 10) - 5.0) < 1e-9
+
+    # Past either anchor the penalty stays flat, it never goes negative and
+    # never exceeds the weight.
+    assert pf._linear_penalty(1.0, 0.90, 0.50, 30) == 0
+    assert pf._linear_penalty(0.0, 0.90, 0.50, 30) == 30
+
+
+def test_waste_score_anchors_match_published_spec():
+    # Ties _WASTE_COMPONENTS (what the scorer actually reads) to the exact
+    # numbers docs/WASTE-SCORE.md publishes, so the two can never drift
+    # apart silently.
+    by_name = {c["name"]: c for c in pf._WASTE_COMPONENTS}
+    assert by_name["cache_hit_ratio"]["weight"] == 30
+    assert by_name["cache_hit_ratio"]["good"] == 0.90
+    assert by_name["cache_hit_ratio"]["bad"] == 0.50
+    assert by_name["startup_floor"]["weight"] == 25
+    assert by_name["startup_floor"]["good"] == 0.15
+    assert by_name["startup_floor"]["bad"] == 0.45
+    assert by_name["model_switch"]["weight"] == 20
+    assert by_name["model_switch"]["good"] == 0.05
+    assert by_name["model_switch"]["bad"] == 0.35
+    assert by_name["structured_input"]["weight"] == 15
+    assert by_name["structured_input"]["good"] == 0.30
+    assert by_name["structured_input"]["bad"] == 0.70
+    assert by_name["output_verbosity"]["weight"] == 10
+    assert by_name["output_verbosity"]["good"] == 400
+    assert by_name["output_verbosity"]["bad"] == 1200
+    assert sum(c["weight"] for c in pf._WASTE_COMPONENTS) == 100
+
+
+def test_waste_score_round_half_up():
+    # Calibrated: swapping the floor-based implementation for plain
+    # round(x, ndigits) makes pf._round_half_up(61.25, 1) go red (Python's
+    # round() uses round-half-to-even and returns 61.2, not 61.3, for this
+    # exact binary-representable value); restoring the floor formula makes
+    # it green again.
+    assert pf._round_half_up(61.25, 1) == 61.3
+    assert pf._round_half_up(0.05, 1) == 0.1
+    assert pf._round_half_up(100.0, 1) == 100.0
+    assert pf._round_half_up(0.0, 1) == 0.0
+
+
+def test_waste_score_worked_example_from_doc():
+    # The exact worked example published in docs/WASTE-SCORE.md: r=0.75,
+    # s=0.25, m=0.15, t=0.55, v=650 tokens should score 61.3, band WASTEFUL.
+    prof = _waste_profile(r=0.75, s=0.25, m=0.15, t=0.55, v=650)
+    result = pf.compute_waste_score(prof)
+    assert result["label"] == "MEASURED", result
+    assert result["score"] == 61.3, result
+    assert result["band"] == "WASTEFUL", result
+    assert result["version"] == pf.WASTE_SCORE_VERSION
+
+
+def test_waste_score_perfect_machine_scores_100():
+    # Calibrated: mistyping model_switch's weight as 2 instead of 20 in
+    # _WASTE_COMPONENTS does not move this test (every penalty is already 0
+    # regardless of weight), which is exactly why the worst-case test below
+    # is the one that catches a wrong weight.
+    prof = _waste_profile(r=1.0, s=0.0, m=0.0, t=0.0, v=0)
+    result = pf.compute_waste_score(prof)
+    assert result["label"] == "MEASURED", result
+    assert result["score"] == 100.0, result
+    assert result["band"] == "LEAN", result
+
+
+def test_waste_score_worst_case_scores_0():
+    # Calibrated: changing model_switch's weight from 20 to 2 in
+    # _WASTE_COMPONENTS (a plausible typo) makes this go red: score becomes
+    # 100 - (30+25+2+15+10) = 18.0 instead of 0.0, because the weights no
+    # longer sum to 100. Restoring weight 20 makes it green again.
+    prof = _waste_profile(r=0.0, s=1.0, m=1.0, t=1.0, v=3000)
+    result = pf.compute_waste_score(prof)
+    assert result["label"] == "MEASURED", result
+    assert result["score"] == 0.0, result
+    assert result["band"] == "HEAVY WASTE", result
+
+
+def test_waste_score_all_or_nothing_no_data():
+    # Calibrated: widening the label check in compute_waste_score from
+    # `label != "MEASURED"` to `label not in ("MEASURED", "SIGNAL")` lets a
+    # SIGNAL-labeled model_switch leaf through as if it were MEASURED, so
+    # the whole-score result silently becomes a number instead of NO DATA.
+    # That is exactly the bug this test exists to catch: restoring the
+    # exact "MEASURED" check makes it red-to-green.
+    #
+    # Case 1: one input carries a non-MEASURED label (SIGNAL).
+    prof = _waste_profile(m_label="SIGNAL")
+    result = pf.compute_waste_score(prof)
+    assert result["label"] == "NO DATA", result
+    assert result["score"] is None, result
+    assert result["band"] is None, result
+    assert any("model_switch" in reason for reason in result["missing"]), result
+
+    # Case 2: one input is explicitly NO DATA (value None, label NO DATA).
+    prof2 = _waste_profile()
+    prof2["usage"]["cache_hit_ratio_median"] = pf.no_data("no usage window")
+    result2 = pf.compute_waste_score(prof2)
+    assert result2["label"] == "NO DATA", result2
+    assert any("cache_hit_ratio" in reason for reason in result2["missing"]), result2
+
+    # Case 3: one input is entirely absent from the profile.
+    prof3 = _waste_profile()
+    del prof3["pressure"]["structured_input_share"]
+    result3 = pf.compute_waste_score(prof3)
+    assert result3["label"] == "NO DATA", result3
+    assert any("structured_input" in reason for reason in result3["missing"]), result3
+
+    # A single failure must not leak a partial score for the other four.
+    assert "components" not in result
+
+
+def test_waste_score_version_present_in_output():
+    # Calibrated: dropping the "version" key from the NO-DATA branch's
+    # return dict in compute_waste_score makes the second assertion below
+    # go red with a KeyError; restoring it makes both green.
+    ok = pf.compute_waste_score(_waste_profile())
+    assert ok["version"] == "waste-score/1"
+
+    no_data = pf.compute_waste_score(_waste_profile(m_label="NO DATA"))
+    assert no_data["version"] == "waste-score/1"
+
+
 def test_main_exits_2_on_empty_root():
     with tempfile.TemporaryDirectory() as d:
         empty_root = os.path.join(d, "empty")
