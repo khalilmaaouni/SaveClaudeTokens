@@ -579,7 +579,14 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         metric_delta = metric_before - metric_after
 
     floor_reduction = None
-    if metric == DEFAULT_METRIC and fr_before is not None and fr_after is not None:
+    # D21a. `is not None` was the only gate here, so the non-numeric guard
+    # thirty lines above named the value as not comparable and then this
+    # subtracted it anyway. For the default metric those are literally the
+    # same two values, so a summary carrying a string where the median
+    # belongs was downgraded by name and then raised TypeError out of
+    # build_record, taking the whole close with it. A guard undone by a later
+    # statement is not a guard, so the same _is_numeric test runs here.
+    if metric == DEFAULT_METRIC and _is_numeric(fr_before) and _is_numeric(fr_after):
         floor_reduction = fr_before - fr_after
 
     direction = None
@@ -641,7 +648,21 @@ def aggregate_by_label(records):
     """Group ledger records by label. One row per label, always: a floor
     reduction measured for one experiment is never summed with a floor
     reduction measured for an unrelated one, because they are not the same
-    quantity."""
+    quantity.
+
+    D18. "reductions" carries VERIFIED records ONLY. It used to take the
+    delta off every record whatever its confidence, and cmd_report prints the
+    last one on a line that opens with the VERIFIED count, so a label with two
+    proven runs and one later unproven one printed the UNPROVEN number in the
+    column a reader takes as the proven result. That is the confidence label
+    inverted: its entire job is to stop an unproven number borrowing a proven
+    one's authority.
+
+    "count", "verified" and "not_proven" still see every record, because how
+    many times a thing was tried and how often it failed to prove out are
+    exactly the facts a reader should keep. A label with no verified run comes
+    back with an EMPTY reductions list and the caller says NO DATA, rather
+    than falling back to its newest guess."""
     by_label = {}
     for rec in records:
         label = rec.get("label") or "(unlabeled)"
@@ -653,7 +674,7 @@ def aggregate_by_label(records):
         else:
             row["not_proven"] += 1
         fr = rec.get("floor_reduction_tokens")
-        if fr is not None:
+        if fr is not None and rec.get("confidence") == "VERIFIED":
             row["reductions"].append(fr)
     return by_label
 
@@ -764,9 +785,21 @@ def cmd_end(label, root, days, now_ts):
         overlap_reason = check_cohort_order(before_end_ts, after_start_ts)
         if overlap_reason:
             print(f"REFUSED: {overlap_reason}")
-            print("Nothing was written to the ledger. Wait longer, or end with a "
-                  "smaller --days window, so the after cohort starts after the "
-                  "before cohort ended.")
+            # D19. This used to offer a second way out: "or end with a
+            # smaller --days window". Taking it is strictly harmful. A
+            # smaller window trips build_record's own window-length guard,
+            # which is an unconditional downgrade, and cmd_end writes that
+            # NOT_PROVEN permanently into an APPEND-ONLY ledger. The reader
+            # follows our own instruction and buys a permanent unproven
+            # verdict for an experiment that had nothing wrong with it.
+            # Waiting is the only sound path, so it is the only one offered.
+            print("Nothing was written to the ledger. Wait until the after "
+                  "cohort starts after the before cohort ended, then end "
+                  "again.")
+            print("Do NOT shorten --days to force it through: a window that "
+                  "differs from the baseline's is its own downgrade, and the "
+                  "NOT_PROVEN it writes cannot be taken back out of the "
+                  "ledger.")
             return 2
 
     sm = _measure_cohort(root, after_start_ts, after_end_ts, days)
@@ -837,7 +870,23 @@ def list_open_experiments(exp_dir=None, ledger=None):
                     continue
                 label = rec.get("label")
                 end = (rec.get("cohort_before") or {}).get("end")
-                if label is not None and end is not None:
+                # D8. This used to require `end is not None` as well, which
+                # made a legacy baseline UNCLOSABLE. Such a baseline carries
+                # no cohort_end_ts, so its close record carries end=None, was
+                # refused entry here, and the baseline's own (label, None)
+                # key could never match anything: closing it appended a
+                # NOT_PROVEN record and it still read as open, forever, one
+                # more record per attempt. guided_apply refuses to run while
+                # any experiment is open, so a single legacy baseline blocked
+                # every guided change on the machine indefinitely.
+                #
+                # None stays IN the key rather than being dropped from it: a
+                # legacy baseline matches a legacy close, and a v2 baseline
+                # (which always has a real cohort_end_ts) still cannot be
+                # closed by a record that lost its own. Two baselines cannot
+                # collide on (label, None), because EXP_DIR holds one file per
+                # label by construction.
+                if label is not None:
                     closed.add((label, end))
     open_baselines = []
     if os.path.isdir(exp_dir):
@@ -879,10 +928,17 @@ def cmd_report():
     print("=== experiments, one row per label (never summed across labels) ===")
     for label in sorted(by_label):
         row = by_label[label]
+        # The column says VERIFIED out loud. It used to read "latest floor
+        # reduction" while carrying whatever the newest record held, proven or
+        # not (D18), and a reader has no way to tell those apart in a printed
+        # column. A label with no verified run says NO DATA rather than
+        # showing its newest unproven guess in the same place.
         latest = row["reductions"][-1] if row["reductions"] else None
+        floor = (f"{mt.fmt(latest)} tokens/call" if latest is not None
+                 else "NO DATA (no verified run)")
         print(f"{label:<30} {row['count']:>3} runs  "
               f"{row['verified']:>2} VERIFIED  {row['not_proven']:>2} NOT_PROVEN  "
-              f"latest floor reduction {mt.fmt(latest)} tokens/call")
+              f"latest VERIFIED floor reduction {floor}")
     return 0
 
 
