@@ -60,13 +60,20 @@ import os
 import sys
 
 import measure_tokens as mt
+import config as cfg
 import token_shield as ts
 import pricing as pr
 import experiment as ex
 
-ROOT = os.path.expanduser("~/.claude/projects")
+# Aliases, not declarations: config.py owns both values now, and these two
+# names stay here because they are a SEAM. Several tests monkeypatch cli.ROOT
+# to point a run at a fixture directory, so rewriting this module's internals
+# to read cfg.ROOT directly would leave those patches silently ineffective and
+# the tests measuring this machine's real transcripts while still passing.
+ROOT = cfg.ROOT
+EXPERIMENT_DAYS = cfg.EXPERIMENT_DAYS
+
 OUT = os.path.expanduser("~/.token-shield/token-shield.html")
-EXPERIMENT_DAYS = 30  # window length both cohorts of an experiment must share
 
 
 def _verified_by_label():

@@ -721,7 +721,7 @@ def test_recipe_refuses_when_registry_entry_missing_a_required_field():
     # is missing "uninstall" must be refused, naming that exact field,
     # never crash and never fall back to inventing a rollback command.
     import tempfile
-    real_path = adv.ts.COMPANIONS_PATH
+    real_path = adv.cfg.COMPANIONS_PATH
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "companions.json")
         with open(path, "w") as f:
@@ -730,14 +730,14 @@ def test_recipe_refuses_when_registry_entry_missing_a_required_field():
                 "tested_version_range": {"min": "1.0.0", "max": "1.0.0",
                                          "tested_on": "2026-08-13"},
             }]}, f)
-        adv.ts.COMPANIONS_PATH = path
+        adv.cfg.COMPANIONS_PATH = path
         try:
             buf = io.StringIO()
             import contextlib
             with contextlib.redirect_stdout(buf):
                 rc = adv.cmd_recipe("widget")
         finally:
-            adv.ts.COMPANIONS_PATH = real_path
+            adv.cfg.COMPANIONS_PATH = real_path
     out = buf.getvalue()
     assert rc == 2, out
     assert "uninstall" in out, out
@@ -1153,12 +1153,12 @@ def test_recipe_refuses_for_a_mention_like_context_mode():
         "tested_version_range": {"min": "1.0.169", "max": "1.0.169", "tested_on": "2026-08-15"},
     })
     del context_mode_mention
-    real_path = adv.ts.COMPANIONS_PATH
+    real_path = adv.cfg.COMPANIONS_PATH
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "companions.json")
         with open(path, "w") as f:
             json.dump(promoted, f)
-        adv.ts.COMPANIONS_PATH = path
+        adv.cfg.COMPANIONS_PATH = path
         try:
             buf2 = io.StringIO()
             with contextlib.redirect_stdout(buf2):
@@ -1166,7 +1166,7 @@ def test_recipe_refuses_for_a_mention_like_context_mode():
             went_red = rc2 == 0
             assert went_red, "reinjection (accidental promotion) did not reproduce the defect"
         finally:
-            adv.ts.COMPANIONS_PATH = real_path
+            adv.cfg.COMPANIONS_PATH = real_path
 
     buf3 = io.StringIO()
     with contextlib.redirect_stdout(buf3):
@@ -1222,11 +1222,11 @@ def test_mention_recipe_names_the_reason_verbatim_never_the_generic_no_entry_tex
     path = os.path.join(HERE, "advisor.py")
     with open(path) as f:
         src = f.read()
-    marker = "    data = ts.load_companions(ts.COMPANIONS_PATH)\n    result = describe(data, load_state(), name)\n    if result[\"refused\"]:\n"
+    marker = "    data = cfg.load_companions(cfg.COMPANIONS_PATH)\n    result = describe(data, load_state(), name)\n    if result[\"refused\"]:\n"
     assert marker in src, "cmd_recipe's shape changed; update this reinjection"
     broken = src.replace(
         marker,
-        "    data = ts.load_companions(ts.COMPANIONS_PATH)\n"
+        "    data = cfg.load_companions(cfg.COMPANIONS_PATH)\n"
         "    result = describe(data, load_state(), name)\n"
         "    if result[\"refused\"]:\n"
         "        print(f\"REFUSED: {result['reason']}\")\n"

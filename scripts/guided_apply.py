@@ -30,7 +30,7 @@ import os
 import time
 
 import experiment as ex
-import cli as ts_cli  # ROOT, EXPERIMENT_DAYS: reused, never re-declared
+import config as cfg  # ROOT, EXPERIMENT_DAYS: read from the foundation, never re-declared
 
 
 def refuse_if_experiment_open():
@@ -141,9 +141,9 @@ def apply(label, treats, mutate_fn, verify_fn):
                     f"the backup this apply printed. Verify report: {report}")
 
     now = time.time()
-    ex.cmd_start(label, ts_cli.ROOT, ts_cli.EXPERIMENT_DAYS, now, treats)
-    close_by = time.strftime("%Y-%m-%d", time.gmtime(now + ts_cli.EXPERIMENT_DAYS * 86400))
+    ex.cmd_start(label, cfg.ROOT, cfg.EXPERIMENT_DAYS, now, treats)
+    close_by = time.strftime("%Y-%m-%d", time.gmtime(now + cfg.EXPERIMENT_DAYS * 86400))
     return 0, (f"applied and verified ({report}). Experiment '{label}' opened "
                f"to prove it; earliest clean close date {close_by} (start plus "
-               f"the {ts_cli.EXPERIMENT_DAYS:g}-day window). Close it then with: "
+               f"the {cfg.EXPERIMENT_DAYS:g}-day window). Close it then with: "
                f'python3 experiment.py end "{label}"')

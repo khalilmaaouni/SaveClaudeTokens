@@ -120,7 +120,7 @@ import shutil
 import sys
 import time
 
-import token_shield as ts
+import config as cfg
 from companions import describe, load_registry, load_state
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1016,7 +1016,7 @@ def cmd_recipe(name):
     longer repo-name spelling, such as token-optimizer-mcp for the
     curated name token-optimizer, without inventing an alias field).
     """
-    data = ts.load_companions(ts.COMPANIONS_PATH)
+    data = cfg.load_companions(cfg.COMPANIONS_PATH)
     result = describe(data, load_state(), name)
     if result["refused"]:
         companions_list = (data or {}).get("companions", [])

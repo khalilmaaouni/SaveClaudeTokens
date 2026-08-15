@@ -22,9 +22,10 @@ import os
 import time
 
 import token_shield as ts
+import config as cfg
 from companions import caveman, describe, ponytail, token_saver
 
-REAL_COMPANIONS_PATH = ts.COMPANIONS_PATH
+REAL_COMPANIONS_PATH = cfg.COMPANIONS_PATH
 
 
 def _entry(name, install="claude plugin install x@y", uninstall="claude plugin uninstall x",

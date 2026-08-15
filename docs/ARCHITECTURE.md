@@ -47,7 +47,7 @@ Lower number is lower in the stack. The authoritative copy is `LAYERS` in
 
 | L | Name | Modules | What belongs here |
 |---|---|---|---|
-| 0 | foundation | `measure_tokens`, `context_lint`, `session_end_telemetry`, `check_py311` | Reads raw counters and files on disk. Imports nothing else in this repo, which is what makes it the floor. |
+| 0 | foundation | `config`, `measure_tokens`, `context_lint`, `session_end_telemetry`, `check_py311` | Reads raw counters, paths and files on disk. Imports nothing else in this repo, which is what makes it the floor. |
 | 1 | metrics | `pricing`, `experiment`, `profile`, `signals` | Turns counters into the quantities the product talks about. No rendering, no advice. |
 | 2 | proposal | `guided_apply`, `optimize`, `discover_companions` | Reads metrics and proposes a change. Never renders one. |
 | 3 | advice and ecosystem | `companions`, `plugin_prune`, `memory_trim`, `doctor` | Ranks proposals and inspects the installed world. |
@@ -59,40 +59,58 @@ Lower number is lower in the stack. The authoritative copy is `LAYERS` in
 A module with no layer fails the check. That is deliberate: the cheapest
 moment to decide where something belongs is the moment it is created.
 
-### What layer 5 is currently doing wrong
+### What layer 5 is still doing wrong
 
-`token_shield` is 1,582 lines and is the presentation layer, but it also
-holds `savings_breakdown` (a metric), `COMPANIONS_PATH` and
-`load_companions` (foundation-level file access), and the CSS. Nine modules
-import it. That is why four of the five upward imports below exist: modules
-that only want to read `data/companions.json` have to reach into the
-renderer to do it.
+`token_shield` was the presentation layer that also held `savings_breakdown`
+(a metric), `COMPANIONS_PATH` and `load_companions` (foundation-level file
+access), and the CSS. The file access has moved to `config`, which is what
+emptied the frozen list: four modules had been importing the renderer purely
+to read `data/companions.json`, and none of them imports it at all now.
 
-Splitting the metric half out of `token_shield` is worth doing and is not
-scheduled yet, because the upward imports are the part that actively costs
-correctness and they are cheaper to fix.
+What remains is the metric half. `savings_breakdown` and its neighbours
+compute quantities that belong at layer 1, and they sit in the module that
+renders them, which is why six surfaces still import the renderer to get at
+a number. That split is the next structural change, and unlike the
+extraction it has no mechanical done-check yet: nothing currently fails if a
+metric is added to the renderer, because the layer rule cares about
+direction and both halves live at the same address.
 
-## The frozen list, and the one change that empties it
+## The frozen list is empty
 
-Five imports point upward today. They are frozen by name in
-`KNOWN_UPWARD`, and the check refuses both a sixth and a stale entry, so the
-list can only shrink.
+`KNOWN_UPWARD` holds nothing. Every import in `scripts/` now points down or
+sideways, and the graph has **no cycles at all**, where it had four.
 
-| From | To | Wants |
-|---|---|---|
-| `advisor` | `token_shield` | `COMPANIONS_PATH`, `load_companions` |
-| `doctor` | `token_shield` | `COMPANIONS_PATH`, `load_companions` |
-| `discover_companions` | `token_shield` | `COMPANIONS_PATH`, `load_companions` |
-| `companions` | `token_shield` | `COMPANIONS_PATH`, `load_companions` |
-| `guided_apply` | `cli` | `ROOT`, `EXPERIMENT_DAYS` |
+The five entries that used to sit here were one cause, and one change removed
+all of them: `scripts/config.py` at layer 0 now owns `ROOT`,
+`EXPERIMENT_DAYS`, `COMPANIONS_PATH` and `load_companions`. Four modules
+(`advisor`, `doctor`, `discover_companions`, the `companions` package) had
+been importing the RENDERER purely to read `data/companions.json`, and
+`guided_apply` had been importing the COMMAND LINE purely to read two
+numbers. All five of those imports turned out to be dead once the symbols
+moved, and were deleted rather than repointed.
 
-All five are one cause: four constants and one function that belong in the
-foundation are living in a renderer and a surface. **One change removes every
-entry**: extract `scripts/config.py` at layer 0 holding `ROOT`,
-`EXPERIMENT_DAYS`, `COMPANIONS_PATH` and `load_companions`, and repoint the
-five importers at it.
+Two things worth keeping from the move:
 
-### Decision record: freeze the violations, do not fix them yet
+- **`cli` is now a leaf.** Nothing in the repository imports the command line
+  any more. A surface being imported by something below it was the shape that
+  made `guided_apply` depend on the entry point, and that is gone.
+- **`cli.ROOT` and `cli.EXPERIMENT_DAYS` survive as aliases**, and the comment
+  beside them says why: several tests monkeypatch `cli.ROOT` to point a run at
+  a fixture directory. Rewriting cli's internals to read `cfg.ROOT` directly
+  would have left those patches silently ineffective, with the tests still
+  passing while measuring this machine's real transcripts. The duplicated
+  literal is gone; the seam is deliberately not.
+
+The check that refuses a new upward import, a module with no declared layer,
+and a stale frozen entry all still runs. An empty frozen list is the state it
+was built to reach, not a reason to remove it.
+
+### Decision record, kept because its reasoning outlived it
+
+The decision below was taken when the five violations were live, and it is
+kept rather than deleted: the flip condition it named is exactly what fired,
+so it is the record of a call that came out right, and the criteria are the
+ones the next such decision should be argued against.
 
 **Criteria, in the order they decided it.** (1) Does the option stop the
 problem growing? (2) What is its blast radius measured in call sites and test
@@ -132,8 +150,12 @@ counterweight, because it forces the list to shrink honestly rather than
 quietly outliving its violations, but nothing forces the extraction itself to
 happen on any particular day.
 
-**Flip condition.** When a session opens with nothing owed and budget headroom,
-the extraction goes first, as its own pull request.
+**Flip condition, and it fired.** "When a session opens with nothing owed and
+budget headroom, the extraction goes first, as its own pull request." Nothing
+was owed, the founder lifted the soft spend stop, and the extraction went
+first. The live count at the time was 41 call sites across 8 files rather than
+the "about 35" estimated here, and the test edits were the unpredictable half
+exactly as predicted.
 
 ## What the static check cannot see
 

@@ -48,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #   6  fleet: many machines, built on the single-machine layers below.
 #   7  surfaces: one entry point per thing a person or a script can run.
 LAYERS = {
-    0: {"measure_tokens", "context_lint", "session_end_telemetry", "check_py311"},
+    0: {"config", "measure_tokens", "context_lint", "session_end_telemetry", "check_py311"},
     1: {"pricing", "experiment", "profile", "signals"},
     2: {"guided_apply", "optimize", "discover_companions"},
     3: {"companions", "plugin_prune", "memory_trim", "doctor"},
@@ -66,13 +66,7 @@ LAYERS = {
 # which live in a surface instead of the foundation. Extracting a config
 # module removes every entry here at once (docs/ARCHITECTURE.md, "The one
 # change that empties the frozen list").
-KNOWN_UPWARD = {
-    ("advisor", "token_shield"): "wants COMPANIONS_PATH and load_companions",
-    ("doctor", "token_shield"): "wants COMPANIONS_PATH and load_companions",
-    ("discover_companions", "token_shield"): "wants COMPANIONS_PATH and load_companions",
-    ("companions", "token_shield"): "wants COMPANIONS_PATH and load_companions",
-    ("guided_apply", "cli"): "wants ROOT and EXPERIMENT_DAYS",
-}
+KNOWN_UPWARD = {}
 
 
 def _modules():
@@ -167,7 +161,7 @@ def test_the_frozen_list_is_exactly_the_five_known_today():
     this number comes down with it in the same edit."""
     modules, layer_of = _modules(), _layer_of()
     upward = {(a, b) for a, b in _edges(modules) if layer_of[b] > layer_of[a]}
-    assert len(upward) == 5, sorted(upward)
+    assert len(upward) == 0, sorted(upward)
     assert all(reason for reason in KNOWN_UPWARD.values()), (
         "every frozen entry states why it is still there")
 
