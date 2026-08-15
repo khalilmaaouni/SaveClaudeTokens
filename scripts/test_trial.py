@@ -706,13 +706,29 @@ def test_hero_numeric_branches_never_receive_none():
 
     Calibrated by reinjecting the exact defect this guards against: a copy of
     dominant_lever with `(share or 0) >= 0.30` in place of
-    `share is not None and share >= 0.30` (and the same `or 0` substitution
-    for hit and sub) returns "shrink"/"cache"/"route" for a None value sitting
-    at or past the threshold, and the assertions below go red against that
-    copy. Restoring the real measure_tokens.dominant_lever (never edited on
-    disk; the broken copy lived only in a throwaway calibration script) makes
-    it pass again. measure_tokens.py itself was not touched to run this
-    check.
+    `share is not None and share >= 0.30`, and the same `or 0` substitution for
+    hit and sub.
+
+    Which branch actually goes red under that reinjection, stated precisely
+    because an earlier version of this docstring overclaimed and said all three:
+    only "cache". The comparisons are not symmetric. `(hit or 0) < 0.70` turns a
+    None hit into 0, and 0 < 0.70 is TRUE, so "cache" is returned with hit None
+    and the assertion below goes red. The other two compare the other way:
+    `(share or 0) >= 0.30` and `(sub or 0) >= 0.40` turn None into 0, and 0 is
+    NOT at or past either threshold, so those branches are simply not reached
+    and stay green under this particular defect.
+
+    That is honest rather than tidy, and it is the whole point of calibrating: a
+    guard for three branches whose recorded reinjection exercises one is a guard
+    that has been verified for one. The two remaining branches are covered by
+    construction instead, because the assertion sweeps every value in the table
+    below against the REAL dominant_lever rather than restating its thresholds,
+    so any future edit that lets "shrink" or "route" escape with a None value
+    fails here.
+
+    Restoring the real measure_tokens.dominant_lever (never edited on disk; the
+    broken copy lived only in a throwaway calibration script) makes it pass
+    again. measure_tokens.py itself was not touched to run this check.
     """
     import itertools
     values = [None, 0.0, 0.05, 0.15, 0.25, 0.29, 0.30, 0.31, 0.39, 0.40, 0.41,
