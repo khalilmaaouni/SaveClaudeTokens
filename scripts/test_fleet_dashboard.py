@@ -626,6 +626,90 @@ def test_error_rows_never_publish_the_admins_home_path_to_the_org():
             shutil.rmtree(d, ignore_errors=True)
 
 
+def test_counter_too_big_for_a_float_is_one_row_not_the_whole_page():
+    """RED before the fix: OverflowError: int too large to convert to float.
+    _validate_record_shape was called OUTSIDE the try whose broad handler
+    exists for exactly this, so math.isfinite raising on an int too big for
+    a float killed every machine's row. 401 bytes, far under the size cap."""
+    with tempfile.TemporaryDirectory() as d:
+        _write_record(d, "acme", "healthy", "2026-08-10",
+                      _healthy_record("2026-08-10", "healthy"))
+        md = os.path.join(d, "fleet", "acme", "huge")
+        os.makedirs(md)
+        _write(os.path.join(md, "2026-08-10.json"),
+               '{"schema":1,"date":"2026-08-10","counters":'
+               '{"unknown":{"input_tokens":' + "1" + "0" * 400 + "}}}")
+        rows, _e = fd.collect_org(d, "acme")
+        healthy = [r for r in rows if r["machine_id"] == "healthy"][0]
+        huge = [r for r in rows if r["machine_id"] == "huge"][0]
+        assert healthy["error"] is None, "a hostile record cost a healthy machine its row"
+        assert huge["error"] is not None
+        body = fd.render(d, "acme", "stamp")
+        assert "healthy" in body
+
+
+def test_non_string_label_or_confidence_is_one_row_not_the_whole_page():
+    """RED before the fix: TypeError: unhashable type: 'list'. label and
+    confidence are attacker supplied and are used as a dict key, a set
+    member and a sort key, so a list, a dict, or a number beside a string
+    took the whole org page down with it."""
+    with tempfile.TemporaryDirectory() as d:
+        _write_record(d, "acme", "healthy", "2026-08-10",
+                      _healthy_record("2026-08-10", "healthy"))
+        for name, label, conf in (("badlist", ["x"], "VERIFIED"),
+                                  ("baddict", "ok", {"k": 1}),
+                                  ("badnum", 7, "VERIFIED")):
+            rec = _healthy_record("2026-08-10", name)
+            rec["experiments"] = [{"label": label, "confidence": conf,
+                                   "metric_delta": 1.0,
+                                   "timestamp": "2026-08-10T00:00:00Z"}]
+            _write_record(d, "acme", name, "2026-08-10", rec)
+        body = fd.render(d, "acme", "stamp")
+        assert "healthy" in body, "hostile experiment fields killed the page"
+
+
+def test_a_symlink_at_the_org_directory_itself_is_refused():
+    """RED before the fix: the outside record rendered with no refusal.
+    _refuse_symlinks_under walks components strictly BELOW its root, so
+    passing org_dir as the root left fleet/<org> itself unchecked, and
+    os.path.isdir follows symlinks."""
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+        md = os.path.join(outside, "leaker")
+        os.makedirs(md)
+        _write(os.path.join(md, "2026-08-10.json"),
+               json.dumps(_healthy_record("2026-08-10", "l" * 64,
+                                          team="should-never-be-read")))
+        os.makedirs(os.path.join(d, "fleet"))
+        os.symlink(outside, os.path.join(d, "fleet", "acme"))
+        body = fd.render(d, "acme", "stamp")
+        assert "should-never-be-read" not in body, (
+            "the reader escaped the store through a symlinked org directory")
+        assert "NO DATA" in body
+
+
+def test_the_page_is_written_as_utf8_whatever_the_locale_is():
+    """RED before the fix: UnicodeEncodeError and a zero byte page. The page
+    declares <meta charset="utf-8"> but plain open() encodes with the
+    locale's codec, so under LC_ALL=C one non-ASCII byte anywhere in the
+    store left nothing on disk. Asserted by encoding the rendered body with
+    ascii, which is what a C locale would have done."""
+    with tempfile.TemporaryDirectory() as d:
+        rec = _healthy_record("2026-08-10", "healthy")
+        rec["team"] = "東京"
+        _write_record(d, "acme", "healthy", "2026-08-10", rec)
+        body = fd.render(d, "acme", "stamp")
+        try:
+            body.encode("ascii")
+            ascii_safe = True
+        except UnicodeEncodeError:
+            ascii_safe = False
+        assert not ascii_safe, "fixture is not exercising the non-ASCII path"
+        out = os.path.join(d, "page.html")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(body)
+        assert os.path.getsize(out) > 0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
