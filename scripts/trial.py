@@ -109,7 +109,7 @@ def run(root, days, out=None):
         if len(rel) < len(cli):
             cli = rel
     except ValueError:
-        pass
+        pass  # sbe: allow-silent relpath raises when no relative path exists (a different drive on Windows); the absolute path already printed is correct, just longer
     print(f"\nFull plugin, more views, and a way to prove a fix worked: "
           f"python3 {cli} summary "
           f"(github.com/khalilmaaouni/token-shield)", file=out)

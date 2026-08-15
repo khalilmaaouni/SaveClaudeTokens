@@ -854,7 +854,7 @@ def _delta_text(delta):
         if not math.isfinite(delta):
             return "NO DATA"
     except OverflowError:
-        pass
+        pass  # sbe: allow-silent deliberate fall-through: math.isfinite raises OverflowError on an int too big for a float, but such an int IS finite and still formats, so it must reach the formatter rather than be called NO DATA
     return f"{delta:+,}"
 
 

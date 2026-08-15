@@ -311,7 +311,7 @@ def load_profile(path):
         with open(path) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
-        return None
+        return None  # sbe: allow-silent an unreadable JSON source becomes NO DATA in the section that needed it; the rest of the dashboard still renders
 
 
 def load_companions(path):
@@ -322,7 +322,7 @@ def load_companions(path):
         with open(path) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
-        return None
+        return None  # sbe: allow-silent same rule for the second source: one unreadable file darkens its own section and never the whole page
 
 
 def load_experiment_rows(path):
@@ -342,7 +342,7 @@ def load_experiment_rows(path):
             try:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                continue  # sbe: allow-silent a corrupt ledger line is skipped so one bad line cannot empty the dashboard's experiment table
     return rows
 
 

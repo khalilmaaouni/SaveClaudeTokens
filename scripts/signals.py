@@ -281,7 +281,7 @@ def _plugin_version():
         with open(PLUGIN_MANIFEST_PATH) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return None
+        return None  # sbe: allow-silent an unreadable plugin manifest means the version is unknown, and the schema leaves the field absent rather than reporting a fabricated one
     v = data.get("version")
     return v if isinstance(v, str) and v else None
 
@@ -313,7 +313,7 @@ def _day_rows(ledger_path, day):
             try:
                 row = json.loads(line, parse_constant=_reject_non_finite_constant)
             except (json.JSONDecodeError, ValueError):
-                continue
+                continue  # sbe: allow-silent a corrupt or non-finite ledger line is skipped so one bad line cannot poison the day's rollup
             if not isinstance(row, dict):
                 continue
             recorded = row.get("recorded_at")
@@ -346,7 +346,7 @@ def build_candidate(ledger_path, day):
             first = float(row.get("first_request") or 0)
             calls = float(row.get("calls") or 0)
         except (TypeError, ValueError):
-            continue
+            continue  # sbe: allow-silent a row whose counters are not numbers contributes nothing to the shares rather than a coerced zero, which would claim measured waste that was never measured
         raw_input = inp + rd + w5 + w1 + wu
         if raw_input <= 0:
             continue

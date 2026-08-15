@@ -254,7 +254,7 @@ def _read_ledger():
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                continue  # sbe: allow-silent a corrupt ledger line is skipped so one bad line cannot empty a month's report
     return records
 
 
