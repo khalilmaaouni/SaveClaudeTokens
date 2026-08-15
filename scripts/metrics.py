@@ -721,10 +721,6 @@ def command_center_state(open_experiments, advise_result, verified, strategy_cou
     insufficient = advise_result.get("insufficient") or []
     evaluated = advise_result.get("evaluated")
     denominator = evaluated if evaluated is not None else strategy_count
-    if denominator == 0:
-        return ("NO DATA",
-                "every strategy is suppressed, so nothing could be evaluated "
-                "right now. Run token-shield profile to gather data.")
     if denominator and len(insufficient) == denominator:
         return ("NO DATA",
                 f"NO DATA on {len(insufficient)} strategy trigger(s): "
@@ -732,6 +728,24 @@ def command_center_state(open_experiments, advise_result, verified, strategy_cou
 
     if open_experiments:
         return ("PROVING", _proving_reason(open_experiments))
+
+    # The all suppressed case sits BELOW PROVING, and the two NO DATA rules
+    # above sit on top of it, deliberately. They are not the same kind of
+    # thing. An unrecognised format and an unreadable advisor are MEASUREMENT
+    # failures: the numbers a running trial would report cannot be trusted, so
+    # hiding PROVING is the honest move. A denominator of zero is a
+    # CONFIGURATION choice: the user muted every strategy, which says nothing
+    # about whether the meter works. An open experiment is read from a file on
+    # disk rather than computed from the profile, so it is still a fact, and
+    # burying a running trial under NO DATA would lose real information and
+    # cost the user the stability warning that PROVING exists to give.
+    # Note the two are mutually exclusive above: `denominator and ...` is False
+    # when the denominator is zero, so the insufficient triggers rule cannot
+    # fire on an empty list here.
+    if denominator == 0:
+        return ("NO DATA",
+                "every strategy is suppressed, so nothing could be evaluated "
+                "right now. Run token-shield profile to gather data.")
 
     if not advise_result.get("do_nothing"):
         return ("OPPORTUNITY", _opportunity_reason(advise_result))

@@ -1340,6 +1340,22 @@ def test_state_every_strategy_suppressed_is_no_data():
     assert "suppress" in reason.lower(), reason
 
 
+def test_state_all_suppressed_does_not_hide_a_running_experiment():
+    # Same denominator 0 as the test above, but with an open experiment on
+    # disk. PROVING must win. Suppressing every strategy is a CONFIGURATION
+    # choice and says nothing about whether the meter works, while the open
+    # experiment is read from a file rather than computed from the profile, so
+    # it is still a fact. Burying a running trial under NO DATA would lose real
+    # information and cost the user the stability warning PROVING exists to
+    # give. The two MEASUREMENT failures above (unrecognised format, unreadable
+    # advisor) do still outrank PROVING, and that asymmetry is the point.
+    advise_result = {"do_nothing": True, "insufficient": [], "evaluated": 0}
+    open_experiments = [{"label": "diet-claude-md", "window_days": 30}]
+    state, reason = met.command_center_state(open_experiments, advise_result, [], 5)
+    assert state == "PROVING", (state, reason)
+    assert "diet-claude-md" in reason, reason
+
+
 def test_state_none_advise_result_is_no_data():
     # token_shield.py sets advise_result to None when the advisor fails to
     # load (scripts/token_shield.py:910). The first surface that wires this
