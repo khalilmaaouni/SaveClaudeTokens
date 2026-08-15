@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Calibrated checks for memory_trim.py. Every case that touches
 optimize.review_dir() repoints it at a temp directory first, so no test here
-ever writes into the real ~/.token-shield/optimize/ review directory."""
+ever writes into the real ~/.token-shield/optimize/ review directory.
+Every case that reaches a real backup (cmd_apply's success path) also points
+guided_apply.MUTATIONS_LOG at a temp path first (see
+_point_journal_at/_restore_journal, mirrored from test_guided_apply.py), so
+nothing here ever touches the real machine's ~/.token-shield/mutations.jsonl."""
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
 
 import context_lint
+import guided_apply
 import memory_trim as mtrim
 import optimize
 
@@ -24,6 +30,16 @@ def _point_review_dir_at(td):
     os.makedirs(d, exist_ok=True)
     optimize.review_dir = lambda: d
     return real
+
+
+def _point_journal_at(td):
+    saved = guided_apply.MUTATIONS_LOG
+    guided_apply.MUTATIONS_LOG = os.path.join(td, "mutations.jsonl")
+    return saved
+
+
+def _restore_journal(saved):
+    guided_apply.MUTATIONS_LOG = saved
 
 
 def _many_bullets(n):
@@ -152,6 +168,7 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_memory_archive():
     # back the existing archive up first, then append (never overwrite).
     with tempfile.TemporaryDirectory() as td:
         real_review_dir = _point_review_dir_at(td)
+        saved_journal = _point_journal_at(td)
         try:
             path = os.path.join(td, "MEMORY.md")
             archive = os.path.join(td, "memory-archive.md")
@@ -168,6 +185,42 @@ def test_cmd_apply_backs_up_and_appends_to_an_existing_memory_archive():
                   any(f.startswith("memory-archive.md.bak") for f in os.listdir(td)))
         finally:
             optimize.review_dir = real_review_dir
+            _restore_journal(saved_journal)
+
+
+def test_cmd_apply_journals_creation_when_memory_archive_is_new():
+    # DEFECT 3 (T6.1 security review): memory-archive.md gets CREATED (never
+    # existed before) on its first write, not backed up. Before the fix,
+    # backup_if_exists returned None for a path that did not exist yet and
+    # wrote NOTHING to the journal for it, so this creation was invisible; a
+    # later one-command undo built on the journal would not know to delete
+    # memory-archive.md and would silently leave it behind.
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)  # DEFECT A fix: journal now records realpath
+        real_review_dir = _point_review_dir_at(td)
+        saved_journal = _point_journal_at(td)
+        try:
+            path = os.path.join(td, "MEMORY.md")
+            archive = os.path.join(td, "memory-archive.md")
+            check("sanity: no memory-archive.md exists yet", not os.path.exists(archive))
+            with open(path, "w") as f:
+                f.write(_many_bullets(260))
+            mtrim.cmd_propose(path)
+            rc = mtrim.cmd_apply()
+            check("cmd_apply succeeds", rc == 0)
+            check("memory-archive.md now exists", os.path.exists(archive))
+            with open(guided_apply.MUTATIONS_LOG) as f:
+                records = [json.loads(l) for l in f if l.strip()]
+            archive_records = [r for r in records if r["target"] == archive]
+            check("exactly one journal line names the new memory-archive.md",
+                  len(archive_records) == 1)
+            check("the memory-archive.md line is marked as a creation",
+                  archive_records[0].get("created") is True)
+            check("the creation line carries no backup path (nothing to back up)",
+                  archive_records[0]["backup_path"] is None)
+        finally:
+            optimize.review_dir = real_review_dir
+            _restore_journal(saved_journal)
 
 
 def test_propose_trim_handles_a_byte_limited_file_with_few_lines():
