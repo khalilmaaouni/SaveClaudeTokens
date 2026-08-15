@@ -631,3 +631,128 @@ def _companion_plausible(name, profile):
         return False
     v = _leaf(profile, "usage", "output_tokens_total")
     return v is not None and v >= 1_000_000
+
+
+def _proving_reason(open_experiments):
+    """One line naming what is proving right now, for the first entry in
+    list_open_experiments()'s own sort order (oldest first). A marker with
+    no readable baseline (see list_open_experiments's docstring on
+    "_unreadable") names the file path instead of guessing a label it does
+    not have, per docs/plan/2026-08-15-STATE-MODEL.md section 3."""
+    first = open_experiments[0] or {}
+    more = f" (and {len(open_experiments) - 1} more open)" if len(open_experiments) > 1 else ""
+    path = first.get("_unreadable")
+    if path:
+        return (f"a baseline at {path} could not be read, so an open trial "
+                 f"cannot be ruled out{more}")
+    label = first.get("label") or "(unlabeled)"
+    window = first.get("window_days")
+    window_txt = f", {window} day window" if window else ""
+    return f"proving {label}{window_txt}{more}"
+
+
+def _opportunity_reason(advise_result):
+    """The best card's own one line summary, per section 3. do_nothing is
+    the negation of best_card is None (advisor.py:751), so best is always
+    present when this is called with do_nothing False."""
+    best = advise_result.get("best") or {}
+    return best.get("why_selected") or best.get("title") or "a new recommendation is available"
+
+
+def _verified_reason(non_historical_rows):
+    """Names the label and its floor reduction for the first non historical
+    VERIFIED row (verified_by_label already sorts by label)."""
+    row = non_historical_rows[0]
+    delta = row.get("floor_reduction")
+    delta_txt = f"{delta:+,}" if isinstance(delta, (int, float)) and not isinstance(delta, bool) else "NO DATA"
+    return f"{row.get('label')}: floor reduction {delta_txt} tokens"
+
+
+def command_center_state(open_experiments, advise_result, verified, strategy_count, parse_health=None):
+    """The one top line state every surface renders, per
+    docs/plan/2026-08-15-STATE-MODEL.md sections 2, 2a, 3 and 4. Every
+    surface (token_shield.py, cli.py) calls this rather than recomputing the
+    state, so it is the single source of truth for what the user sees.
+
+    Pure: every argument is the already computed output of an existing
+    primitive (list_open_experiments(), advise(), verified_by_label(), and
+    the count of loaded strategies), so a test hands it fixtures and this
+    never reads the real machine's files.
+
+    Returns (state, reason). state is one of "PROVING", "OPPORTUNITY",
+    "VERIFIED", "HEALTHY", or the string "NO DATA". reason is one line of
+    plain text, never markup: this is layer 1 and test_architecture.py
+    refuses a computing layer that renders.
+
+    parse_health defaults to None, meaning unknown, which preserves
+    behaviour exactly as it was before this argument existed (memo section
+    2a). The string "UNRECOGNISED" means the transcript parsers stopped
+    recognising the format: every counter they feed reads as zero rather
+    than absent, so every trigger looks evaluable and the NO DATA
+    precondition below can never catch it. UNRECOGNISED fires NO DATA ahead
+    of every other rule, PROVING included, because a state computed from a
+    meter that cannot read its own input is not a state at all. Nothing in
+    this codebase passes anything but None yet: the format canary that would
+    supply UNRECOGNISED is a separate task, not built here.
+
+    advise_result may be None (token_shield.py sets it to None when the
+    advisor fails to load); that renders NO DATA rather than raising.
+
+    The NO DATA precondition's denominator is advise_result["evaluated"] (the
+    count of strategies that actually reached trigger evaluation, i.e. were
+    not skipped by a suppression) when that key is present; otherwise it is
+    the strategy_count argument, exactly as before this key existed, so
+    older callers and fixtures keep their existing behaviour. A denominator
+    of 0 means every strategy was suppressed, so nothing at all could be
+    evaluated; that also renders NO DATA, distinct in wording from the
+    original "insufficient triggers" case.
+    """
+    if parse_health == "UNRECOGNISED":
+        return ("NO DATA",
+                "the transcript format is not recognised by the parsers, so "
+                "every measurement below may read as zero rather than absent: "
+                "no state is trustworthy until the format is fixed")
+
+    if advise_result is None:
+        return ("NO DATA",
+                "the advisor could not be read, so no state can be computed. "
+                "Run token-shield profile to gather data.")
+
+    insufficient = advise_result.get("insufficient") or []
+    evaluated = advise_result.get("evaluated")
+    denominator = evaluated if evaluated is not None else strategy_count
+    if denominator and len(insufficient) == denominator:
+        return ("NO DATA",
+                f"NO DATA on {len(insufficient)} strategy trigger(s): "
+                + ", ".join(insufficient) + ". Run token-shield profile to gather data.")
+
+    if open_experiments:
+        return ("PROVING", _proving_reason(open_experiments))
+
+    # The all suppressed case sits BELOW PROVING, and the two NO DATA rules
+    # above sit on top of it, deliberately. They are not the same kind of
+    # thing. An unrecognised format and an unreadable advisor are MEASUREMENT
+    # failures: the numbers a running trial would report cannot be trusted, so
+    # hiding PROVING is the honest move. A denominator of zero is a
+    # CONFIGURATION choice: the user muted every strategy, which says nothing
+    # about whether the meter works. An open experiment is read from a file on
+    # disk rather than computed from the profile, so it is still a fact, and
+    # burying a running trial under NO DATA would lose real information and
+    # cost the user the stability warning that PROVING exists to give.
+    # Note the two are mutually exclusive above: `denominator and ...` is False
+    # when the denominator is zero, so the insufficient triggers rule cannot
+    # fire on an empty list here.
+    if denominator == 0:
+        return ("NO DATA",
+                "every strategy is suppressed, so nothing could be evaluated "
+                "right now. Run token-shield profile to gather data.")
+
+    if not advise_result.get("do_nothing"):
+        return ("OPPORTUNITY", _opportunity_reason(advise_result))
+
+    non_historical = [r for r in (verified or []) if not r.get("historical")]
+    if non_historical:
+        return ("VERIFIED", _verified_reason(non_historical))
+
+    return ("HEALTHY", advise_result.get("message")
+            or "Nothing crossed a trigger threshold, so this profile looks healthy right now.")
