@@ -4,7 +4,12 @@ wave R producer (optimize.py's CLAUDE.md diet, plugin_prune.py, memory_trim.py)
 runs through. Every case here points ex.EXP_DIR/ex.LEDGER at a temp dir and
 stubs ex.cmd_start, so nothing here ever touches the real machine's
 ~/.claude/token-shield/ (which carries a genuinely open experiment on this
-machine, claude-md-diet-v2, per wave R's HARD CONSTRAINT 2)."""
+machine, claude-md-diet-v2, per wave R's HARD CONSTRAINT 2). Every case that
+touches backup_file/backup_if_exists also points ga.MUTATIONS_LOG (T6.1's
+append-only mutation journal) at a temp path, so nothing here ever touches
+the real machine's ~/.token-shield/mutations.jsonl either."""
+import contextlib
+import io
 import json
 import os
 import sys
@@ -29,6 +34,16 @@ def _point_exp_at(td):
 
 def _restore_exp(saved):
     ex.EXP_DIR, ex.LEDGER = saved
+
+
+def _point_journal_at(td):
+    saved = ga.MUTATIONS_LOG
+    ga.MUTATIONS_LOG = os.path.join(td, "mutations.jsonl")
+    return saved
+
+
+def _restore_journal(saved):
+    ga.MUTATIONS_LOG = saved
 
 
 def _seed_open_baseline(label="open-one", end=100.0):
@@ -184,18 +199,185 @@ def test_refuse_if_experiment_open_fails_closed_on_unreadable_baseline():
 
 def test_backup_file_matches_optimize_cmd_apply_pattern():
     with tempfile.TemporaryDirectory() as td:
-        src = os.path.join(td, "CLAUDE.md")
-        with open(src, "w") as f:
-            f.write("original content\n")
-        backup = ga.backup_file(src)
-        check("backup path follows the '<path>.bak-<stamp>' naming convention",
-              backup.startswith(src + ".bak-"))
-        with open(backup) as f:
-            backed_up = f.read()
-        check("the backup's content equals the original", backed_up == "original content\n")
-        with open(src) as f:
-            check("backup_file does not modify the source itself",
-                  f.read() == "original content\n")
+        saved = _point_journal_at(td)
+        try:
+            src = os.path.join(td, "CLAUDE.md")
+            with open(src, "w") as f:
+                f.write("original content\n")
+            backup = ga.backup_file(src)
+            check("backup path follows the '<path>.bak-<stamp>' naming convention",
+                  backup.startswith(src + ".bak-"))
+            with open(backup) as f:
+                backed_up = f.read()
+            check("the backup's content equals the original", backed_up == "original content\n")
+            with open(src) as f:
+                check("backup_file does not modify the source itself",
+                      f.read() == "original content\n")
+        finally:
+            _restore_journal(saved)
+
+
+def test_journal_line_carries_every_required_field():
+    # T6.1: timestamp, target path, pre hash, backup path, producer.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            target = os.path.join(td, "MEMORY.md")
+            with open(target, "w") as f:
+                f.write("content\n")
+            backup = ga.backup_file(target)
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = f.readlines()
+            check("exactly one line was appended for one mutation", len(lines) == 1)
+            record = json.loads(lines[0])
+            for field in ("timestamp", "target", "pre_hash", "backup_path", "producer"):
+                check(f"journal record carries {field}", field in record)
+            check("target names the mutated file", record["target"] == target)
+            check("backup_path matches backup_file's own return value",
+                  record["backup_path"] == backup)
+            check("pre_hash is the hash of the content before the mutation",
+                  record["pre_hash"] == ga.sha256_text("content\n"))
+            check("producer defaults to 'unknown' outside any apply() call",
+                  record["producer"] == "unknown")
+        finally:
+            _restore_journal(saved)
+
+
+def test_second_mutation_appends_never_overwrites():
+    # T6.1/done-check: a second mutation of the SAME target must add a
+    # second line and leave the first line, including its backup path and
+    # pre hash, exactly as it was, rather than the .sha256-file pattern of
+    # one record per target that a later mutation overwrites.
+    # backup_file's own stamp (time.strftime("%Y%m%d-%H%M%S")) only has
+    # one-second resolution, so two calls inside the same wall-clock second
+    # collide on the same backup filename; that is a pre-existing property
+    # of backup_file, unrelated to the journal, and out of this task's scope
+    # to change. Faking the stamp here removes that timing flakiness from
+    # THIS test without touching backup_file itself.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        real_strftime = ga.time.strftime
+        stamps = iter(["20260101-000000", "20260101-000001"])
+
+        def fake_strftime(fmt, *args):
+            if fmt == "%Y%m%d-%H%M%S" and not args:
+                return next(stamps)
+            return real_strftime(fmt, *args)
+
+        ga.time.strftime = fake_strftime
+        try:
+            target = os.path.join(td, "CLAUDE.md")
+            with open(target, "w") as f:
+                f.write("version one\n")
+            backup1 = ga.backup_file(target)
+            with open(target, "w") as f:
+                f.write("version two\n")
+            backup2 = ga.backup_file(target)
+            check("the two backups are different files", backup1 != backup2)
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = [json.loads(l) for l in f if l.strip()]
+            check("two mutations of the same target produce two journal lines",
+                  len(lines) == 2)
+            check("both lines name the same target",
+                  lines[0]["target"] == target and lines[1]["target"] == target)
+            check("the first line still records the first backup path, untouched",
+                  lines[0]["backup_path"] == backup1)
+            check("the second line records the second backup path, not the first",
+                  lines[1]["backup_path"] == backup2)
+            check("the first line's pre_hash is the hash of version one",
+                  lines[0]["pre_hash"] == ga.sha256_text("version one\n"))
+            check("the second line's pre_hash is the hash of version two",
+                  lines[1]["pre_hash"] == ga.sha256_text("version two\n"))
+        finally:
+            ga.time.strftime = real_strftime
+            _restore_journal(saved)
+
+
+def test_apply_journals_the_guided_apply_label_as_producer():
+    with tempfile.TemporaryDirectory() as td:
+        saved_exp = _point_exp_at(td)
+        saved_journal = _point_journal_at(td)
+        real_cmd_start = ex.cmd_start
+        ex.cmd_start = lambda label, root, days, now_ts, treats, metric=None: 0
+        try:
+            target = os.path.join(td, "CLAUDE.md")
+            with open(target, "w") as f:
+                f.write("before\n")
+
+            def mutate():
+                ga.backup_file(target)
+                with open(target, "w") as f:
+                    f.write("after\n")
+                return 0
+
+            rc, msg = ga.apply("memory-trim-guided-20260101-000000", None,
+                               mutate, lambda: (True, "ok"))
+            check("apply succeeded", rc == 0)
+            with open(ga.MUTATIONS_LOG) as f:
+                record = json.loads(f.readline())
+            check("the journal record's producer is the guided-apply label",
+                  record["producer"] == "memory-trim-guided-20260101-000000")
+            check("producer resets to 'unknown' after apply() returns",
+                  ga._current_producer == "unknown")
+        finally:
+            ex.cmd_start = real_cmd_start
+            _restore_exp(saved_exp)
+            _restore_journal(saved_journal)
+
+
+def test_corrupt_existing_journal_does_not_lose_new_record_or_crash():
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            with open(ga.MUTATIONS_LOG, "w") as f:
+                f.write("not valid json at all\n{also not valid\n")
+            target = os.path.join(td, "CLAUDE.md")
+            with open(target, "w") as f:
+                f.write("content\n")
+            backup = ga.backup_file(target)  # must not raise
+            check("backup still succeeded despite a corrupt existing journal",
+                  os.path.exists(backup))
+            with open(ga.MUTATIONS_LOG) as f:
+                lines = f.readlines()
+            check("the corrupt content is still there, byte for byte",
+                  lines[0] == "not valid json at all\n" and lines[1] == "{also not valid\n")
+            check("the new record was appended after the corrupt content",
+                  len(lines) == 3)
+            new_record = json.loads(lines[-1])
+            check("the new record parses as valid JSON despite the corrupt prefix",
+                  new_record["target"] == target)
+        finally:
+            _restore_journal(saved)
+
+
+def test_journal_write_failure_does_not_block_the_apply_but_is_reported():
+    # The safer-thing choice this task asks for: apply and report, never
+    # fail the apply, because by the time _append_mutation runs the backup
+    # already exists and the caller is about to overwrite the real target
+    # next. A raised exception here would abort a legitimate change over a
+    # logging side channel, so the failure is caught and printed instead.
+    with tempfile.TemporaryDirectory() as td:
+        saved = _point_journal_at(td)
+        try:
+            blocker = os.path.join(td, "blocker")
+            with open(blocker, "w") as f:
+                f.write("x")
+            ga.MUTATIONS_LOG = os.path.join(blocker, "mutations.jsonl")
+            target = os.path.join(td, "CLAUDE.md")
+            with open(target, "w") as f:
+                f.write("content\n")
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                backup = ga.backup_file(target)
+            check("the backup still happened even though the journal write failed",
+                  os.path.exists(backup))
+            with open(backup) as f:
+                check("the backup content is intact", f.read() == "content\n")
+            check("the failure was reported to stderr, not silently skipped",
+                  "WARNING" in captured.getvalue() and
+                  "mutation journal" in captured.getvalue())
+        finally:
+            _restore_journal(saved)
 
 
 if __name__ == "__main__":

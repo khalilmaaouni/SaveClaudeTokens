@@ -26,11 +26,31 @@ propose/--apply already uses: a founder or agent only calls `apply()` here
 after the yes was already given in chat.
 """
 import hashlib
+import json
 import os
+import sys
 import time
 
 import experiment as ex
 import config as cfg  # ROOT, EXPERIMENT_DAYS: read from the foundation, never re-declared
+
+# T6.1: the append-only mutation journal. One line per applied mutation
+# (timestamp, target path, pre hash, backup path, producer), written by
+# backup_file/backup_if_exists below, which are the one shared point every
+# producer's mutate_fn already calls to back a target up before overwriting
+# it. A module-level path, same seam as ex.EXP_DIR/ex.LEDGER (see
+# test_guided_apply.py's _point_exp_at), so a test can redirect it without
+# ever touching the founder's real ~/.token-shield/mutations.jsonl.
+MUTATIONS_LOG = os.path.expanduser("~/.token-shield/mutations.jsonl")
+
+# Which guided-apply run is currently mutating something, set by apply()
+# around its call to mutate_fn(). backup_file() reads this to fill the
+# journal's "producer" field. The apply() label already names its producer
+# module (e.g. "memory-trim-guided-<stamp>", "plugin-prune-<id>-guided-
+# <stamp>"), so reusing it needs no new argument threaded through
+# optimize.py/memory_trim.py/plugin_prune.py, none of which this task may
+# edit. "unknown" when backup_file runs outside any apply() call.
+_current_producer = "unknown"
 
 
 def refuse_if_experiment_open():
@@ -85,16 +105,58 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _append_mutation(target_path, pre_hash, backup_path, producer):
+    """Appends one JSON line to MUTATIONS_LOG. Append-only: opens in 'a' mode
+    and never reads, seeks, rewrites, or truncates the file, so a second
+    mutation of the same target adds a second line and leaves every earlier
+    line, corrupt or not, exactly as it was; nothing here ever parses what is
+    already in the file, which is also why a corrupt or unreadable existing
+    journal cannot lose or block the new record.
+
+    A journal-write failure (missing/unwritable ~/.token-shield, full disk,
+    permissions) is caught and reported loudly on stderr, never raised and
+    never silent: the backup this line would describe has already been
+    written by the time this runs, and the caller is about to overwrite the
+    real target next, so raising here would abort a legitimate apply over a
+    logging side channel. Losing one history line is recoverable (the
+    per-proposal .sha256 file and the backup path printed to the user still
+    exist); losing or blocking the founder's actual change would not be."""
+    record = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "target": target_path,
+        "pre_hash": pre_hash,
+        "backup_path": backup_path,
+        "producer": producer or "unknown",
+    }
+    try:
+        journal_dir = os.path.dirname(MUTATIONS_LOG)
+        if journal_dir:
+            os.makedirs(journal_dir, exist_ok=True)
+        with open(MUTATIONS_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError as e:
+        print(f"WARNING: mutation journal not written to {MUTATIONS_LOG} ({e}). "
+              f"The mutation of {target_path} itself still applied; only this "
+              f"history line is missing. Backup remains at {backup_path}.",
+              file=sys.stderr)
+
+
 def backup_file(path):
     """Mirrors optimize.cmd_apply's own backup, lines 195-199 of optimize.py:
     time.strftime stamp, '<path>.bak-<stamp>', full read then full write.
-    Returns the backup path."""
+    Returns the backup path.
+    Also appends one line to the mutation journal (see _append_mutation):
+    this is the one place every producer's mutate_fn already calls to back a
+    target up, so it is also the one place that already has the pre-mutation
+    content in hand to hash, with no second hashing helper or second backup
+    mechanism needed."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = f"{path}.bak-{stamp}"
     with open(path) as f:
         original = f.read()
     with open(backup, "w") as f:
         f.write(original)
+    _append_mutation(path, sha256_text(original), backup, _current_producer)
     return backup
 
 
@@ -129,7 +191,12 @@ def apply(label, treats, mutate_fn, verify_fn):
     if refusal:
         return 2, refusal
 
-    mutate_rc = mutate_fn()
+    global _current_producer
+    _current_producer = label
+    try:
+        mutate_rc = mutate_fn()
+    finally:
+        _current_producer = "unknown"
     if mutate_rc:
         return mutate_rc, ("nothing was applied, so no verification ran and no "
                            "experiment was opened. See the message above for why.")
