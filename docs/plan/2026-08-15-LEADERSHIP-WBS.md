@@ -42,6 +42,44 @@ quietly repairs itself teaches nobody anything.
    reference opened 2026-08-15 for them. What is missing is a row per event in
    `docs/CLAIMS.md`, which is bookkeeping measured in minutes, not research.
 
+## FOUNDER DECISIONS TAKEN 2026-08-15 late
+
+Three, all through question windows, all after the corrections above were put to
+him with their evidence. Each amends this plan and each is binding.
+
+**FD1. The format canary is built THIS WEEK, beside the state function.** New
+task T2.5 below. The reasoning he chose: the four state screen must not ship a
+week ahead of the alarm that stops it saying HEALTHY on a dead meter. Rejected:
+grouping it with next week's evidence work, and documenting the risk instead of
+closing it.
+
+**FD2. The lifecycle sensor narrows from six events to the four the architecture
+argued for**: ConfigChange, PreCompact, PostCompact, SubagentStop. SessionStart
+and SubagentStart are OUT. T5.1's row is amended below and decision D4 is now
+CLOSED, because it was asking for consent to two events no design ever
+justified. Rejected: widening the architecture to six deliberately, which is a
+real position that would have to be argued rather than inherited. Flip
+condition: a named use for either dropped event.
+
+**FD3. A real status line payload is captured BEFORE T3.1 starts.** New task
+T3.0 below. Rejected: building against the documented shape and adapting, and
+reordering E3 behind E1. The reasoning: typing a field name from recollection is
+a failure class this project has already recorded twice, and an hour spent now
+is the cheapest moment to avoid a third.
+
+### The two new tasks these decisions create
+
+| ID | Task | Owner | Model | Depends on | Files owned | Files forbidden | Deliverable | Done-check |
+|---|---|---|---|---|---|---|---|---|
+| T2.5 | Format canary (layer 0) in measure_tokens.py: over real transcripts, count assistant messages carrying a `message` object and count how many yield at least one recognised usage key. Zero transcripts is NO DATA at exit 0; transcripts present with zero recognised keys is FORMAT UNRECOGNISED at a nonzero exit. Its ground truth is a file we do not write, which is why it sees what reconcile.py and the bench fixtures structurally cannot. Surfaced by doctor.py beside its existing NEEDS REVIEW line, and passed into `command_center_state` as `parse_health` per STATE-MODEL section 2a | A3 | sonnet | T2.1 merged (the `parse_health` seam must exist first) | scripts/measure_tokens.py, scripts/test_measure_tokens.py, scripts/doctor.py, scripts/test_doctor.py | scripts/metrics.py, scripts/reconcile.py, bench/ | PR | `cd /Users/khalil.maaouni/SaveClaudeTokens/scripts && python3 test_measure_tokens.py` prints ok test_renamed_usage_field_is_unrecognised_not_zero and ok test_no_transcripts_is_no_data_exit_zero, exits 0 |
+| T3.0 | Capture one real statusLine payload: point a throwaway script at the statusLine setting, record verbatim what Claude Code actually sends on stdin, commit it as a fixture with its capture date, and add one row per confirmed field to docs/CLAIMS.md with its source and date. If a documented field does not arrive on this machine, the fixture records its ABSENCE explicitly rather than omitting it | A1 | sonnet | none | NEW: scripts/fixtures/statusline-payload-2026-08-16.json, docs/CLAIMS.md | scripts/statusline.py, .claude/settings.json (the founder pastes, nothing is written for him) | fixture plus CLAIMS rows | `python3 -c "import json;d=json.load(open('/Users/khalil.maaouni/SaveClaudeTokens/scripts/fixtures/statusline-payload-2026-08-16.json'));print(sorted(d))"` prints the captured top level keys, and `grep -c statusLine /Users/khalil.maaouni/SaveClaudeTokens/docs/CLAIMS.md` prints 1 or more |
+
+T5.1's event list is amended by FD2 to exactly four: ConfigChange, PreCompact,
+PostCompact, SubagentStop. Its done-check is unchanged. D4 in section 11 is
+CLOSED, not defaulted.
+
+The task count moves from 30 to 32, and Window 2 from 11 tasks to 13.
+
 Written 2026-08-15 evening. Governs 2026-08-15 through 2026-08-28.
 Compresses the founder's 45 day plan (TOKEN_SHIELD_CLAUDE_LEADERSHIP_WBS.md)
 into 14 days of parallel agent work. The release gate stays live the whole
