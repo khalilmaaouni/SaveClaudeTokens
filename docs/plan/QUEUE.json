@@ -15,12 +15,12 @@
     },
     {
       "id": "T1.2",
-      "state": "in_flight",
+      "state": "done",
       "stage": "human-decision",
       "title": "Dashboard cross links: token_shield.py links the monthly report and fleet page when present, NO DATA naming the producing command when absent",
       "wbs": "E1",
       "done_check": "cd scripts && python3 test_tools.py prints ok test_dashboard_absent_fleet_page_is_no_data, exits 0",
-      "note": "render_surfaces green (70 passed) but NOT wired into main(): that edit was declined 2026-08-19. Needs founder approval to finish."
+      "closed": "2026-08-19 07:50; CORRECTION: previously recorded in_flight on a false claim that main() was unwired. Verified end to end on a real render: the section appears, NO DATA names the exact commands, a present file becomes a link."
     },
     {
       "id": "T1.3",
@@ -106,11 +106,12 @@
     },
     {
       "id": "T2.5",
-      "state": "in_flight",
+      "state": "done",
       "stage": "evidence-integrity",
       "title": "Format canary separating NO DATA from a dead parser",
       "wbs": "E2",
-      "note": "PR 93 already open, awaiting founder merge"
+      "note": "PR 93 already open, awaiting founder merge",
+      "closed": "2026-08-19; PR 93 merged"
     },
     {
       "id": "T5.1",
@@ -171,21 +172,23 @@
     },
     {
       "id": "T2.6",
-      "state": "queued",
+      "state": "done",
       "stage": "human-decision",
       "title": "Give the VERIFIED state its own colour, distinct from all five confidence label colours (CRITICAL and MAJOR from T2.4)",
       "wbs": "E2",
       "from_review": "docs/plan/reviews/2026-08-20-state-label-review.md",
-      "done_check": "no state colour equals any label colour; T2.7's cross-product assertion passes"
+      "done_check": "no state colour equals any label colour; T2.7's cross-product assertion passes",
+      "closed": "2026-08-19; cross-product assertion calibrated by reinjecting the CRITICAL collision (red), 71 passed after the fix"
     },
     {
       "id": "T2.7",
-      "state": "queued",
+      "state": "done",
       "stage": "risk",
       "title": "Replace the single-pair colour assertion with a cross-product assertion over every state colour against every label colour, calibrated red by reinjecting today's collision",
       "wbs": "E2",
       "from_review": "docs/plan/reviews/2026-08-20-state-label-review.md",
-      "done_check": "cd scripts && python3 test_tools.py passes, and reinjecting the VERIFIED-state colour makes it fail"
+      "done_check": "cd scripts && python3 test_tools.py passes, and reinjecting the VERIFIED-state colour makes it fail",
+      "closed": "2026-08-19; cross-product assertion calibrated by reinjecting the CRITICAL collision (red), 71 passed after the fix"
     }
   ]
 }
