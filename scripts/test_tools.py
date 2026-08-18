@@ -1610,6 +1610,101 @@ def test_verified_state_is_visually_and_textually_distinct_from_verified_label()
                                                               ver_pill_color.group(1))
 
 
+def test_cli_fleet_dashboard_routes():
+    # T1.1 is WIRING ONLY. `cli.py fleet dashboard` must reach
+    # fleet_dashboard.py, and every other fleet verb must reach fleet.py with
+    # the user's own arguments passed through untouched.
+    #
+    # subprocess.run is CAPTURED rather than executed on purpose: running it
+    # for real needs an org store on disk and would end up testing fleet.py
+    # instead of the routing, which is the only thing this task adds. cli.py
+    # does `import subprocess` inside each branch, so patching the real module
+    # object is what reaches it; patching a `cli.subprocess` attribute would
+    # not, because no such attribute exists until the branch runs.
+    import cli
+
+    calls = []
+
+    class _Result(object):
+        returncode = 0
+
+    real_run = subprocess.run
+
+    def _capture(cmd, *a, **kw):
+        calls.append(list(cmd))
+        return _Result()
+
+    subprocess.run = _capture
+    try:
+        rc_dash = cli.main(["fleet", "dashboard", "--org", "acme", "--out", "x.html"])
+        rc_join = cli.main(["fleet", "join", "--org", "acme"])
+        rc_bare = cli.main(["fleet"])
+    finally:
+        subprocess.run = real_run
+
+    assert rc_dash == 0, rc_dash
+    assert len(calls) >= 2, calls
+
+    # dashboard goes to the dashboard renderer, arguments intact
+    assert os.path.basename(calls[0][1]) == "fleet_dashboard.py", calls[0]
+    assert calls[0][2:] == ["--org", "acme", "--out", "x.html"], calls[0]
+
+    # every other verb goes to fleet.py, verb included, arguments intact.
+    # `record` is deliberately NOT enumerated here: fleet.py ships build,
+    # push, init, join and leave, and inventing a sixth name in the router
+    # would create a verb no script implements.
+    assert rc_join == 0, rc_join
+    assert os.path.basename(calls[1][1]) == "fleet.py", calls[1]
+    assert calls[1][2:] == ["join", "--org", "acme"], calls[1]
+
+    # a bare `fleet` must not silently render or push anything. It prints the
+    # usage and returns 2 without reaching either script.
+    assert rc_bare == 2, rc_bare
+    assert len(calls) == 2, calls
+
+
+def test_dashboard_absent_fleet_page_is_no_data():
+    # T1.2. The dashboard is the one front door, so it must either LINK the
+    # other surfaces or say NO DATA naming the exact command that produces
+    # them. Silence is the failure this test exists to prevent: a user who
+    # cannot see that an org page exists will never run the command for it.
+    #
+    # Both paths are derived from the dashboard's own output directory, and
+    # the command printed on the NO DATA line writes to exactly the path the
+    # renderer looks at, so following the instruction makes the link appear.
+    d = tempfile.mkdtemp()
+
+    absent = shield.render_surfaces(d)
+    assert "NO DATA" in absent, absent
+    # the org page, named with the command that creates it where we look
+    assert "fleet.html" in absent, absent
+    assert "cli.py fleet dashboard" in absent, absent
+    assert "--out" in absent, absent
+    # the monthly report, same contract
+    assert "monthly-report.md" in absent, absent
+    assert "cli.py report" in absent, absent
+
+    # Present files become real links rather than NO DATA lines.
+    with open(os.path.join(d, "fleet.html"), "w") as f:
+        f.write("<p>org</p>")
+    with open(os.path.join(d, "monthly-report.md"), "w") as f:
+        f.write("# month")
+    present = shield.render_surfaces(d)
+    assert 'href="fleet.html"' in present, present
+    assert 'href="monthly-report.md"' in present, present
+    # A file that exists must NOT still be advertised as missing.
+    assert "NO DATA" not in present, present
+
+    # One present and one absent is the common real case: the present one
+    # links, the absent one keeps its instruction. Neither may suppress the
+    # other.
+    os.remove(os.path.join(d, "fleet.html"))
+    mixed = shield.render_surfaces(d)
+    assert 'href="monthly-report.md"' in mixed, mixed
+    assert "NO DATA" in mixed, mixed
+    assert "cli.py fleet dashboard" in mixed, mixed
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

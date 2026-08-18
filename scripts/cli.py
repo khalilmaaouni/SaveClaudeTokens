@@ -18,6 +18,9 @@ ADVANCED
                                       native caching saving (not money anyone
                                       saved: the command says so first)
   python3 cli.py optimize            propose a safe, reversible CLAUDE.md diet
+  python3 cli.py fleet dashboard      render the org page (fleet_dashboard.py)
+  python3 cli.py fleet init|join|build|push|leave
+                                      org membership and records (fleet.py)
   python3 cli.py prune propose <id> [<id> ...] --bundle-id <bundle-id>
                                       propose a named bundle of plugins to
                                       disable (plugin_prune.py)
@@ -406,6 +409,26 @@ def main(argv):
         here = os.path.dirname(os.path.abspath(__file__))
         return subprocess.run(
             [sys.executable, os.path.join(here, "doctor.py")] + argv[1:]).returncode
+    if cmd == "fleet":
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        rest = argv[1:]
+        if not rest:
+            # A bare `fleet` must never guess a verb. Rendering an org page or
+            # pushing a record are both side effects nobody asked for.
+            print("usage: cli.py fleet dashboard --store-dir <dir> --org <org> --out <file>")
+            print("       cli.py fleet init|join|build|push|leave [...]")
+            print("       (dashboard renders the org page; every other verb is fleet.py's)")
+            return 2
+        # `dashboard` is the only verb belonging to the renderer. Every other
+        # verb is passed through to fleet.py VERBATIM rather than enumerated,
+        # so a subcommand added to fleet.py needs no change here and this
+        # router can never drift into offering a verb no script implements.
+        to_dashboard = rest[0] == "dashboard"
+        script = "fleet_dashboard.py" if to_dashboard else "fleet.py"
+        passthrough = rest[1:] if to_dashboard else rest
+        return subprocess.run(
+            [sys.executable, os.path.join(here, script)] + passthrough).returncode
     if cmd == "uninstall":
         return uninstall(argv[1:])
     if cmd == "experiment":

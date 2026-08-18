@@ -826,6 +826,42 @@ SHIELD_SVG = (
 )
 
 
+SURFACES = (
+    ("monthly-report.md", "Monthly report",
+     "python3 scripts/cli.py report --out {path}"),
+    ("fleet.html", "Organization page",
+     "python3 scripts/cli.py fleet dashboard "
+     "--store-dir <store> --org <org> --out {path}"),
+)
+
+
+def render_surfaces(out_dir):
+    """Link every other surface, or say NO DATA naming the command for it.
+
+    The dashboard is the one front door, so a surface it does not mention is
+    a surface the user never learns exists. Silence is the failure this
+    prevents; an absent file is NO DATA with an instruction, never an omitted
+    row.
+
+    Both paths are derived from the dashboard's OWN output directory rather
+    than from an invented convention, and the command printed beside a
+    missing file writes to exactly the path this function looks at, so
+    following the instruction makes the link appear on the next render.
+    """
+    rows = []
+    for fname, label, cmd in SURFACES:
+        path = os.path.join(out_dir, fname)
+        if os.path.exists(path):
+            rows.append('<li><a href="%s">%s</a></li>'
+                        % (fmt.esc(fname), fmt.esc(label)))
+        else:
+            rows.append('<li>%s <span class="nodata">NO DATA: not on disk. '
+                        'Run <code>%s</code></span></li>'
+                        % (fmt.esc(label), fmt.esc(cmd.format(path=path))))
+    return ('<h2>Other surfaces</h2>\n<ul class="surfaces">'
+            + "".join(rows) + "</ul>")
+
+
 def stat(k, v, note, is_nodata=False):
     cls = ' class="v nodata"' if is_nodata else ' class="v"'
     return (f'<div class="stat"><p class="k">{k}</p>'
@@ -833,6 +869,7 @@ def stat(k, v, note, is_nodata=False):
 
 
 def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verified=None,
+           surfaces_dir=None,
            profile=None, advise_result=None, suppressed_n=0, companions_data=None,
            experiment_rows=None, plugin_cache_root=None, companion_suppressed_n=0,
            waterfall_core_label=met.WATERFALL_CORE_LABEL,
@@ -918,6 +955,8 @@ def render(mt, sm, sessions, days, stamp, include_sessions, usd_res=None, verifi
     parts.append(render_experiment_history(experiment_rows or []))
     wf = met.build_waterfall(experiment_rows or [], waterfall_core_label, waterfall_companion_label)
     parts.append(render_waterfall(wf, waterfall_core_label, waterfall_companion_label))
+    if surfaces_dir:
+        parts.append(render_surfaces(surfaces_dir))
 
     # WINS AND ISSUES at a glance, Brave-style reassurance.
     wins = []
@@ -1133,6 +1172,10 @@ def main():
     companions_data = cfg.load_companions(cfg.COMPANIONS_PATH)
 
     body = render(mt, sm, sessions, a.days, stamp, a.include_sessions, usd_res, verified,
+                  # the other surfaces sit beside the dashboard's own output file,
+                  # which is also where the NO DATA lines tell the user to write them
+                  surfaces_dir=os.path.dirname(
+                      os.path.abspath(os.path.expanduser(a.out))) or ".",
                   profile=profile, advise_result=advise_result, suppressed_n=suppressed_n,
                   companions_data=companions_data, experiment_rows=experiment_rows,
                   companion_suppressed_n=companion_suppressed_n,

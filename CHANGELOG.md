@@ -39,6 +39,14 @@ working: no evidence, no claim.
 
 ## Unreleased
 
+- Cloud Cost Shield (docs/CLOUD-COST-SHIELD.md, scripts/github_cost_guard.py,
+  new SKILL.md section): the 2026-08-16 gross-versus-billed lesson. A
+  provider's metered-usage chart plots list-price value, not money owed; the
+  reading order is billing Overview's next-payment-due card, payment history,
+  a day's gross/billed/discount tooltip, then budgets. The guard script
+  audits that every repository keeps Actions disabled and prints the month's
+  billed-versus-gross figure, NO-DATA semantics throughout.
+
 - Fact review interval lowered from 90 days to 30 (founder decision): a
   documented default, a cache rule or a price can change in any given week,
   and 30 days matches the monthly report rhythm, so a fact that has gone
