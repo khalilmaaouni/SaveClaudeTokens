@@ -1705,6 +1705,58 @@ def test_dashboard_absent_fleet_page_is_no_data():
     assert "cli.py fleet dashboard" in mixed, mixed
 
 
+def test_no_state_colour_equals_any_confidence_label_colour():
+    # T2.7, closing the hole T2.4 found.
+    #
+    # The assertion this replaces compared ONE pair: the VERIFIED state colour
+    # against the VERIFIED pill colour. Both were true and it passed, while
+    # three other collisions stood untouched:
+    #
+    #   --good   HEALTHY state      and VERIFIED label
+    #   --accent VERIFIED state     and NATIVE label
+    #   --warn   OPPORTUNITY state  and ESTIMATED label
+    #
+    # A guard narrow enough to be always-green reads as "the colours are kept
+    # apart" while proving only that two specific swatches differ. This one is
+    # a cross product, so it fails closed as either palette grows.
+    #
+    # The states answer "what do I do now"; the confidence labels answer "how
+    # much should I trust this number". They are different axes and must never
+    # be able to be read as each other. The worst pairing is VERIFIED state
+    # against the NATIVE label, because NATIVE exists solely so Anthropic's
+    # caching is attributed and never claimed as a Token Shield saving.
+    state_vars = dict(re.findall(
+        r'\.cc-band\.cc-([a-z]+) \.cc-state\{color:var\(--([a-z-]+)\)', shield.CSS))
+    label_vars = dict(re.findall(
+        r'\.cpill\.([a-z]+)\{color:var\(--([a-z-]+)\)', shield.CSS))
+    assert len(state_vars) >= 4, state_vars
+    assert len(label_vars) >= 3, label_vars
+
+    # Every hex a variable is ever assigned, across the base block and all
+    # theme overrides. Comparing resolved values as well as names catches the
+    # "fix" that points a fresh variable at the same colour.
+    def hexes(var):
+        found = set(re.findall(r'--%s:\s*(#[0-9a-fA-F]{3,8})' % var, shield.CSS))
+        assert found, "no colour value found for --%s" % var
+        return found
+
+    collisions = []
+    for state, svar in state_vars.items():
+        for label, lvar in label_vars.items():
+            if svar == lvar:
+                collisions.append("%s state and %s label both use --%s"
+                                  % (state.upper(), label, svar))
+                continue
+            shared = hexes(svar) & hexes(lvar)
+            if shared:
+                collisions.append(
+                    "%s state (--%s) and %s label (--%s) both resolve to %s"
+                    % (state.upper(), svar, label, lvar, ", ".join(sorted(shared))))
+    assert not collisions, (
+        "state colours must never equal a confidence label colour:\n  "
+        + "\n  ".join(collisions))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
