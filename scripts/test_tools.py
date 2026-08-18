@@ -1663,6 +1663,48 @@ def test_cli_fleet_dashboard_routes():
     assert len(calls) == 2, calls
 
 
+def test_dashboard_absent_fleet_page_is_no_data():
+    # T1.2. The dashboard is the one front door, so it must either LINK the
+    # other surfaces or say NO DATA naming the exact command that produces
+    # them. Silence is the failure this test exists to prevent: a user who
+    # cannot see that an org page exists will never run the command for it.
+    #
+    # Both paths are derived from the dashboard's own output directory, and
+    # the command printed on the NO DATA line writes to exactly the path the
+    # renderer looks at, so following the instruction makes the link appear.
+    d = tempfile.mkdtemp()
+
+    absent = shield.render_surfaces(d)
+    assert "NO DATA" in absent, absent
+    # the org page, named with the command that creates it where we look
+    assert "fleet.html" in absent, absent
+    assert "cli.py fleet dashboard" in absent, absent
+    assert "--out" in absent, absent
+    # the monthly report, same contract
+    assert "monthly-report.md" in absent, absent
+    assert "cli.py report" in absent, absent
+
+    # Present files become real links rather than NO DATA lines.
+    with open(os.path.join(d, "fleet.html"), "w") as f:
+        f.write("<p>org</p>")
+    with open(os.path.join(d, "monthly-report.md"), "w") as f:
+        f.write("# month")
+    present = shield.render_surfaces(d)
+    assert 'href="fleet.html"' in present, present
+    assert 'href="monthly-report.md"' in present, present
+    # A file that exists must NOT still be advertised as missing.
+    assert "NO DATA" not in present, present
+
+    # One present and one absent is the common real case: the present one
+    # links, the absent one keeps its instruction. Neither may suppress the
+    # other.
+    os.remove(os.path.join(d, "fleet.html"))
+    mixed = shield.render_surfaces(d)
+    assert 'href="monthly-report.md"' in mixed, mixed
+    assert "NO DATA" in mixed, mixed
+    assert "cli.py fleet dashboard" in mixed, mixed
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
