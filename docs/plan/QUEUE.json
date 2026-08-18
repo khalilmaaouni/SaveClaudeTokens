@@ -19,7 +19,8 @@
       "stage": "human-decision",
       "title": "Dashboard cross links: token_shield.py links the monthly report and fleet page when present, NO DATA naming the producing command when absent",
       "wbs": "E1",
-      "done_check": "cd scripts && python3 test_tools.py prints ok test_dashboard_absent_fleet_page_is_no_data, exits 0"
+      "done_check": "cd scripts && python3 test_tools.py prints ok test_dashboard_absent_fleet_page_is_no_data, exits 0",
+      "note": "render_surfaces green (70 passed) but NOT wired into main(): that edit was declined 2026-08-19. Needs founder approval to finish."
     },
     {
       "id": "T1.3",
@@ -31,11 +32,12 @@
     },
     {
       "id": "T1.4",
-      "state": "queued",
+      "state": "done",
       "stage": "human-decision",
       "title": "README front door map: every surface and the single command that reaches it",
       "wbs": "E1",
-      "done_check": "grep -n fleet README.md prints the map section naming the cli fleet command"
+      "done_check": "grep -n fleet README.md prints the map section naming the cli fleet command",
+      "closed": "2026-08-19; grep -n fleet README.md prints the map section, every command verified against cli.py dispatch"
     },
     {
       "id": "T4.2",
