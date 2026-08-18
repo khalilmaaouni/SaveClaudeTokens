@@ -1,6 +1,6 @@
 # The path to domination: enterprise, Claude Code only, three products
 
-Written 2026-08-19 01:20 JST, at the founder's direction given mid-run: "Our
+Written 2026-08-19 00:42 JST, at the founder's direction given mid-run: "Our
 angle is the focus on enterprise and on claude code only to differentiate
 /brothersbe /brothermode find the path to domination."
 
