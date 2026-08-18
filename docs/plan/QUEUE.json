@@ -97,11 +97,12 @@
     },
     {
       "id": "T2.4",
-      "state": "queued",
+      "state": "done",
       "stage": "risk",
       "title": "Adversarial review: try to confuse the four states with the five confidence labels in wording, colour, or adjacency on rendered fixtures",
       "wbs": "E2",
-      "done_check": "grep -n 'CRITICAL FINDINGS: 0' docs/plan/reviews/2026-08-20-state-label-review.md, or every finding carries a scheduled task id"
+      "done_check": "grep -n 'CRITICAL FINDINGS: 0' docs/plan/reviews/2026-08-20-state-label-review.md, or every finding carries a scheduled task id",
+      "closed": "2026-08-19; CRITICAL 1, MAJOR 1, MINOR 1, every finding carries a task id (T2.6, T2.7)"
     },
     {
       "id": "T2.5",
@@ -167,6 +168,24 @@
       "title": "Window 2 integration: the three separate documented commands green on the integration branch, output quoted in the PR",
       "wbs": "Integration",
       "done_check": "the CLAUDE.md full test line, then mcp-server/test_mcp_server.py with no pip prefix, then the bench trio, each started from the repo root, each exit 0"
+    },
+    {
+      "id": "T2.6",
+      "state": "queued",
+      "stage": "human-decision",
+      "title": "Give the VERIFIED state its own colour, distinct from all five confidence label colours (CRITICAL and MAJOR from T2.4)",
+      "wbs": "E2",
+      "from_review": "docs/plan/reviews/2026-08-20-state-label-review.md",
+      "done_check": "no state colour equals any label colour; T2.7's cross-product assertion passes"
+    },
+    {
+      "id": "T2.7",
+      "state": "queued",
+      "stage": "risk",
+      "title": "Replace the single-pair colour assertion with a cross-product assertion over every state colour against every label colour, calibrated red by reinjecting today's collision",
+      "wbs": "E2",
+      "from_review": "docs/plan/reviews/2026-08-20-state-label-review.md",
+      "done_check": "cd scripts && python3 test_tools.py passes, and reinjecting the VERIFIED-state colour makes it fail"
     }
   ]
 }
