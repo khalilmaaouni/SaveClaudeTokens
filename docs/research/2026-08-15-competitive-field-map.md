@@ -4,6 +4,32 @@ Two read-only research passes, run in parallel: one inside the Claude Code ecosy
 
 Nothing here is a Token Shield measurement. These are other people's claims about their own tools, recorded as claims.
 
+## Correction, 2026-08-19: this document was wrong about the field a SECOND time
+
+Same failure class as the correction below, four days later, found by an
+overnight pass that re-read the primary source instead of trusting this row.
+Full evidence, with verbatim line numbers: [2026-08-19-codeburn-benchmark.md](2026-08-19-codeburn-benchmark.md).
+
+**What it said.** The CodeBurn row in the table below: "No experiment behind any
+number and no confidence labelling. `codeburn optimize` estimates a saving;
+nothing re-measures whether the fix helped."
+
+**Why that was false, twice over.** CodeBurn README line 195: "once an applied
+fix is at least 3 days old, `codeburn act report` compares its estimated savings
+against what your sessions actually did... Estimates get checked against
+reality, not just claimed." And line 173: "Each one says whether its savings
+number is `measured` from provider-counted usage or `estimated`." So they DO
+re-measure, and they DO label confidence, on a two label system against our
+five. Source fetched 2026-08-19 00:47 JST.
+
+**How the error happened, which is again the part worth keeping.** The row was
+written from a CATEGORY, not from a source. CodeBurn was filed as a meter, and
+the sweep then reasoned about what meters do rather than re-reading what this
+meter does. The correction below warned about exactly this and the warning did
+not take, because nothing in the process forces a re-read of a row once it is
+written. The surviving honest claim is narrower: CodeBurn re-measures but does
+not REFUSE an invalid comparison, and Token Shield does.
+
 ## Correction, 2026-08-15 evening: this document was wrong about the field
 
 Kept visible rather than edited away, because a field map that quietly repairs
@@ -40,7 +66,7 @@ than guaranteed. The gap is narrower than threat 4 claimed and it is not closed.
 
 | Tool | Surface | Measures, reduces, or displays | Proof posture | Scale |
 |---|---|---|---|---|
-| [CodeBurn](https://github.com/getagentseal/codeburn) | CLI and full-screen TUI, macOS menu bar app, GNOME top-bar extension, desktop app for three platforms, localhost web dashboard, MCP server, and opt-in Claude Code hooks | MEASURE, DISPLAY and ENFORCE. The only hard budget stop found anywhere inside Claude Code | No experiment behind any number and no confidence labelling. `codeburn optimize` estimates a saving; nothing re-measures whether the fix helped. Turn classification is disputed in public by a user who saw 1 planning turn detected in 30 days | 9,391 stars, 745 forks, 57 open issues, created 2026-04-13; 9,147 npm downloads in the week of 2026-08-03; version 0.9.20; MIT (GitHub and npm registry APIs, queried 2026-08-15) |
+| [CodeBurn](https://github.com/getagentseal/codeburn) | CLI and full-screen TUI, macOS menu bar app, GNOME top-bar extension, desktop app for three platforms, localhost web dashboard, MCP server, and opt-in Claude Code hooks | MEASURE, DISPLAY and ENFORCE. The only hard budget stop found anywhere inside Claude Code | CORRECTED 2026-08-19, see the correction at the top: re-measures via `codeburn act report` at 3 days and labels findings `measured` or `estimated` (two labels to our five). The surviving gap is REFUSAL, not measurement: nothing declines the comparison when the window is invalid. Turn classification is disputed in public by a user who saw 1 planning turn detected in 30 days Turn classification is disputed in public by a user who saw 1 planning turn detected in 30 days | 9,391 stars, 745 forks, 57 open issues, created 2026-04-13; 9,147 npm downloads in the week of 2026-08-03; version 0.9.20; MIT (GitHub and npm registry APIs, queried 2026-08-15) |
 | [ccusage](https://github.com/ccusage/ccusage) | CLI, reads local transcripts | DISPLAY only | No savings claim of its own | 17,927 stars, pushed 2026-08-14 |
 | [RTK](https://github.com/rtk-ai/rtk) | Rust binary wired as a PreToolUse hook | REDUCE, by rewriting shell output before Claude sees it | Claims 60 to 90 percent, and its own docs caveat that this is not the same as cutting a bill by 90 percent | 76,175 stars, pushed 2026-08-13 |
 | [context-mode](https://github.com/mksglu/context-mode) | MCP server plus a full hook set | REDUCE, by sandboxing tool output into a searchable local store | Claims 98 percent; a BENCHMARK.md exists but its contents were not visible on the page opened, so the proof is unverified from here | 19,863 stars, pushed 2026-08-14 |

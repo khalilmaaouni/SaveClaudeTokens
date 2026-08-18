@@ -108,6 +108,39 @@ Every behavioral claim in the skill is sourced to first-party documentation and 
 - Lever 6: durable on-disk memory (works well with an Obsidian vault) so sessions stop re-deriving what past sessions already learned, with a promotion rule so the always-loaded file does not grow forever.
 - An anti-pattern ledger seeded from real incidents.
 
+## Every surface, and the one command that reaches it
+
+Token Shield has one front door. Everything it computes is reachable from
+`scripts/cli.py`, and a surface that is not yet built says so here rather than
+being quietly omitted.
+
+| Surface | What it answers | The one command |
+|---|---|---|
+| Terminal summary | Where do I stand right now, in one state word | `python3 scripts/cli.py summary` |
+| Dashboard | The full picture, as an HTML page | `python3 scripts/cli.py dashboard` |
+| Next move | What is the single best thing to change | `python3 scripts/cli.py advise` |
+| Session profile | What does my usage actually look like | `python3 scripts/cli.py profile` |
+| Proof | Did that change really help | `python3 scripts/cli.py experiment start\|end` |
+| Proof ledger | One row per experiment label, never summed | `python3 scripts/cli.py experiment report` |
+| Monthly report | What happened over a month | `python3 scripts/cli.py report` |
+| Organization page | The aggregate across many machines | `python3 scripts/cli.py fleet dashboard` |
+| Organization membership | Join, leave, and push a machine's records | `python3 scripts/cli.py fleet init\|join\|build\|push\|leave` |
+| Ecosystem doctor | Is my setup healthy, is any advice stale | `python3 scripts/cli.py doctor` |
+| Price equivalence | What is the native caching saving worth at list price | `python3 scripts/cli.py prices` |
+| MCP server | Ask an agent mid-conversation | see [MCP server (optional)](#mcp-server-optional) above |
+| Leaving | Remove every local trace | `python3 scripts/cli.py uninstall` |
+
+Not shipped yet, named here so the map is not misleading:
+
+- **CSV export** for a spreadsheet or a FinOps pipeline, with every row
+  carrying its own confidence label and no total permitted across labels.
+- **Status line**, a zero token readout of context fullness and any running
+  proof, under every session.
+
+Run `python3 scripts/cli.py --help` for the full surface including the
+optimizer, the plugin prune and the memory trim.
+
+
 ## Measure, do not guess
 
 The plugin ships a measurement script and a `/token-audit` command. The script
